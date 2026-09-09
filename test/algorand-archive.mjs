@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { parseCanonical, canonical } from '../spikes/vault/format.mjs';
+import { verifyDisclosure } from '../spikes/vault/records.mjs';
+import { verifyAnchor } from '../spikes/anchor/verifier.mjs';
+
+const root = new URL('../spikes/anchor/algorand/proof/testdata/', import.meta.url);
+const bundle = readFileSync(new URL('anchor-envelope.json', root));
+const envelope = parseCanonical(bundle);
+const checkpoint = JSON.parse(readFileSync(new URL('independent-checkpoint.json', root)));
+const trust = { profile: checkpoint.profile, network: checkpoint.network, genesis: checkpoint.genesis, checkpoint };
+const disclosureBytes = readFileSync(new URL('disclosure.json', root));
+const disclosure = verifyDisclosure(disclosureBytes);
+assert.equal(disclosure.records[0].integrity, 'VALID');
+assert.equal(disclosure.records[0].keyAttribution, 'SIGNATURE_VALID');
+const expectedDigest = parseCanonical(disclosureBytes).records[0].recordDigest;
+assert.equal(envelope.recordDigest, expectedDigest);
+const r = verifyAnchor(bundle, trust, expectedDigest);
+assert.equal(r.anchor, 'CONSENSUS_VERIFIED', r.reason);
+assert.equal(r.timestamp, 'BLOCK_HASH_BOUND', r.reason);
+assert.equal(r.independentlyVerified, true);
+assert.equal(verifyAnchor(bundle, null, envelope.recordDigest).independentlyVerified, false);
+const forged = structuredClone(envelope); forged.proof.rpcConfirmed = true;
+assert.equal(verifyAnchor(Buffer.from(canonical(forged)), trust, envelope.recordDigest).independentlyVerified, false);
+assert.equal(verifyAnchor(bundle, { ...trust, genesis: 'wrong' }, envelope.recordDigest).independentlyVerified, false);
+assert.equal(verifyAnchor(bundle, trust, envelope.recordDigest, { algorandVerifierPath: '/nonexistent/provenance-test-verifier' }).anchor, 'UNSUPPORTED');
+console.log(`PASS: archived TestNet disclosure + anchor verified independently at round ${r.round}; forged/missing roots fail closed.`);

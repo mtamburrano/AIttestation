@@ -1,0 +1,9 @@
+{
+  "anchor": "CONSENSUS_VERIFIED",
+  "timestamp": "BLOCK_HASH_BOUND",
+  "independentlyVerified": true,
+  "reason": "Exact transaction and State-Proof chain verified offline under the selected checkpoint",
+  "round": 67143203,
+  "blockTime": 1788975101,
+  "trustAssumption": "Explicit separately provisioned pre-submission checkpoint; checkpoint authenticity is a trust assumption, not a genesis-to-tip proof"
+}
