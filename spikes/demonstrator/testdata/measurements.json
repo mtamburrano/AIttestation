@@ -1,0 +1,15 @@
+{
+  "archivalProofObservedLagMs": 393262,
+  "archiveBytes": 179303,
+  "collectorElapsedMs": 359267,
+  "confirmationLatencyMs": 5678,
+  "feeMicroAlgos": "1000",
+  "firstPollAt": "2026-09-10T01:33:21.551716Z",
+  "observedAt": "2026-09-10T01:39:20.818048Z",
+  "pollAttempts": 71,
+  "pollIntervalMs": 5000,
+  "round": 67153906,
+  "source": "DEDICATED_ALGORAND_TEST",
+  "stateProofChainLinks": 2,
+  "transactionId": "67IWOVEKAW322Q2LBJMA2RYPM57P6Y7NAAM72NTYLGT4FBOQ66TA"
+}

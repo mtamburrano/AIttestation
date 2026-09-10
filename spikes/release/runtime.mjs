@@ -24,15 +24,17 @@ export function validatePayload(payload) {
   return structuredClone(payload);
 }
 
-// Synthetic plaintext journal only. The encrypted vault is a separate slice.
+// Laboratory defaults are plaintext and stub-confirmed. Integrations supply
+// trusted storage and confirmation adapters at the local runtime boundary.
 export class ReleaseRuntime {
-  #state; #file; #dir; #tail = Promise.resolve(); #dispatch; #fault;
-  constructor(directory, dispatch, fault = () => {}) {
+  #state; #file; #dir; #tail = Promise.resolve(); #dispatch; #fault; #store; #confirm;
+  constructor(directory, dispatch, fault = () => {}, { store, confirm } = {}) {
     this.#dir = directory; this.#file = join(directory, 'release-test-journal.json');
     this.#dispatch = dispatch; this.#fault = fault;
+    this.#store = store; this.#confirm = confirm;
   }
   async init() {
-    try { this.#state = JSON.parse(await readFile(this.#file, 'utf8')); }
+    try { this.#state = this.#store ? await this.#store.load() : JSON.parse(await readFile(this.#file, 'utf8')); }
     catch (e) { if (e.code !== 'ENOENT') throw e; this.#state = { seals: {}, attempts: {} }; }
     for (const a of Object.values(this.#state.attempts)) {
       if (a.state === 'DISPATCHING') a.state = 'OUTCOME_UNKNOWN';
@@ -41,6 +43,7 @@ export class ReleaseRuntime {
     return this;
   }
   async #persist(next) {
+    if (this.#store) { await this.#store.save(next); this.#state = next; return; }
     const temp = `${this.#file}.${randomUUID()}.tmp`;
     const f = await open(temp, 'wx', 0o600);
     try { await f.writeFile(JSON.stringify(next)); await f.sync(); } finally { await f.close(); }
@@ -74,7 +77,9 @@ export class ReleaseRuntime {
     return this.#serial(async () => {
       const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
       if (seal.digest !== expectedDigest || seal.confirmation) throw Error('Stale or duplicate confirmation');
-      seal.confirmation = { policy: 'synthetic-confirmation/1', digest: seal.digest, result: 'TEST_CONFIRMED' };
+      seal.confirmation = this.#confirm ? await this.#confirm(structuredClone(seal))
+        : { policy: 'synthetic-confirmation/1', digest: seal.digest, result: 'TEST_CONFIRMED' };
+      if (!seal.confirmation || seal.confirmation.digest !== seal.digest) throw Error('Confirmation version mismatch');
       seal.authorization = randomUUID();
       await this.#persist(next);
     });

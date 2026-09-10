@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Private provenance · Local demonstrator</title><link rel="stylesheet" href="/app.css">
+<body><header><span>PRIVATE PROVENANCE</span><span>LOCAL DEMONSTRATOR · SYNTHETIC DATA ONLY</span></header>
+<main><h1>Keep the evidence.<br>Know what it proves.</h1>
+<p class="intro">An encrypted local composer connected to a synthetic provider on this Mac. No external AI service, account or wallet is used.</p>
+<section id="setup"><h2>1. Choose the confirmation policy</h2>
+<label>Policy <select id="policy"><option value="algorand">Algorand TestNet — requires a new proof</option><option value="fixture">Offline rehearsal — synthetic signed log only</option></select></label>
+<p>For Algorand, choose a checkpoint independently obtained before submission. The app never sends a chain transaction. Existing archived proofs cannot confirm new drafts.</p>
+<label>Independent trust configuration (Algorand) <input id="trust" type="file" accept=".json"></label>
+<p><label><input id="enrollment" type="checkbox"> Enroll only this composer session → this paired synthetic provider. Always Protect may automatically release confirmed versions in this scope.</label></p>
+<button id="start">Start local session</button></section>
+<section><h2>2. Create a new synthetic version</h2>
+<p id="scope">Session not enrolled.</p>
+<label>Mode <select id="mode"><option>Sealed</option><option>Continuous</option><option>Always Protect</option></select></label>
+<p><label><input id="supported" type="checkbox" checked> Use the enrolled supported path</label></p>
+<label>Draft <textarea id="draft" rows="5" placeholder="Write synthetic text here…"></textarea></label>
+<label>Attachments (up to four; 100 KB each) <input id="files" type="file" multiple></label>
+<div class="actions"><button id="freeze" disabled>Freeze version</button><button id="confirm" disabled>Validate confirmation</button><button id="release" disabled>Release exact version</button></div>
+<details><summary>Algorand proof exchange</summary><p>Export the blinded anchor request for an authorized developer TestNet run. Import its resulting envelope here. Only the frozen signed record and selected trust policy can authorize release.</p>
+<button id="request" disabled>Save anchor request</button><label>Exact-version anchor envelope <input id="proof" type="file" accept=".json"></label></details>
+<p role="status" aria-live="polite" id="status">Ready to enroll a local session.</p>
+<p class="limits">Continuous sends before anchoring. Sealed waits for validated proof and an explicit release. Always Protect repeats Sealed automatically only in the enrolled scope. Other tabs, provider-owned drafts and unsupported paths are outside protection.</p>
+<iframe id="provider" title="Paired synthetic provider visible response"></iframe>
+<h3>Readable receipt</h3><pre id="receipt">No version yet.</pre></section>
+<section><h2>3. Export and recover</h2><p>Evidence export contains selected plaintext. Recovery is encrypted: save the recovery secret separately. This disposable app keeps session keys only in memory. Export before closing; reopening creates a fresh session.</p>
+<div class="actions"><button id="export">Save evidence export</button><button id="backup">Create recovery snapshot</button><button id="secret" disabled>Save separate recovery secret</button></div>
+<label>Encrypted recovery package <input id="recoveryPackage" type="file" accept=".json"></label>
+<label>Separate recovery secret <input id="recoverySecret" type="file" accept=".txt"></label>
+<button id="restore">Restore into a fresh vault</button> <button id="saveRestored" disabled>Save restored evidence</button><pre id="recoveryStatus">No restore performed.</pre>
+<p>Restore checks the complete declared snapshot. It does not prove latest state and never restores permission to send.</p></section>
+<section><h2>4. Verify a portable export</h2><label>Evidence export <input id="verifyExport" type="file" accept=".json"></label>
+<label>Separately selected trust configuration <input id="verifyTrust" type="file" accept=".json"></label>
+<button id="verify">Verify locally</button> <button id="saveTrust">Save session trust configuration</button><pre id="verification">No verification performed.</pre></section>
+<footer><p>Signatures authenticate a key's local assertions. They do not prove authorship, legal ownership, provider receipt, complete history or model reasoning. Fixture confirmation supplies no public-chain or UTC-time assurance.</p><button id="close">Close local runtime</button></footer>
+</main><script type="module" src="/app.js"></script></body></html>

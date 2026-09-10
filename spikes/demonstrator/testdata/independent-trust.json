@@ -1,0 +1,16 @@
+{
+  "profile": "pap-algorand-sp/1",
+  "network": "testnet-v1.0",
+  "genesis": "SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+  "checkpoint": {
+    "profile": "pap-algorand-sp/1",
+    "network": "testnet-v1.0",
+    "genesis": "SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+    "consensus": "https://github.com/algorandfoundation/specs/tree/268b63433a907455d439995bf916f6b296018f4f",
+    "lastAttestedRound": 67153408,
+    "votersCommitment": "oa8BqA5YKFAOEiyqm2D5uFHgGUKDwKTSk4jqWIpAiJ+TS7JnaOjyY1CC9/p0qpx2fJ8tOM/fTUeUzMiXXp7O6Q==",
+    "lnProvenWeight": 2289220,
+    "source": "https://testnet-api.algonode.cloud/v2/stateproofs/67153408 (separately selected source-trusted checkpoint)",
+    "selectedAt": "2026-09-10T01:32:17.222667Z"
+  }
+}

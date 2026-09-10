@@ -1,0 +1,295 @@
+{
+  "evidence": {
+    "scope": "SELECTIVE",
+    "latestState": "NOT_PROVEN",
+    "records": [
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      },
+      {
+        "structure": "VALID",
+        "integrity": "VALID",
+        "keyAttribution": "SIGNATURE_VALID",
+        "evidence": "COMPLETE",
+        "anchor": "UNANCHORED",
+        "timestamp": "LOCAL_CLAIMED",
+        "releaseControl": "NOT_APPLICABLE"
+      }
+    ]
+  },
+  "anchors": [
+    {
+      "descriptorId": "wzkt7Wdt0bYayLmJWHwPKQ",
+      "structure": "VALID",
+      "recordInclusion": "VALID",
+      "anchor": "CONSENSUS_VERIFIED",
+      "timestamp": "BLOCK_HASH_BOUND",
+      "independentlyVerified": true,
+      "assurance": "STATE_PROOF_UNDER_SELECTED_CHECKPOINT",
+      "reason": "Exact transaction and State-Proof chain verified offline under the selected checkpoint",
+      "round": 67153906,
+      "blockTime": 1789003964,
+      "trustAssumption": "Explicit separately provisioned pre-submission checkpoint; checkpoint authenticity is a trust assumption, not a genesis-to-tip proof"
+    },
+    {
+      "descriptorId": "RtUYRD-KwrYwUO_fvKnVvQ",
+      "structure": "VALID",
+      "recordInclusion": "VALID",
+      "anchor": "CONSENSUS_VERIFIED",
+      "timestamp": "BLOCK_HASH_BOUND",
+      "independentlyVerified": true,
+      "assurance": "STATE_PROOF_UNDER_SELECTED_CHECKPOINT",
+      "reason": "Exact transaction and State-Proof chain verified offline under the selected checkpoint",
+      "round": 67153906,
+      "blockTime": 1789003964,
+      "trustAssumption": "Explicit separately provisioned pre-submission checkpoint; checkpoint authenticity is a trust assumption, not a genesis-to-tip proof"
+    },
+    {
+      "descriptorId": "RqlszwuQz06skMUWzn0t_w",
+      "structure": "VALID",
+      "recordInclusion": "VALID",
+      "anchor": "CONSENSUS_VERIFIED",
+      "timestamp": "BLOCK_HASH_BOUND",
+      "independentlyVerified": true,
+      "assurance": "STATE_PROOF_UNDER_SELECTED_CHECKPOINT",
+      "reason": "Exact transaction and State-Proof chain verified offline under the selected checkpoint",
+      "round": 67153906,
+      "blockTime": 1789003964,
+      "trustAssumption": "Explicit separately provisioned pre-submission checkpoint; checkpoint authenticity is a trust assumption, not a genesis-to-tip proof"
+    }
+  ],
+  "releaseControl": "LOCAL_ASSERTIONS_ONLY",
+  "coverage": "Selected records only; unlisted or unanchored records gain no anchor assurance",
+  "valid": true
+}

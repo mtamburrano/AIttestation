@@ -3,6 +3,17 @@
 Disposable technical slices for private, portable evidence of human + AI work.
 These experiments are not a production protection product.
 
+## Integrated local demonstrator
+
+The [consumer demonstrator](spikes/demonstrator/README.md) combines encrypted
+evidence/recovery, exact-version release and anchor verification on macOS + Chrome
+with a synthetic loopback provider. A developer-built double-click app supports
+Continuous, Sealed and scoped Always Protect, readable receipts, local export and
+fresh-vault restore. Offline rehearsal is explicitly synthetic; real Algorand mode
+requires a new independently verified proof before protected release. See the
+[participant walkthrough](spikes/demonstrator/WALKTHROUGH.md) for installation and
+the remaining signing, recovery and trust limitations.
+
 ## Local release laboratory
 
 With Node.js 22 or newer, run `npm run demo:release` and open the printed local URL.

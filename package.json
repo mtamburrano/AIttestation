@@ -7,6 +7,10 @@
     "test": "node --test test/*.test.mjs",
     "test:browser": "node test/browser.mjs",
     "test:algorand": "cd spikes/anchor/algorand && make build test && cd ../../.. && node test/algorand-archive.mjs",
-    "demo:release": "node spikes/release/demo.mjs"
+    "demo:release": "node spikes/release/demo.mjs",
+    "demo:consumer": "node spikes/demonstrator/main.mjs",
+    "build:consumer": "node spikes/demonstrator/build-macos.mjs",
+    "test:consumer-browser": "node test/demonstrator-browser.mjs",
+    "test:consumer-archive": "node test/demonstrator-archive.mjs"
   }
 }
