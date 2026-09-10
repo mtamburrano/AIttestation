@@ -5,7 +5,7 @@ import Security
 private let requestProfile = "pap-keychain-request/1"
 private let responseProfile = "pap-keychain-response/1"
 private let allowedService = "ai.provenance.evidence-vault"
-private let runtimeIdentifier = "ai.provenance.consumer.runtime"
+private let hostIdentifier = "ai.provenance.consumer.host"
 private let accessGroupSuffix = ".ai.provenance.evidence-vault"
 private let maximumRequestBytes = 256 * 1024
 
@@ -35,7 +35,7 @@ private func authorizeParentAndGetAccessGroup() throws -> String {
   guard SecCodeCopyGuestWithAttributes(nil, attributes, SecCSFlags(), &parentCode) == errSecSuccess,
         let parentCode else { throw HelperFailure.rejected }
   let escapedTeam = team.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-  let requirementText = "anchor apple generic and certificate leaf[subject.OU] = \"\(escapedTeam)\" and identifier \"\(runtimeIdentifier)\""
+  let requirementText = "anchor apple generic and certificate leaf[subject.OU] = \"\(escapedTeam)\" and identifier \"\(hostIdentifier)\""
   var requirement: SecRequirement?
   guard SecRequirementCreateWithString(requirementText as CFString, SecCSFlags(), &requirement) == errSecSuccess,
         let requirement,

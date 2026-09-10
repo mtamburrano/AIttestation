@@ -162,10 +162,10 @@ test('public proof objects are content-addressed once and reference-shared acros
     reason: 'Every object is reachable from retained signed records; MVP garbage collection is disabled.' });
 });
 
-test('macOS keychain adapter uses the fixed native helper protocol and exact role accounts', () => {
+test('macOS keychain adapter uses the private native broker protocol and exact role accounts', () => {
   const items = new Map(), calls = [];
-  const run = (executable, request) => {
-    calls.push({ executable, request: structuredClone(request) });
+  const run = request => {
+    calls.push(structuredClone(request));
     if (request.operation === 'set') items.set(request.account, request.value);
     if (request.operation === 'delete') items.delete(request.account);
     const response = request.operation === 'get' && !items.has(request.account)
@@ -173,12 +173,10 @@ test('macOS keychain adapter uses the fixed native helper protocol and exact rol
       : { profile: 'pap-keychain-response/1', status: 'OK', ...(request.operation === 'get' ? { value: items.get(request.account) } : {}) };
     return { status: 0, stdout: JSON.stringify(response), stderr: '' };
   };
-  const helper = '/isolated-test/provenance-keychain-helper';
-  const store = new MacOSKeychainStore({ service: 'ai.provenance.test-only', helper, run });
+  const store = new MacOSKeychainStore({ service: 'ai.provenance.test-only', run });
   const secret = Buffer.from('synthetic secret'), account = 'vault:test:signing:active'; store.set(account, secret);
   assert.deepEqual(store.get(account), secret); store.delete(account); assert.equal(store.get(account), null);
-  assert.equal(calls[0].executable, helper);
-  assert.deepEqual(calls[0].request, { profile: 'pap-keychain-request/1', operation: 'set',
+  assert.deepEqual(calls[0], { profile: 'pap-keychain-request/1', operation: 'set',
     service: 'ai.provenance.test-only', account, value: b64(secret) });
-  assert.equal(Object.keys(calls[0].request).sort().join(','), 'account,operation,profile,service,value');
+  assert.equal(Object.keys(calls[0]).sort().join(','), 'account,operation,profile,service,value');
 });

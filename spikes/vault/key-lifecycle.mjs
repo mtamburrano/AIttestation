@@ -1,6 +1,5 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { readSync, writeSync } from 'node:fs';
 import { b64, unb64, fail } from './format.mjs';
 import { Vault, inspectRecovery, readVaultHeader, vaultKeyId } from './vault.mjs';
 
@@ -28,26 +27,53 @@ function signingIdentity(bytes) {
   } finally { encoded.fill(0); }
 }
 
-function helperRun(executable, request) {
-  return spawnSync(executable, [], { input: JSON.stringify(request), encoding: 'utf8', env: {},
-    maxBuffer: 1024 * 1024, timeout: 15000, windowsHide: true });
+function exactRead(fd, length) {
+  const bytes = Buffer.alloc(length); let offset = 0;
+  while (offset < length) {
+    const count = readSync(fd, bytes, offset, length - offset, null);
+    if (count === 0) fail('UNRECOVERABLE', 'Native Keychain broker closed');
+    offset += count;
+  }
+  return bytes;
 }
 
-/** Uses the app-bound Security.framework helper shipped beside the signed runtime. */
+function exactWrite(fd, bytes) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const count = writeSync(fd, bytes, offset, bytes.length - offset);
+    if (count === 0) fail('UNRECOVERABLE', 'Native Keychain broker closed');
+    offset += count;
+  }
+}
+
+function brokerRun(request) {
+  try {
+    const body = Buffer.from(JSON.stringify(request));
+    if (body.length > 256 * 1024) fail('LIMIT_EXCEEDED', 'Keychain request');
+    const frame = Buffer.alloc(4 + body.length); frame.writeUInt32BE(body.length); body.copy(frame, 4);
+    exactWrite(3, frame);
+    const length = exactRead(4, 4).readUInt32BE();
+    if (length === 0 || length > 1024 * 1024) fail('UNRECOVERABLE', 'Invalid Keychain broker response');
+    return { status: 0, stdout: exactRead(4, length).toString('utf8') };
+  } catch (error) {
+    if (error?.code === 'UNRECOVERABLE' || error?.code === 'LIMIT_EXCEEDED') throw error;
+    fail('UNRECOVERABLE', 'Native Keychain broker unavailable');
+  }
+}
+
+/** Uses the private broker channel inherited from the fixed-purpose native app host. */
 export class MacOSKeychainStore {
-  #service; #helper; #run;
-  constructor({ service = DEFAULT_SERVICE, helper = null, run = null } = {}) {
+  #service; #run;
+  constructor({ service = DEFAULT_SERVICE, run = null } = {}) {
     if (typeof service !== 'string' || !/^[A-Za-z0-9._-]{1,120}$/.test(service)) fail('INVALID', 'Invalid keychain service');
     if (process.platform !== 'darwin' && run === null) fail('UNSUPPORTED', 'macOS Keychain is required');
     if (run === null && service !== DEFAULT_SERVICE) fail('INVALID', 'Production Keychain service is fixed');
-    const bundledHelper = join(dirname(process.execPath), 'provenance-keychain-helper');
-    if (run === null && helper !== null) fail('INVALID', 'Production Keychain helper path is fixed');
-    this.#service = service; this.#helper = helper ?? bundledHelper; this.#run = run ?? helperRun;
+    this.#service = service; this.#run = run ?? brokerRun;
   }
   #invoke(operation, account, value = undefined) {
     const request = { profile: 'pap-keychain-request/1', operation, service: this.#service, account };
     if (value !== undefined) request.value = b64(value);
-    const result = this.#run(this.#helper, request);
+    const result = this.#run(request);
     if (result?.status !== 0) fail('UNRECOVERABLE', 'App-bound Keychain helper failed');
     let response;
     try { response = JSON.parse(result.stdout); } catch { fail('UNRECOVERABLE', 'Invalid Keychain helper response'); }

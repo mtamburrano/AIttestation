@@ -11,14 +11,18 @@ portable for offline verification and isolated tests.
 `DurableVault.create()` and `DurableVault.open()` in `key-lifecycle.mjs` keep the
 active Ed25519 signing private key and the 256-bit vault master key in distinct
 macOS Data Protection Keychain generic-password items. The JavaScript runtime sends
-a bounded request over stdin to its fixed, bundled `provenance-keychain-helper`;
-the helper calls Security.framework directly and never accepts secrets in argv.
-Before every operation it verifies that its parent is the same-team signed
-`ai.provenance.consumer.runtime`, and it selects only its provisioned
+a bounded request over private file descriptors inherited from the native
+`provenance-app-host`. That fixed-purpose host validates the complete signed bundle,
+constructs a sanitized environment and launches only the sealed application
+entrypoint; it never accepts a script path or Keychain request from its caller. The
+host alone invokes `provenance-keychain-helper`, which calls Security.framework
+directly and verifies that its parent is the same-team signed
+`ai.provenance.consumer.host`. It selects only its provisioned
 `*.ai.provenance.evidence-vault` access group. Items are non-synchronizable and
-`WhenUnlockedThisDeviceOnly`, so an unrelated process running as the same user
-cannot use the helper or read the items. The public vault header contains only a
-random vault identifier and a domain-separated VMK identifier. `lock()` closes SQLite, wipes
+`WhenUnlockedThisDeviceOnly`. Directly launching the bundled Node interpreter with
+caller-selected JavaScript provides no broker channel, and the helper rejects that
+interpreter as its parent. The public vault header contains only a random vault
+identifier and a domain-separated VMK identifier. `lock()` closes SQLite, wipes
 the JS VMK buffer and drops the signing `KeyObject`; `unlock()` must reacquire both
 roles from Keychain. A locked or unavailable Keychain fails closed.
 
@@ -34,15 +38,18 @@ retires the old item on reopen. A transient cleanup failure remains visible thro
 creates a destination, then provisions a fresh VMK and fresh signing identity.
 Recovered history carries no old send authorization.
 
-The helper and runtime are separate signed executables. Production packaging must
+The native host, helper and runtime are separate executables. Production packaging must
 sign the helper with `native/keychain-helper.entitlements.plist` (expanding the
-Apple application-identifier prefix), sign the runtime with identifier
-`ai.provenance.consumer.runtime`, and use the same non-ad-hoc Team ID for both.
-The helper rejects ad-hoc, unsigned, wrong-team, or wrong-identifier parents. The
-developer demonstrator build compiles the helper but remains explicitly ad-hoc and
-cannot exercise production Keychain custody. Tests inject a fresh `MemoryKeyStore`
-or a fresh temporary process-test store; both are test-only and must not be used for
-consumer evidence.
+Apple application-identifier prefix), seal the native host as bundle identifier
+`ai.provenance.consumer.host`, sign the bundled Node with the distinct identifier
+`ai.provenance.consumer.runtime`, and use the same non-ad-hoc Team ID with Hardened
+Runtime for the complete bundle. The helper never authorizes the runtime identifier;
+it rejects ad-hoc, unsigned, wrong-team or wrong-identifier parents. The host rejects
+a modified bundle before starting Node.
+The developer demonstrator build compiles both native executables but remains
+explicitly ad-hoc and cannot exercise production Keychain custody. Tests inject a
+fresh `MemoryKeyStore` or a fresh temporary process-test store; both are test-only
+and must not be used for consumer evidence.
 
 `new Vault(newDirectory, vaultKey, signingIdentity, { create: true })` requires a
 new directory and an independently supplied random 32-byte vault key. Omit `create`

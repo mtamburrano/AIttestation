@@ -15,8 +15,12 @@ npm run build:consumer -- /tmp/provenance-demo-build-UNIQUE
 ```
 
 Choose a new output directory; the builder refuses an existing one. It bundles
-the current Node executable, source and native verifier, applies an ad-hoc local
-signature, verifies it, and records elapsed build time in `build-measurement.json`.
+the current Node executable, source, native verifier and fixed-purpose native app
+host/Keychain helper, applies an ad-hoc local signature, verifies it, and records
+elapsed build time in `build-measurement.json`. The native host is the bundle entry
+point: it validates the sealed bundle and launches only the bundled `main.mjs` with
+a sanitized environment. The ad-hoc helper intentionally rejects Keychain custody;
+production signing requirements are documented in the vault README.
 The binary architecture matches the development machine. No account credentials,
 public proof fixtures or live submission executable are included. Dependency
 source/license material remains with the prototype. No Developer ID, notarization

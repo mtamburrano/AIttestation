@@ -15,17 +15,23 @@ const resources = join(contents, 'Resources'); await mkdir(resources);
 await copyFile(process.execPath, join(contents, 'MacOS', 'node'));
 const moduleCache = join(output, '.swift-module-cache'); await mkdir(moduleCache);
 try {
-  execFileSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', moduleCache, '-O', '-framework', 'Security',
-    join(root, 'spikes/vault/native/macos-keychain-helper.swift'), '-o', join(contents, 'MacOS', 'provenance-keychain-helper')],
+  for (const [source, executable] of [
+    ['macos-app-host.swift', 'provenance-app-host'], ['macos-keychain-helper.swift', 'provenance-keychain-helper'],
+  ]) execFileSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', moduleCache, '-O', '-framework', 'Security',
+    join(root, 'spikes/vault/native', source), '-o', join(contents, 'MacOS', executable)],
   { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 } finally { await rm(moduleCache, { recursive: true, force: true }); }
 await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node-LICENSE.txt'));
 for (const name of ['release', 'vault', 'anchor', 'demonstrator']) await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
   recursive: true, filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live') && !source.endsWith('/.DS_Store'),
 });
-await writeFile(join(contents, 'MacOS', 'launch'), '#!/bin/sh\nAPP_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"\nexec /usr/bin/env -i PATH=/usr/bin:/bin "$APP_DIR/MacOS/node" "$APP_DIR/Resources/spikes/demonstrator/main.mjs" --open\n', { mode: 0o755 });
-await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>launch</string><key>CFBundleIdentifier</key><string>local.provenance.demonstrator</string><key>CFBundleName</key><string>Private Provenance Demo</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/></dict></plist>`);
-execFileSync('/usr/bin/codesign', ['--force', '--deep', '--sign', '-', app], { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
+await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Private Provenance Demo</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/></dict></plist>`);
+for (const [executable, identifier] of [
+  [join(contents, 'MacOS/node'), 'ai.provenance.consumer.runtime'],
+  [join(contents, 'MacOS/provenance-keychain-helper'), 'ai.provenance.keychain-helper'],
+]) execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', identifier, executable],
+{ env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
+execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', app], { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', app], { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 await cp(join(root, 'spikes/demonstrator/WALKTHROUGH.md'), join(output, 'Start Here.md'));
 await writeFile(join(output, 'build-measurement.json'), JSON.stringify({ platform: process.platform, arch: process.arch,
