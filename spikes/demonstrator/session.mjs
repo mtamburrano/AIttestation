@@ -8,7 +8,7 @@ import { VaultReleaseStore } from './store.mjs';
 import { signedLogFixture } from '../anchor/fixture.mjs';
 import { verifyAnchor } from '../anchor/verifier.mjs';
 import { inclusion, anchorPayload } from '../anchor/merkle.mjs';
-import { recoveredBundle } from './verification.mjs';
+import { recoveredBundle, sharedAnchors } from './verification.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 export class DemoSession {
@@ -124,8 +124,9 @@ export class DemoSession {
   }
   exportDisclosure() {
     const disclosure = this.vault.exportDisclosure(this.vault.inspect().records.map(r => r.manifest.eventId));
-    return { disclosure: disclosure.toString(), anchors: [...this.#proofs.entries()].map(([id, bytes]) => ({
-      descriptorId: this.#version(id).descriptorId, envelope: bytes.toString() })), trust: structuredClone(this.#trust),
+    const shared = sharedAnchors([...this.#proofs.entries()].map(([id, bytes]) => ({
+      descriptorId: this.#version(id).descriptorId, envelope: bytes.toString() })));
+    return { profile: 'pap-demo-export/2', disclosure: disclosure.toString(), ...shared, trust: structuredClone(this.#trust),
       report: verifyDisclosure(disclosure), claims: 'Key-attributed local assertions; no authorship, provider receipt, complete history or latest-state proof.' };
   }
   exportRecovery() {

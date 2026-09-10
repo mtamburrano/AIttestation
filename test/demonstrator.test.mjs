@@ -32,6 +32,8 @@ test('encrypted Sealed exact-version release, portable verification and independ
   assert.deepEqual(egress[0].payload, payload);
   await session.captureVisible({ id: v.id, scope: v.scope, text: 'visible synthetic answer e\u0301' });
   const exported = session.exportDisclosure();
+  assert.equal(exported.profile, 'pap-demo-export/2');
+  assert.equal(exported.publicProofObjects.length, 1); assert.equal(exported.anchors.length, 1);
   assert.equal(verifyBundle(exported, exported.trust).valid, true);
   assert.equal(verifyBundle(exported, null).valid, false);
   assert.equal(verifyBundle(exported, exported.trust).anchors[0].anchor, 'FIXTURE_VERIFIED');
@@ -64,6 +66,7 @@ test('encrypted Sealed exact-version release, portable verification and independ
   assert.equal(recovered.report.latestState, 'NOT_PROVEN'); assert.equal(recovered.disclosure, recoveryBaseline.disclosure);
   assert.equal(verifyBundle({ ...bundle, disclosure: recovered.disclosure }, trust).valid, true);
   const restoredUI = session.restore(backup.package, backup.recoveryKey);
+  assert.equal(restoredUI.bundle.profile, 'pap-demo-export/2');
   assert.equal(verifyBundle(restoredUI.bundle, trust).valid, true);
   assert.equal(verifyBundle(restoredUI.bundle, trust).anchors.length, 1);
   assert.equal(verifyBundle(restoredUI.bundle, null).valid, false, 'restored metadata cannot grant trust');

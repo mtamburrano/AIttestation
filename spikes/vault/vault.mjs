@@ -3,11 +3,13 @@ import { mkdirSync, chmodSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { LIMITS, VaultError, canonical, parseCanonical, b64, unb64, hash, objectDigest, encrypt, decrypt, aad, keys, fail } from './format.mjs';
-import { identity, makeRecord, verifyRecord, disclosureObject } from './records.mjs';
+import { identity, makeRecord, verifyRecord, disclosureObject, publicProofDigest } from './records.mjs';
 
 const MAX_WRAPS = 2 ** 20;
+const CURRENT_SCHEMA = 2;
+const MINIMUM_READER = 1;
 const id = () => b64(randomBytes(16));
-const keyHash = key => b64(hash('PAP/local-vmk-id/v1\0', key));
+export const vaultKeyId = key => b64(hash('PAP/local-vmk-id/v1\0', key));
 const wire = value => Buffer.from(canonical(value));
 function goodRecord(record, bytes) {
   const result = verifyRecord(record, bytes);
@@ -18,8 +20,10 @@ function goodRecord(record, bytes) {
 
 export class Vault {
   #db; #vmk; #signing; #fault; #closed = false; #baselines = new WeakMap();
-  constructor(directory, vmk, signing = identity(), { create = false, fault = () => {} } = {}) {
+  constructor(directory, vmk, signing = identity(), { create = false, fault = () => {}, vaultId = null,
+    readerVersion = CURRENT_SCHEMA } = {}) {
     if (!Buffer.isBuffer(vmk) || vmk.length !== 32) fail('UNRECOVERABLE', 'A separate 32-byte vault key is required');
+    if (!Number.isInteger(readerVersion) || readerVersion < MINIMUM_READER || readerVersion > CURRENT_SCHEMA) fail('UNSUPPORTED', 'Vault reader version');
     if (create) mkdirSync(directory, { mode: 0o700 });
     else if (!existsSync(join(directory, 'vault.sqlite'))) fail('UNRECOVERABLE', 'Vault database missing');
     this.#vmk = Buffer.from(vmk); this.#signing = signing; this.#fault = fault;
@@ -29,27 +33,67 @@ export class Vault {
       if (create) {
         chmodSync(join(directory, 'vault.sqlite'), 0o600);
         this.#db.exec('CREATE TABLE meta (id INTEGER PRIMARY KEY CHECK(id=1), vault_id TEXT NOT NULL, key_hash TEXT NOT NULL, envelope BLOB); CREATE TABLE usage (key_hash TEXT PRIMARY KEY, counter INTEGER NOT NULL); CREATE TABLE blobs (id TEXT PRIMARY KEY, envelope BLOB NOT NULL);');
-        this.#db.prepare('INSERT INTO meta VALUES (1, ?, ?, NULL)').run(id(), keyHash(vmk));
-        this.#db.prepare('INSERT INTO usage VALUES (?, 0)').run(keyHash(vmk));
+        const selectedVaultId = vaultId ?? id(); unb64(selectedVaultId, 16);
+        this.#db.prepare('INSERT INTO meta VALUES (1, ?, ?, NULL)').run(selectedVaultId, vaultKeyId(vmk));
+        this.#db.prepare('INSERT INTO usage VALUES (?, 0)').run(vaultKeyId(vmk));
         const state = { profile: 'pap-vault-index-spike/1', objects: [], records: [], checkpoint: '0' };
         const envelope = this.#box(wire(state), 'index', 'index');
         this.#db.prepare('UPDATE meta SET envelope=? WHERE id=1').run(wire(envelope));
       }
+      this.#migrate(readerVersion);
       this.#assertKey(); this.#readIndex();
     } catch (e) { this.#db.close(); throw e; }
   }
   #meta() { return this.#db.prepare('SELECT * FROM meta WHERE id=1').get(); }
+  #migrate(readerVersion) {
+    const diskVersion = this.#db.prepare('PRAGMA user_version').get().user_version;
+    if (!Number.isInteger(diskVersion) || diskVersion < 0 || diskVersion > CURRENT_SCHEMA) fail('UNSUPPORTED', 'Vault schema is newer than this application');
+    const table = this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vault_schema'").get();
+    if (table) {
+      const info = this.#db.prepare('SELECT writer_version, minimum_reader FROM vault_schema WHERE id=1').get();
+      if (!info || info.minimum_reader > readerVersion || info.writer_version !== diskVersion) fail('UNSUPPORTED', 'Incompatible vault schema');
+    }
+    if (readerVersion < CURRENT_SCHEMA || diskVersion === CURRENT_SCHEMA) return;
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#db.exec('CREATE TABLE vault_schema (id INTEGER PRIMARY KEY CHECK(id=1), writer_version INTEGER NOT NULL, minimum_reader INTEGER NOT NULL);');
+      this.#db.prepare('INSERT INTO vault_schema VALUES (1, ?, ?)').run(CURRENT_SCHEMA, MINIMUM_READER);
+      this.#fault('migration-after-ddl');
+      this.#db.exec(`PRAGMA user_version=${CURRENT_SCHEMA}`);
+      this.#fault('migration-before-commit');
+      this.#db.exec('COMMIT');
+      this.#fault('migration-after-commit');
+    } catch (e) {
+      if (this.#db.isTransaction) { this.#db.exec('ROLLBACK'); throw e; }
+      const version = this.#db.prepare('PRAGMA user_version').get().user_version;
+      const info = this.#db.prepare('SELECT writer_version, minimum_reader FROM vault_schema WHERE id=1').get();
+      if (version !== CURRENT_SCHEMA || info?.writer_version !== CURRENT_SCHEMA) throw e;
+    }
+  }
   #assertKey() {
     if (this.#closed) fail('UNRECOVERABLE', 'Vault closed');
     const meta = this.#meta();
-    if (!meta?.envelope || meta.key_hash !== keyHash(this.#vmk)) fail('UNRECOVERABLE', 'Wrong key or incomplete vault');
+    if (!meta?.envelope || meta.key_hash !== vaultKeyId(this.#vmk)) fail('UNRECOVERABLE', 'Wrong key or incomplete vault');
     const usage = this.#db.prepare('SELECT counter FROM usage WHERE key_hash=?').get(meta.key_hash);
     if (!usage || !Number.isSafeInteger(usage.counter) || usage.counter < 1 || usage.counter > MAX_WRAPS) fail('UNRECOVERABLE', 'Nonce reservation state missing');
   }
   get vaultId() { return this.#meta().vault_id; }
+  get keyId() { return this.#meta().key_hash; }
+  get signingPublicKey() { return this.#signing ? this.#signing.publicKey.export({ format: 'jwk' }).x : null; }
+  schemaInfo() {
+    if (!this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vault_schema'").get()) {
+      return { writerVersion: 1, minimumReader: 1 };
+    }
+    const row = this.#db.prepare('SELECT writer_version, minimum_reader FROM vault_schema WHERE id=1').get();
+    return row ? { writerVersion: row.writer_version, minimumReader: row.minimum_reader } : { writerVersion: 1, minimumReader: 1 };
+  }
+  setSigningIdentity(signing) {
+    if (!signing?.privateKey || !signing?.publicKey) fail('UNRECOVERABLE', 'Signing identity missing');
+    this.#signing = signing;
+  }
   // Reserve and fsync a unique VMK nonce BEFORE encryption. Crashes only burn reservations.
   #nonce(key = this.#vmk) {
-    const kh = keyHash(key);
+    const kh = vaultKeyId(key);
     this.#db.exec('BEGIN IMMEDIATE');
     try {
       const row = this.#db.prepare('SELECT counter FROM usage WHERE key_hash=?').get(kh);
@@ -74,7 +118,7 @@ export class Vault {
     this.#assertKey();
     const baseline = Buffer.from(this.#meta().envelope);
     const envelope = parseCanonical(baseline);
-    const counter = this.#db.prepare('SELECT counter FROM usage WHERE key_hash=?').get(keyHash(this.#vmk)).counter;
+    const counter = this.#db.prepare('SELECT counter FROM usage WHERE key_hash=?').get(vaultKeyId(this.#vmk)).counter;
     if (unb64(envelope.wrappedKey.nonce, 12).readBigUInt64BE(4) > BigInt(counter)) fail('UNRECOVERABLE', 'Nonce reservation rollback');
     const state = parseCanonical(this.#unbox(envelope, 'index', 'index', null, null, this.#vmk, LIMITS.manifest), LIMITS.manifest);
     validateIndex(state);
@@ -90,7 +134,7 @@ export class Vault {
       this.#fault('before-write');
       for (const [blobId, envelope] of additions) this.#db.prepare('INSERT OR REPLACE INTO blobs VALUES (?, ?)').run(blobId, wire(envelope));
       this.#fault('after-objects');
-      this.#db.prepare('UPDATE meta SET envelope=?, key_hash=? WHERE id=1').run(wire(box), keyHash(replacementKey ?? this.#vmk));
+      this.#db.prepare('UPDATE meta SET envelope=?, key_hash=? WHERE id=1').run(wire(box), vaultKeyId(replacementKey ?? this.#vmk));
       this.#fault('before-commit');
       this.#db.exec('COMMIT');
       this.#fault('after-commit');
@@ -133,8 +177,9 @@ export class Vault {
   rotate(newKey) {
     if (!Buffer.isBuffer(newKey) || newKey.length !== 32) fail('UNRECOVERABLE');
     const index = this.#readIndex(); this.verifyAll();
-    if (this.#db.prepare('SELECT 1 FROM usage WHERE key_hash=?').get(keyHash(newKey))) fail('INVALID', 'VMK reuse forbidden');
-    this.#db.prepare('INSERT INTO usage VALUES (?, 0)').run(keyHash(newKey));
+    const newKeyId = vaultKeyId(newKey);
+    if (this.#db.prepare('SELECT 1 FROM usage WHERE key_hash=?').get(newKeyId)) fail('INVALID', 'VMK reuse forbidden');
+    this.#db.prepare('INSERT INTO usage VALUES (?, 0)').run(newKeyId);
     const additions = index.objects.map(o => {
       const box = parseCanonical(this.#db.prepare('SELECT envelope FROM blobs WHERE id=?').get(o.id).envelope);
       const wrappingAAD = aad('PAP/wrapped-dek/v1', this.vaultId, 'evidence', o.digest);
@@ -142,18 +187,45 @@ export class Vault {
       box.wrappedKey = encrypt(newKey, dek, wrappingAAD, this.#nonce(newKey)); dek.fill(0);
       return [o.id, box];
     });
-    this.#commit(index, additions, newKey);
+    try { this.#commit(index, additions, newKey); }
+    catch (e) {
+      // A post-commit interruption must not leave the live object holding the old
+      // key while the durable header already selects the replacement.
+      if (this.#meta().key_hash !== newKeyId) throw e;
+    }
     this.#vmk.fill(0); this.#vmk = Buffer.from(newKey);
   }
-  exportDisclosure(recordIds, { includeEvidence = true } = {}) {
+  retentionStatus() {
+    const index = this.#readIndex();
+    return { policy: 'APPEND_ONLY', records: index.records.length, objects: index.objects.length,
+      reclaimableObjects: 0, reason: 'Every object is reachable from retained signed records; MVP garbage collection is disabled.' };
+  }
+  exportDisclosure(recordIds, { includeEvidence = true, publicProofs = [] } = {}) {
     const index = this.#readIndex();
     if (!Array.isArray(recordIds) || new Set(recordIds).size !== recordIds.length) fail('INVALID');
     const records = recordIds.map(eventId => {
       const r = index.records.find(r => r.manifest.eventId === eventId); if (!r) fail('INCOMPLETE'); return r;
     });
     const digests = [...new Set(records.map(r => r.manifest.evidence[0].objectDigest))];
-    return wire({ profile: 'pap-disclosure-spike/1', scope: 'SELECTIVE', records,
-      objects: includeEvidence ? digests.map(d => disclosureObject(this.read(d))) : [] });
+    const objects = includeEvidence ? digests.map(d => disclosureObject(this.read(d))) : [];
+    if (!Array.isArray(publicProofs) || publicProofs.length > LIMITS.entries) fail('LIMIT_EXCEEDED');
+    if (!publicProofs.length) return wire({ profile: 'pap-disclosure-spike/1', scope: 'SELECTIVE', records, objects });
+    const selected = new Set(records.map(record => record.recordDigest)), proofObjects = new Map(), references = [];
+    let proofBytes = 0;
+    for (const entry of publicProofs) {
+      if (!entry || Object.keys(entry).sort().join(',') !== 'bytes,recordDigest' || !selected.has(entry.recordDigest)) fail('INVALID', 'Public proof does not reference a selected record');
+      const bytes = Buffer.from(entry.bytes); if (bytes.length > LIMITS.total) fail('LIMIT_EXCEEDED');
+      const digest = publicProofDigest(bytes);
+      if (!proofObjects.has(digest)) {
+        proofBytes += bytes.length; if (proofBytes > LIMITS.total) fail('LIMIT_EXCEEDED');
+        proofObjects.set(digest, { digest, bytes: disclosureObject(bytes).bytes });
+      }
+      references.push({ recordDigest: entry.recordDigest, proofDigest: digest });
+    }
+    if (proofObjects.size > LIMITS.objects) fail('LIMIT_EXCEEDED');
+    if (new Set(references.map(reference => `${reference.recordDigest}:${reference.proofDigest}`)).size !== references.length) fail('INVALID', 'Duplicate public proof reference');
+    return wire({ profile: 'pap-disclosure-spike/2', scope: 'SELECTIVE', records, objects,
+      publicProofObjects: [...proofObjects.values()], publicProofReferences: references });
   }
   exportRecovery() {
     const index = this.#readIndex(); this.verifyAll();
@@ -182,7 +254,21 @@ export class Vault {
     index.records = structuredClone(recovered.records); index.checkpoint = recovered.checkpoint;
     validateIndex(index); this.#commit(index, additions);
   }
-  close() { if (!this.#closed) { this.#db.close(); this.#vmk.fill(0); this.#closed = true; } }
+  close() { if (!this.#closed) { this.#db.close(); this.#vmk.fill(0); this.#signing = null; this.#closed = true; } }
+}
+
+export function readVaultHeader(directory) {
+  const path = join(directory, 'vault.sqlite');
+  if (!existsSync(path)) fail('UNRECOVERABLE', 'Vault database missing');
+  const db = new DatabaseSync(path, { open: true, readOnly: true });
+  try {
+    const meta = db.prepare('SELECT vault_id, key_hash FROM meta WHERE id=1').get();
+    if (!meta) fail('UNRECOVERABLE', 'Vault header missing');
+    unb64(meta.vault_id, 16); unb64(meta.key_hash, 32);
+    const schemaVersion = db.prepare('PRAGMA user_version').get().user_version || 1;
+    if (schemaVersion > CURRENT_SCHEMA) fail('UNSUPPORTED', 'Vault schema is newer than this application');
+    return { vaultId: meta.vault_id, keyId: meta.key_hash, schemaVersion };
+  } finally { db.close(); }
 }
 
 function unbox(box, key, vaultId, role, objectId, packageId = null, snapshotId = null, max = LIMITS.total) {

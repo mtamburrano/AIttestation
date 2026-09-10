@@ -3,6 +3,7 @@ import { canonical, parseCanonical, hash, b64, unb64, objectDigest, LIMITS, keys
 
 export const identity = () => generateKeyPairSync('ed25519');
 export const publicBytes = key => key.export({ format: 'jwk' }).x;
+export const publicProofDigest = bytes => b64(hash('PAP/public-proof/v1\0', bytes));
 export function makeRecord(bytes, signing, sequence, previous) {
   const manifest = { profile: 'pap-poc/1', eventId: b64(randomBytes(16)), type: 'capture', mode: 'Continuous',
     sequence: String(sequence), localClaimedTime: new Date().toISOString(), previousRecordDigest: previous,
@@ -55,8 +56,11 @@ export function verifyRecord(record, evidence = null) {
 }
 export function verifyDisclosure(input) {
   const bundle = parseCanonical(input);
-  keys(bundle, ['profile', 'scope', 'records', 'objects']);
-  if (bundle.profile !== 'pap-disclosure-spike/1' || bundle.scope !== 'SELECTIVE') fail('UNSUPPORTED');
+  if (bundle?.profile === 'pap-disclosure-spike/1') keys(bundle, ['profile', 'scope', 'records', 'objects']);
+  else if (bundle?.profile === 'pap-disclosure-spike/2') keys(bundle,
+    ['profile', 'scope', 'records', 'objects', 'publicProofObjects', 'publicProofReferences']);
+  else fail('UNSUPPORTED');
+  if (bundle.scope !== 'SELECTIVE') fail('UNSUPPORTED');
   if (!Array.isArray(bundle.records) || !Array.isArray(bundle.objects) || bundle.records.length > LIMITS.objects
       || bundle.objects.length > LIMITS.objects) fail('LIMIT_EXCEEDED');
   const objects = new Map(); let total = 0;
@@ -68,7 +72,30 @@ export function verifyDisclosure(input) {
     if (objectDigest(bytes) !== obj.digest) fail('INVALID', 'Object mismatch');
     objects.set(obj.digest, bytes);
   }
-  return { scope: 'SELECTIVE', latestState: 'NOT_PROVEN', records: bundle.records.map(r =>
+  const result = { scope: 'SELECTIVE', latestState: 'NOT_PROVEN', records: bundle.records.map(r =>
     verifyRecord(r, objects.get(r.manifest?.evidence?.[0]?.objectDigest) ?? null)) };
+  if (bundle.profile === 'pap-disclosure-spike/2') {
+    if (!Array.isArray(bundle.publicProofObjects) || !Array.isArray(bundle.publicProofReferences)
+        || bundle.publicProofObjects.length > LIMITS.objects || bundle.publicProofReferences.length > LIMITS.entries) fail('LIMIT_EXCEEDED');
+    const selected = new Set(bundle.records.map(record => record.recordDigest)), proofs = new Map(); let proofBytes = 0;
+    for (const object of bundle.publicProofObjects) {
+      keys(object, ['digest', 'bytes']); unb64(object.digest, 32);
+      if (proofs.has(object.digest)) fail('INVALID', 'Duplicate public proof object');
+      const bytes = unpack(object.bytes, LIMITS.total); proofBytes += bytes.length;
+      if (proofBytes > LIMITS.total || publicProofDigest(bytes) !== object.digest) fail('INVALID', 'Public proof object mismatch');
+      proofs.set(object.digest, bytes);
+    }
+    const references = new Set(), usedProofs = new Set();
+    for (const reference of bundle.publicProofReferences) {
+      keys(reference, ['recordDigest', 'proofDigest']); unb64(reference.recordDigest, 32); unb64(reference.proofDigest, 32);
+      const identity = `${reference.recordDigest}:${reference.proofDigest}`;
+      if (references.has(identity) || !selected.has(reference.recordDigest) || !proofs.has(reference.proofDigest)) fail('INVALID', 'Invalid public proof reference');
+      references.add(identity); usedProofs.add(reference.proofDigest);
+    }
+    if (usedProofs.size !== proofs.size) fail('INVALID', 'Unreferenced public proof object');
+    result.publicProofs = { availability: bundle.publicProofReferences.length ? 'REFERENCE_SHARED' : 'MISSING',
+      objects: proofs.size, references: references.size };
+  }
+  return result;
 }
 export const disclosureObject = bytes => ({ digest: objectDigest(bytes), bytes: pack(bytes) });

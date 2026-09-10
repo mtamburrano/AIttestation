@@ -45,6 +45,10 @@ Frozen descriptors bind the mode, enrolled scope, payload digest, exact-byte obj
 references and capture record IDs in a signed vault object. Confirmation uses the
 descriptor's locally selected signed-record digest, never a proof-selected digest.
 Validated proof receipts are themselves retained as encrypted signed objects.
+Disclosure export content-addresses the public proof body and includes each shared
+body once; descriptor-specific batch paths refer to it by digest. The verifier also
+accepts the earlier self-contained envelope representation so recorded exports do
+not become unverifiable after upgrade.
 Authorization consumption still precedes dispatch in the existing release runtime.
 A reload of an interrupted durable attempt produces `OUTCOME_UNKNOWN`, with no
 automatic resend. The participant app intentionally has no retry/reopen authority:

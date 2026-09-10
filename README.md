@@ -59,9 +59,11 @@ does not establish guarantees against storage hardware failure or journal tamper
 ## Encrypted evidence slice
 
 The separate [vault library](spikes/vault/README.md) adds encrypted private dedup,
-crash-safe capture, signed commitments, authenticated recovery inventories, VMK
-rotation and a local disclosure verifier. It requires Node.js 22.13 or newer and
-does not yet replace the release laboratory's synthetic plaintext journal.
+crash-safe capture, signed commitments, authenticated recovery inventories,
+macOS-Keychain-backed signing/VMK lifecycles, compatible schema migration, key
+rotation, append-only retention and reference-shared public proof export. It
+requires Node.js 22.13 or newer and does not yet replace the release laboratory's
+synthetic plaintext journal.
 
 ## Offline anchor envelope
 
