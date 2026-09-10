@@ -4,11 +4,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { DurableVault, MacOSKeychainStore, MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
 import { identity, publicProofDigest, verifyDisclosure } from '../spikes/vault/records.mjs';
 import { b64, canonical, parseCanonical } from '../spikes/vault/format.mjs';
+import { FileKeyStore } from './file-key-store.mjs';
 
 function directory(t, name = 'vault') {
   const root = mkdtempSync(join(tmpdir(), 'provenance-key-lifecycle-test-'));
@@ -74,15 +76,45 @@ test('clean-device recovery recognizes a post-commit interruption without losing
   assert.equal(cleanStore.accounts().length, 2); assert.equal(restored.verifyAll().count, 1);
 });
 
-test('vault rotation treats a post-commit interruption as committed and remains reopenable', t => {
-  const { path } = directory(t), keyStore = new MemoryKeyStore();
+test('vault rotation retires the old key after a real process death at the commit boundary', t => {
+  const { root, path } = directory(t), keyStoreDirectory = join(root, 'test-key-store');
+  const keyStore = new FileKeyStore(keyStoreDirectory);
   const initial = DurableVault.create(path, { keyStore }); initial.capture(Buffer.from('before rotation')); initial.close();
-  const interrupted = DurableVault.open(path, { keyStore, fault: phase => {
-    if (phase === 'after-commit') throw Error('simulated post-commit interruption');
-  } });
-  const replacement = interrupted.rotateVaultKey(); interrupted.close();
+  const initialDb = new DatabaseSync(join(path, 'vault.sqlite'), { readOnly: true });
+  const oldKeyId = initialDb.prepare('SELECT key_hash FROM meta WHERE id=1').get().key_hash; initialDb.close();
+  const child = spawnSync(process.execPath, [join(import.meta.dirname, 'vault-key-rotation-child.mjs'), path, keyStoreDirectory]);
+  assert.equal(child.signal, 'SIGKILL');
+  const interruptedDb = new DatabaseSync(join(path, 'vault.sqlite'), { readOnly: true });
+  const replacementKeyId = interruptedDb.prepare('SELECT key_hash FROM meta WHERE id=1').get().key_hash;
+  assert.notEqual(replacementKeyId, oldKeyId);
+  assert.equal(interruptedDb.prepare('SELECT count(*) AS count FROM key_retirements').get().count, 1);
+  interruptedDb.close();
+  assert.equal(keyStore.accounts().length, 3, 'old VMK, replacement VMK, and signing key survive the killed process');
   const reopened = DurableVault.open(path, { keyStore }); t.after(() => reopened.close());
-  assert.equal(reopened.status().vaultKeyId, replacement.vaultKeyId);
+  assert.equal(reopened.status().vaultKeyId, replacementKeyId);
+  assert.equal(reopened.status().retiredKeyRemovalPending, false);
+  assert.equal(reopened.verifyAll().count, 1);
+  assert.equal(keyStore.accounts().length, 2);
+  assert.equal(keyStore.accounts().some(account => account.endsWith(oldKeyId)), false);
+  const reconciledDb = new DatabaseSync(join(path, 'vault.sqlite'), { readOnly: true });
+  assert.equal(reconciledDb.prepare('SELECT count(*) AS count FROM key_retirements').get().count, 0); reconciledDb.close();
+});
+
+test('vault rotation reports transient retirement failure and retries it on open', t => {
+  const { path } = directory(t), backing = new MemoryKeyStore(); let failNextRetirement = false;
+  const keyStore = {
+    get: account => backing.get(account), set: (account, secret) => backing.set(account, secret),
+    delete: account => {
+      if (failNextRetirement && account.includes(':encryption:')) { failNextRetirement = false; throw Error('synthetic cleanup failure'); }
+      backing.delete(account);
+    },
+  };
+  const vault = DurableVault.create(path, { keyStore }); vault.capture(Buffer.from('cleanup retry'));
+  failNextRetirement = true;
+  assert.equal(vault.rotateVaultKey().retiredKeyRemovalPending, true);
+  assert.equal(vault.status().retiredKeyRemovalPending, true); assert.equal(backing.accounts().length, 3); vault.close();
+  const reopened = DurableVault.open(path, { keyStore }); t.after(() => reopened.close());
+  assert.equal(reopened.status().retiredKeyRemovalPending, false); assert.equal(backing.accounts().length, 2);
   assert.equal(reopened.verifyAll().count, 1);
 });
 
@@ -92,7 +124,7 @@ test('legacy vault adoption and additive schema migration survive interruption a
   const record = legacy.capture(Buffer.from('pre-upgrade evidence'));
   const oldBundle = legacy.exportDisclosure([record.manifest.eventId]); legacy.close();
   const db = new DatabaseSync(join(path, 'vault.sqlite'));
-  db.exec('DROP TABLE vault_schema; PRAGMA user_version=1;'); db.close();
+  db.exec('DROP TABLE key_retirements; DROP TABLE vault_schema; PRAGMA user_version=1;'); db.close();
 
   assert.throws(() => new Vault(path, vaultKey, signer, { fault: phase => {
     if (phase === 'migration-before-commit') throw Error('simulated interrupted upgrade');
@@ -102,7 +134,7 @@ test('legacy vault adoption and additive schema migration survive interruption a
 
   const keyStore = new MemoryKeyStore();
   const upgraded = DurableVault.adoptLegacy(path, vaultKey, signer, { keyStore });
-  assert.equal(upgraded.schemaInfo().writerVersion, 2); upgraded.close();
+  assert.equal(upgraded.schemaInfo().writerVersion, 3); upgraded.close();
   const rollback = new Vault(path, vaultKey, signer, { readerVersion: 1 });
   assert.equal(rollback.verifyAll().count, 1); rollback.close();
   assert.equal(verifyDisclosure(oldBundle).records[0].integrity, 'VALID');
@@ -130,21 +162,23 @@ test('public proof objects are content-addressed once and reference-shared acros
     reason: 'Every object is reachable from retained signed records; MVP garbage collection is disabled.' });
 });
 
-test('macOS keychain adapter keeps secrets out of argv and uses exact role accounts', () => {
+test('macOS keychain adapter uses the fixed native helper protocol and exact role accounts', () => {
   const items = new Map(), calls = [];
-  const run = (_executable, args, input) => {
-    calls.push({ args: [...args], input });
-    const account = args[args.indexOf('-a') + 1], command = args[0];
-    if (command === 'add-generic-password') { items.set(account, input.trim()); return { status: 0, stdout: '', stderr: '' }; }
-    if (command === 'find-generic-password' && items.has(account)) return { status: 0, stdout: `${items.get(account)}\n`, stderr: '' };
-    if (command === 'delete-generic-password') { items.delete(account); return { status: 0, stdout: '', stderr: '' }; }
-    return { status: 44, stdout: '', stderr: 'SecKeychainSearchCopyNext: -25300 item could not be found' };
+  const run = (executable, request) => {
+    calls.push({ executable, request: structuredClone(request) });
+    if (request.operation === 'set') items.set(request.account, request.value);
+    if (request.operation === 'delete') items.delete(request.account);
+    const response = request.operation === 'get' && !items.has(request.account)
+      ? { profile: 'pap-keychain-response/1', status: 'MISSING' }
+      : { profile: 'pap-keychain-response/1', status: 'OK', ...(request.operation === 'get' ? { value: items.get(request.account) } : {}) };
+    return { status: 0, stdout: JSON.stringify(response), stderr: '' };
   };
-  const store = new MacOSKeychainStore({ service: 'ai.provenance.test-only', run });
+  const helper = '/isolated-test/provenance-keychain-helper';
+  const store = new MacOSKeychainStore({ service: 'ai.provenance.test-only', helper, run });
   const secret = Buffer.from('synthetic secret'), account = 'vault:test:signing:active'; store.set(account, secret);
   assert.deepEqual(store.get(account), secret); store.delete(account); assert.equal(store.get(account), null);
-  assert.ok(calls[0].args.includes(account)); assert.ok(calls[0].args.includes('-w'));
-  assert.equal(calls[0].args.includes(b64(secret)), false); assert.equal(calls[0].input, `${b64(secret)}\n`);
-  const isolated = new MacOSKeychainStore({ service: 'ai.provenance.test-only', keychain: '/tmp/test-only.keychain-db', run });
-  assert.throws(() => isolated.set(account, secret), { code: 'UNSUPPORTED' });
+  assert.equal(calls[0].executable, helper);
+  assert.deepEqual(calls[0].request, { profile: 'pap-keychain-request/1', operation: 'set',
+    service: 'ai.provenance.test-only', account, value: b64(secret) });
+  assert.equal(Object.keys(calls[0].request).sort().join(','), 'account,operation,profile,service,value');
 });

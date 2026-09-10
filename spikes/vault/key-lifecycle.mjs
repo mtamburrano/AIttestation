@@ -1,6 +1,6 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { isAbsolute } from 'node:path';
+import { dirname, join } from 'node:path';
 import { b64, unb64, fail } from './format.mjs';
 import { Vault, inspectRecovery, readVaultHeader, vaultKeyId } from './vault.mjs';
 
@@ -28,48 +28,44 @@ function signingIdentity(bytes) {
   } finally { encoded.fill(0); }
 }
 
-function securityRun(executable, args, input) {
-  return spawnSync(executable, args, { input, encoding: 'utf8', env: { PATH: '/usr/bin:/bin' },
+function helperRun(executable, request) {
+  return spawnSync(executable, [], { input: JSON.stringify(request), encoding: 'utf8', env: {},
     maxBuffer: 1024 * 1024, timeout: 15000, windowsHide: true });
 }
 
-/** Stores each key role as a distinct generic-password item in the macOS login keychain. */
+/** Uses the app-bound Security.framework helper shipped beside the signed runtime. */
 export class MacOSKeychainStore {
-  #service; #keychain; #security; #run;
-  constructor({ service = DEFAULT_SERVICE, keychain = null, security = '/usr/bin/security', run = null } = {}) {
+  #service; #helper; #run;
+  constructor({ service = DEFAULT_SERVICE, helper = null, run = null } = {}) {
     if (typeof service !== 'string' || !/^[A-Za-z0-9._-]{1,120}$/.test(service)) fail('INVALID', 'Invalid keychain service');
-    if (keychain !== null && (typeof keychain !== 'string' || !isAbsolute(keychain))) fail('INVALID', 'Invalid keychain path');
-    if (run === null && security !== '/usr/bin/security') fail('INVALID', 'Untrusted Keychain executable');
     if (process.platform !== 'darwin' && run === null) fail('UNSUPPORTED', 'macOS Keychain is required');
-    this.#service = service; this.#keychain = keychain; this.#security = security; this.#run = run ?? securityRun;
+    if (run === null && service !== DEFAULT_SERVICE) fail('INVALID', 'Production Keychain service is fixed');
+    const bundledHelper = join(dirname(process.execPath), 'provenance-keychain-helper');
+    if (run === null && helper !== null) fail('INVALID', 'Production Keychain helper path is fixed');
+    this.#service = service; this.#helper = helper ?? bundledHelper; this.#run = run ?? helperRun;
   }
-  #invoke(args, input = undefined, { missing = false } = {}) {
-    const result = this.#run(this.#security, args, input);
-    if (result?.status === 0) return result.stdout ?? '';
-    const detail = `${result?.stderr ?? ''}${result?.stdout ?? ''}`;
-    if (missing && /could not be found|item not found|SecKeychainSearchCopyNext: -25300/i.test(detail)) return null;
-    if (/interaction is not allowed|user interaction is not allowed|auth failed|locked/i.test(detail)) fail('LOCKED', 'macOS Keychain is locked');
-    fail('UNRECOVERABLE', 'macOS Keychain operation failed');
+  #invoke(operation, account, value = undefined) {
+    const request = { profile: 'pap-keychain-request/1', operation, service: this.#service, account };
+    if (value !== undefined) request.value = b64(value);
+    const result = this.#run(this.#helper, request);
+    if (result?.status !== 0) fail('UNRECOVERABLE', 'App-bound Keychain helper failed');
+    let response;
+    try { response = JSON.parse(result.stdout); } catch { fail('UNRECOVERABLE', 'Invalid Keychain helper response'); }
+    if (!response || response.profile !== 'pap-keychain-response/1') fail('UNRECOVERABLE', 'Invalid Keychain helper response');
+    if (response.status === 'LOCKED') fail('LOCKED', 'macOS Keychain is locked');
+    if (response.status === 'MISSING' && operation === 'get') return null;
+    if (response.status !== 'OK') fail('UNRECOVERABLE', 'App-bound Keychain operation failed');
+    return response.value;
   }
   get(account) {
-    const args = ['find-generic-password', '-a', account, '-s', this.#service, '-w'];
-    if (this.#keychain) args.push(this.#keychain);
-    const output = this.#invoke(args, undefined, { missing: true });
-    return output === null ? null : unb64(output.trim());
+    const value = this.#invoke('get', account);
+    return value === null ? null : unb64(value);
   }
   set(account, secret) {
     if (!Buffer.isBuffer(secret) || secret.length === 0) fail('INVALID', 'Secret must be non-empty bytes');
-    if (this.#keychain) fail('UNSUPPORTED', 'Secure writes through the CLI require the default macOS keychain');
-    // With no password argument, a final -w reads the secret from stdin. This
-    // keeps key material out of argv and shell history.
-    const args = ['add-generic-password', '-U', '-a', account, '-s', this.#service, '-w'];
-    this.#invoke(args, `${b64(secret)}\n`);
+    this.#invoke('set', account, secret);
   }
-  delete(account) {
-    const args = ['delete-generic-password', '-a', account, '-s', this.#service];
-    if (this.#keychain) args.push(this.#keychain);
-    this.#invoke(args, undefined, { missing: true });
-  }
+  delete(account) { this.#invoke('delete', account); }
 }
 
 /** Test-only key store. Callers must allocate one per isolated test resource. */
@@ -98,7 +94,7 @@ export class MemoryKeyStore {
  * configured OS-protected store and is loaded only between unlock() and lock().
  */
 export class DurableVault {
-  #directory; #keyStore; #vault = null; #fault; #readerVersion;
+  #directory; #keyStore; #vault = null; #fault; #readerVersion; #retiredKeyRemovalPending = false;
   constructor(directory, keyStore, fault = () => {}, readerVersion = undefined) {
     this.#directory = directory; this.#keyStore = keyStore; this.#fault = fault; this.#readerVersion = readerVersion;
   }
@@ -168,7 +164,10 @@ export class DurableVault {
       this.#vault = new Vault(this.#directory, vmk, signingIdentity(storedSigning), {
         fault: this.#fault, ...(this.#readerVersion === undefined ? {} : { readerVersion: this.#readerVersion }),
       });
+      this.#reconcileKeyRetirements();
       return this;
+    } catch (error) {
+      this.#vault?.close(); this.#vault = null; throw error;
     } finally { vmk?.fill(0); storedSigning?.fill(0); }
   }
   lock() { if (this.#vault) { this.#vault.close(); this.#vault = null; } }
@@ -184,7 +183,22 @@ export class DurableVault {
   status() {
     const vault = this.#require();
     return { locked: false, vaultId: vault.vaultId, vaultKeyId: vault.keyId,
-      signingPublicKey: vault.signingPublicKey, schema: vault.schemaInfo(), historicalSendAuthorization: 'NONE' };
+      signingPublicKey: vault.signingPublicKey, schema: vault.schemaInfo(), historicalSendAuthorization: 'NONE',
+      retiredKeyRemovalPending: this.#retiredKeyRemovalPending || vault.pendingKeyRetirements().length > 0 };
+  }
+  #reconcileKeyRetirements() {
+    const vault = this.#require(); let pending = false;
+    for (const intent of vault.pendingKeyRetirements()) {
+      let obsoleteKeyId;
+      if (vault.keyId === intent.replacementKeyId) obsoleteKeyId = intent.retiredKeyId;
+      else if (vault.keyId === intent.retiredKeyId) obsoleteKeyId = intent.replacementKeyId;
+      else fail('UNRECOVERABLE', 'Key retirement does not match the active vault key');
+      try {
+        this.#keyStore.delete(vaultAccount(vault.vaultId, obsoleteKeyId));
+        vault.completeKeyRetirement(intent.retiredKeyId, intent.replacementKeyId);
+      } catch { pending = true; }
+    }
+    this.#retiredKeyRemovalPending = pending;
   }
   rotateSigningKey() {
     const vault = this.#require(), replacement = generateKeyPairSync('ed25519');
@@ -198,18 +212,27 @@ export class DurableVault {
   rotateVaultKey() {
     const vault = this.#require(), oldKeyId = vault.keyId, replacement = randomBytes(32);
     const newKeyId = vaultKeyId(replacement), newAccount = vaultAccount(vault.vaultId, newKeyId);
-    this.#keyStore.set(newAccount, replacement);
     try {
+      vault.beginKeyRetirement(oldKeyId, newKeyId);
+      this.#keyStore.set(newAccount, replacement);
       vault.rotate(replacement);
+      this.#fault('rotation-after-db-commit');
       let retiredKeyRemovalPending = false;
-      try { this.#keyStore.delete(vaultAccount(vault.vaultId, oldKeyId)); }
+      try {
+        this.#keyStore.delete(vaultAccount(vault.vaultId, oldKeyId));
+        vault.completeKeyRetirement(oldKeyId, newKeyId);
+      }
       catch { retiredKeyRemovalPending = true; }
+      this.#retiredKeyRemovalPending = retiredKeyRemovalPending;
       return { vaultKeyId: newKeyId, retiredKeyRemovalPending };
     } catch (error) {
       // If the durable header still points at the old key, the replacement was
       // never activated and its exact, newly-created keychain item is safe to remove.
       if (readVaultHeader(this.#directory).keyId === oldKeyId) {
-        try { this.#keyStore.delete(newAccount); } catch {}
+        try {
+          this.#keyStore.delete(newAccount);
+          vault.completeKeyRetirement(oldKeyId, newKeyId);
+        } catch {}
       }
       throw error;
     } finally { replacement.fill(0); }

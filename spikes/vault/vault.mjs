@@ -6,7 +6,7 @@ import { LIMITS, VaultError, canonical, parseCanonical, b64, unb64, hash, object
 import { identity, makeRecord, verifyRecord, disclosureObject, publicProofDigest } from './records.mjs';
 
 const MAX_WRAPS = 2 ** 20;
-const CURRENT_SCHEMA = 2;
+const CURRENT_SCHEMA = 3;
 const MINIMUM_READER = 1;
 const id = () => b64(randomBytes(16));
 export const vaultKeyId = key => b64(hash('PAP/local-vmk-id/v1\0', key));
@@ -46,8 +46,9 @@ export class Vault {
   }
   #meta() { return this.#db.prepare('SELECT * FROM meta WHERE id=1').get(); }
   #migrate(readerVersion) {
-    const diskVersion = this.#db.prepare('PRAGMA user_version').get().user_version;
-    if (!Number.isInteger(diskVersion) || diskVersion < 0 || diskVersion > CURRENT_SCHEMA) fail('UNSUPPORTED', 'Vault schema is newer than this application');
+    const storedVersion = this.#db.prepare('PRAGMA user_version').get().user_version;
+    if (!Number.isInteger(storedVersion) || storedVersion < 0 || storedVersion > CURRENT_SCHEMA) fail('UNSUPPORTED', 'Vault schema is newer than this application');
+    const diskVersion = storedVersion || 1;
     const table = this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vault_schema'").get();
     if (table) {
       const info = this.#db.prepare('SELECT writer_version, minimum_reader FROM vault_schema WHERE id=1').get();
@@ -56,8 +57,9 @@ export class Vault {
     if (readerVersion < CURRENT_SCHEMA || diskVersion === CURRENT_SCHEMA) return;
     this.#db.exec('BEGIN IMMEDIATE');
     try {
-      this.#db.exec('CREATE TABLE vault_schema (id INTEGER PRIMARY KEY CHECK(id=1), writer_version INTEGER NOT NULL, minimum_reader INTEGER NOT NULL);');
-      this.#db.prepare('INSERT INTO vault_schema VALUES (1, ?, ?)').run(CURRENT_SCHEMA, MINIMUM_READER);
+      this.#db.exec('CREATE TABLE IF NOT EXISTS vault_schema (id INTEGER PRIMARY KEY CHECK(id=1), writer_version INTEGER NOT NULL, minimum_reader INTEGER NOT NULL);');
+      this.#db.exec('CREATE TABLE IF NOT EXISTS key_retirements (id INTEGER PRIMARY KEY CHECK(id=1), retired_key_hash TEXT NOT NULL, replacement_key_hash TEXT NOT NULL);');
+      this.#db.prepare('INSERT INTO vault_schema VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET writer_version=excluded.writer_version, minimum_reader=excluded.minimum_reader').run(CURRENT_SCHEMA, MINIMUM_READER);
       this.#fault('migration-after-ddl');
       this.#db.exec(`PRAGMA user_version=${CURRENT_SCHEMA}`);
       this.#fault('migration-before-commit');
@@ -90,6 +92,36 @@ export class Vault {
   setSigningIdentity(signing) {
     if (!signing?.privateKey || !signing?.publicKey) fail('UNRECOVERABLE', 'Signing identity missing');
     this.#signing = signing;
+  }
+  pendingKeyRetirements() {
+    const table = this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='key_retirements'").get();
+    if (!table) return [];
+    const rows = this.#db.prepare('SELECT retired_key_hash, replacement_key_hash FROM key_retirements ORDER BY id').all();
+    for (const row of rows) { unb64(row.retired_key_hash, 32); unb64(row.replacement_key_hash, 32); }
+    return rows.map(row => ({ retiredKeyId: row.retired_key_hash, replacementKeyId: row.replacement_key_hash }));
+  }
+  beginKeyRetirement(retiredKeyId, replacementKeyId) {
+    unb64(retiredKeyId, 32); unb64(replacementKeyId, 32);
+    if (retiredKeyId === replacementKeyId || this.keyId !== retiredKeyId) fail('INVALID', 'Invalid key retirement transition');
+    const pending = this.pendingKeyRetirements();
+    if (pending.length && !pending.some(row => row.retiredKeyId === retiredKeyId && row.replacementKeyId === replacementKeyId)) {
+      fail('CONFLICT', 'Another key retirement is pending');
+    }
+    if (pending.length) return;
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#db.prepare('INSERT INTO key_retirements VALUES (1, ?, ?)').run(retiredKeyId, replacementKeyId);
+      this.#fault('retirement-intent-before-commit');
+      this.#db.exec('COMMIT');
+    } catch (error) { if (this.#db.isTransaction) this.#db.exec('ROLLBACK'); throw error; }
+  }
+  completeKeyRetirement(retiredKeyId, replacementKeyId) {
+    unb64(retiredKeyId, 32); unb64(replacementKeyId, 32);
+    this.#db.exec('BEGIN IMMEDIATE');
+    try {
+      this.#db.prepare('DELETE FROM key_retirements WHERE retired_key_hash=? AND replacement_key_hash=?').run(retiredKeyId, replacementKeyId);
+      this.#db.exec('COMMIT');
+    } catch (error) { if (this.#db.isTransaction) this.#db.exec('ROLLBACK'); throw error; }
   }
   // Reserve and fsync a unique VMK nonce BEFORE encryption. Crashes only burn reservations.
   #nonce(key = this.#vmk) {

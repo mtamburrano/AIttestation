@@ -10,25 +10,39 @@ portable for offline verification and isolated tests.
 
 `DurableVault.create()` and `DurableVault.open()` in `key-lifecycle.mjs` keep the
 active Ed25519 signing private key and the 256-bit vault master key in distinct
-macOS Keychain generic-password items. Secret values are supplied to the Keychain
-tool over stdin, never argv. The public vault header contains only a random vault
-identifier and a domain-separated VMK identifier. `lock()` closes SQLite, wipes
+macOS Data Protection Keychain generic-password items. The JavaScript runtime sends
+a bounded request over stdin to its fixed, bundled `provenance-keychain-helper`;
+the helper calls Security.framework directly and never accepts secrets in argv.
+Before every operation it verifies that its parent is the same-team signed
+`ai.provenance.consumer.runtime`, and it selects only its provisioned
+`*.ai.provenance.evidence-vault` access group. Items are non-synchronizable and
+`WhenUnlockedThisDeviceOnly`, so an unrelated process running as the same user
+cannot use the helper or read the items. The public vault header contains only a
+random vault identifier and a domain-separated VMK identifier. `lock()` closes SQLite, wipes
 the JS VMK buffer and drops the signing `KeyObject`; `unlock()` must reacquire both
 roles from Keychain. A locked or unavailable Keychain fails closed.
 
 `rotateSigningKey()` replaces only future assertion authority. Historical records
 retain their public keys and stay verifiable. `rotateVaultKey()` writes the new
 Keychain item before atomically rewrapping DEKs and changing the durable header;
-post-commit interruption selects the new key on reopen. A failure to delete the
-retired Keychain item is reported without misreporting a committed rotation as
-failed. `DurableVault.restore()` authenticates the complete snapshot before it
+before doing so it commits a retirement intent in the same FULL-synchronous SQLite
+database. On every open, that intent determines whether the old or replacement item
+is obsolete and cleanup is retried before the intent is cleared. A process death
+after the rotation commit therefore selects the new key and deterministically
+retires the old item on reopen. A transient cleanup failure remains visible through
+`retiredKeyRemovalPending`. `DurableVault.restore()` authenticates the complete snapshot before it
 creates a destination, then provisions a fresh VMK and fresh signing identity.
 Recovered history carries no old send authorization.
 
-The production adapter intentionally writes only to the user's default macOS
-Keychain: the `security` CLI cannot combine its safe stdin prompt with an explicit
-custom-keychain pathname. Tests therefore inject a fresh `MemoryKeyStore`; it is
-test-only and must not be used for consumer evidence.
+The helper and runtime are separate signed executables. Production packaging must
+sign the helper with `native/keychain-helper.entitlements.plist` (expanding the
+Apple application-identifier prefix), sign the runtime with identifier
+`ai.provenance.consumer.runtime`, and use the same non-ad-hoc Team ID for both.
+The helper rejects ad-hoc, unsigned, wrong-team, or wrong-identifier parents. The
+developer demonstrator build compiles the helper but remains explicitly ad-hoc and
+cannot exercise production Keychain custody. Tests inject a fresh `MemoryKeyStore`
+or a fresh temporary process-test store; both are test-only and must not be used for
+consumer evidence.
 
 `new Vault(newDirectory, vaultKey, signingIdentity, { create: true })` requires a
 new directory and an independently supplied random 32-byte vault key. Omit `create`
@@ -60,9 +74,10 @@ or garbage-collection path, and the encrypted index rejects both missing referen
 objects and unreferenced private objects. This prevents retention cleanup from
 silently removing evidence, openings or proof dependencies.
 
-Schema 2 adds only a transactionally installed compatibility marker and preserves
-the schema-1 encrypted index/wire formats. Interrupted migration rolls back as a
-unit; schema-1 readers remain permitted after upgrade. `adoptLegacy()` validates a
+Schema 2 added a transactionally installed compatibility marker. Schema 3 adds the
+durable key-retirement journal. Both are additive and preserve the schema-1
+encrypted index/wire formats. Interrupted migration rolls back as a unit; schema-1
+readers remain permitted after upgrade. `adoptLegacy()` validates a
 live schema-1 vault and then installs its supplied VMK/signing identity into the
 separated Keychain roles. New readers continue to accept schema-1 disclosures and
 recovery packages.
@@ -100,7 +115,7 @@ UTF-8/base64url fail closed. Names are never interpreted as paths; no decompress
 remote references or active content execution is supported.
 
 Run `node --test test/vault.test.mjs test/key-lifecycle.test.mjs`. Tests use only
-newly created temporary vaults, fresh in-memory key stores, separate synthetic
+newly created temporary vaults, fresh in-memory or temporary-file test stores, separate synthetic
 credentials and child processes. Coverage includes real SIGKILL boundaries,
 injected SQLite-full errors, recovery inventory mutations, clean-device restore,
 locked-key behavior, both key rotations, interrupted schema migration, rollback

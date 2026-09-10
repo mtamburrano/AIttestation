@@ -1,4 +1,4 @@
-import { mkdir, cp, copyFile, writeFile, stat } from 'node:fs/promises';
+import { mkdir, cp, copyFile, writeFile, stat, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -13,6 +13,12 @@ const app = join(output, 'Private Provenance Demo.app'), contents = join(app, 'C
 await mkdir(join(contents, 'MacOS'), { recursive: true });
 const resources = join(contents, 'Resources'); await mkdir(resources);
 await copyFile(process.execPath, join(contents, 'MacOS', 'node'));
+const moduleCache = join(output, '.swift-module-cache'); await mkdir(moduleCache);
+try {
+  execFileSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', moduleCache, '-O', '-framework', 'Security',
+    join(root, 'spikes/vault/native/macos-keychain-helper.swift'), '-o', join(contents, 'MacOS', 'provenance-keychain-helper')],
+  { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
+} finally { await rm(moduleCache, { recursive: true, force: true }); }
 await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node-LICENSE.txt'));
 for (const name of ['release', 'vault', 'anchor', 'demonstrator']) await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
   recursive: true, filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live') && !source.endsWith('/.DS_Store'),
