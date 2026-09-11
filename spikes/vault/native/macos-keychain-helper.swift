@@ -91,7 +91,7 @@ do {
         let operation = request["operation"] as? String,
         let service = request["service"] as? String, service == allowedService,
         let account = request["account"] as? String,
-        account.range(of: #"^vault:[A-Za-z0-9_-]{22}:(encryption:[A-Za-z0-9_-]{43}|signing:active)$"#, options: .regularExpression) != nil else {
+        account.range(of: #"^(vault:[A-Za-z0-9_-]{22}:(encryption:[A-Za-z0-9_-]{43}|signing:active)|managed:anchoring:[A-Za-z0-9_-]{43})$"#, options: .regularExpression) != nil else {
     throw HelperFailure.rejected
   }
   let requiredKeys = operation == "set" ? Set(["profile", "operation", "service", "account", "value"])

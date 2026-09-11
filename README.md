@@ -70,6 +70,13 @@ permission/protocol/provider drift, timeout/conflict, and unsupported attachment
 Use `npm run build:chatgpt -- NEW_OUTPUT_DIRECTORY` after building the pinned Go
 tools to create the app and its not-yet-installed native-host manifest.
 
+[Managed sponsorship](spikes/managed/README.md) adds wallet-free submission with
+durable account quotas, bounded fee authority and subscription continuity. The
+local composer requests an anchor automatically after freezing; service failure
+leaves strict modes pending and keeps Continuous evidence local. The default build
+has no deployed service origin. Operators configure the TestNet sponsor and HTTPS
+endpoint separately; existing receipts, exports and verification remain free.
+
 The composer also includes [free local receipts and recipient verification](spikes/recipient/README.md):
 selective disclosure previews, immutable local downloads, explicit redacted
 derivatives, and shared public anchor proof objects. The build includes a separate

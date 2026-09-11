@@ -20,6 +20,10 @@ import { MAX_PROTECTED_TEXT_BYTES, validateProtectedTextPayload } from '../spike
 import { canonical, parseCanonical } from '../spikes/vault/format.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
+import { ManagedSponsorship, DEFAULT_LIMITS } from '../spikes/managed/service.mjs';
+import { ManagedAnchoringClient } from '../spikes/managed/client.mjs';
+import { startManagedServer } from '../spikes/managed/http.mjs';
+import { MANAGED_NETWORK, managedError } from '../spikes/managed/protocol.mjs';
 
 const extensionId = 'hdnjjomhchcpcnikfabcnmlhcehbnhbc';
 const browserSessionId = 'browser-session-0000000000000001';
@@ -60,7 +64,7 @@ const observedResponse = (command, exposure = 'DOM_INJECTED', submitted = true,
   textDigest: command.textDigest, exposure, submitted, observation,
 });
 
-async function fixture(t, { responder, collectFast, verifyFast, verifyArchive, fault } = {}) {
+async function fixture(t, { responder, collectFast, verifyFast, verifyArchive, managed, fault } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'provenance-chatgpt-path-test-'));
   const commands = []; let session;
   const adapter = new ChatGPTChromeAdapter(async command => {
@@ -77,7 +81,7 @@ async function fixture(t, { responder, collectFast, verifyFast, verifyArchive, f
     collectFast: collectFast ?? (async ({ transactionId }) => ({ testTransactionId: transactionId })),
     verifyFast: verifyFast ?? (() => structuredClone(fastReport)),
     verifyArchive: verifyArchive ?? (() => ({ independentlyVerified: true, anchor: 'CONSENSUS_VERIFIED',
-      timestamp: 'BLOCK_HASH_BOUND', round: 42, reason: 'test State Proof' })), fault,
+      timestamp: 'BLOCK_HASH_BOUND', round: 42, reason: 'test State Proof' })), managed, fault,
   }).init();
   const enrollment = session.enroll({ tabId: 17, destination: 'new-chat' });
   t.after(async () => { session.close(); await rm(root, { recursive: true, force: true }); });
@@ -514,4 +518,100 @@ test('unsupported platform or extension identity cannot pair', () => {
     assert.throws(() => adapter.pair(bad), /UNSUPPORTED_PATH/);
   }
   assert.throws(() => new ChromeBridgeController(adapter, () => {}, {}), /Authenticated local browser/);
+});
+
+test('wallet-free managed flow sends only a blinded root and old exports survive subscription/service loss', async t => {
+  const serviceRoot = await mkdtemp(join(tmpdir(), 'provenance-managed-chatgpt-test-'));
+  const payloads = [], keyStore = new MemoryKeyStore();
+  const now = Date.parse('2026-09-11T12:00:00Z');
+  const service = new ManagedSponsorship(serviceRoot, { now: () => now,
+    limits: { ...DEFAULT_LIMITS, accountDay: 1, accountMonth: 1 }, sponsor: {
+      async prepare(payload) { payloads.push(payload); return { network: MANAGED_NETWORK, transactionId: 'A'.repeat(52),
+        signedTransaction: Buffer.from('isolated signed transaction').toString('base64'), feeMicroAlgos: 1000 }; },
+      async broadcast() {},
+    } });
+  const server = await startManagedServer(service); let closed = false;
+  t.after(async () => { if (!closed) await server.close(); service.close(); await rm(serviceRoot, { recursive: true, force: true }); });
+  const account = service.provision({ paidThrough: now + 100000 });
+  const client = new ManagedAnchoringClient({ origin: server.origin, keyStore, allowLoopbackForTests: true });
+  await client.connect(account.accessCode);
+  const wire = [], clientSubmit = client.submit.bind(client);
+  client.submit = async payload => { wire.push(payload); return clientSubmit(payload); };
+  let corroborationFails = true;
+  const { session, commands, scope } = await fixture(t, { managed: client,
+    collectFast: async ({ transactionId }) => {
+      assert.equal(transactionId, 'A'.repeat(52));
+      if (corroborationFails) throw Error('PENDING_FAST_CONFIRMATION: independent source unavailable');
+      return { synthetic: true, transactionId };
+    } });
+  const text = 'PRIVATE_MANAGED_CANARY_e\u0301☕';
+  const version = await session.freeze({ text, mode: 'Sealed', scope, editRevision: 1 });
+  const args = { id: version.id, scope, currentText: text, editRevision: 1 };
+  await assert.rejects(session.anchorManaged(args), /PENDING_FAST_CONFIRMATION/);
+  assert.equal(commands.length, 0); assert.equal(session.runtime.snapshot().seals[version.id].authorization, null);
+  assert.deepEqual(payloads, [session.anchorRequest(version.id).payload]);
+  assert.equal(wire.join('').includes(text), false); assert.equal(wire.join('').includes(version.recordDigest), false);
+  assert.equal(createHash('sha256').update(text).digest('base64url') === wire[0], false);
+  service.setSubscription(account.accountId, now);
+  assert.equal((await session.managedStatus()).state, 'UNPAID');
+  session.disconnectManaged(); await server.close(); closed = true;
+  corroborationFails = false;
+  assert.equal((await session.anchorManaged(args)).state, 'SEALED_NOT_SENT', 'saved transaction remains independently observable');
+  await session.release(args);
+  const preview = session.receipts.prepare({ ids: [version.descriptorId], includeEvidence: true });
+  const exported = session.receipts.export(preview.previewId), before = verifyPortable(exported);
+  assert.equal(before.records.every(record => record.integrity === 'VALID'), true);
+  assert.equal(exported.includes(Buffer.from(account.accessCode)), false);
+  const unavailable = await session.freeze({ text: 'another local version', mode: 'Sealed', scope, editRevision: 2 });
+  const local = await session.anchorManaged({ id: unavailable.id, scope, currentText: 'another local version', editRevision: 2 });
+  assert.equal(local.managed.state, 'ACCOUNT_REQUIRED'); assert.equal(local.anchor, 'PENDING');
+  assert.equal(commands.length, 1); assert.equal(session.runtime.snapshot().seals[unavailable.id].authorization, null);
+  assert.deepEqual(verifyPortable(exported), before);
+  const after = session.receipts.prepare({ ids: [version.descriptorId], includeEvidence: true });
+  assert.deepEqual(session.receipts.export(after.previewId), exported, 'new failures never rewrite old evidence/export bytes');
+});
+
+test('outage, exhausted quota and unpaid account preserve the semantics of all three modes', async t => {
+  for (const failure of ['SERVICE_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'UNPAID']) {
+    for (const mode of ['Continuous', 'Sealed', 'Always Protect']) {
+      await t.test(`${failure}: ${mode}`, async t => {
+        const { session, commands, scope } = await fixture(t, { managed: {
+          async submit() { throw managedError(failure); },
+        } });
+        const version = await session.freeze({ text: 'local pending', mode, scope, editRevision: 1 });
+        const result = await session.anchorManaged({ id: version.id, scope, currentText: 'local pending', editRevision: 1 });
+        assert.equal(result.managed.state, failure); assert.equal(result.anchor, 'PENDING'); assert.equal(result.mode, mode);
+        assert.equal(commands.length, mode === 'Continuous' ? 1 : 0);
+        assert.equal(session.runtime.snapshot().seals[version.id].authorization, null);
+        const preview = session.receipts.prepare({ ids: [version.descriptorId] });
+        assert.ok(session.receipts.export(preview.previewId).length > 0);
+        if (mode !== 'Continuous') {
+          await assert.rejects(session.release({ id: version.id, scope, currentText: 'local pending', editRevision: 1 }), /confirmation/);
+          await session.cancel({ id: version.id, scope });
+          assert.equal(commands.length, 0);
+        }
+      });
+    }
+  }
+});
+
+test('managed Always Protect keeps the edit/revert gate during submission and confirms before automatic release', async t => {
+  let calls = 0, changed = false, context;
+  const managed = { async submit() {
+    calls++;
+    if (!changed) {
+      changed = true;
+      context.session.updateDraft({ text: 'same text', scope: context.scope, editRevision: 2 });
+    }
+    return { transactionId: 'A'.repeat(52) };
+  } };
+  context = await fixture(t, { managed });
+  const { session, scope, commands } = context;
+  const old = await session.freeze({ text: 'same text', mode: 'Always Protect', scope, editRevision: 1 });
+  await assert.rejects(session.anchorManaged({ id: old.id, scope, currentText: 'same text', editRevision: 1 }), /Stale/);
+  assert.equal(commands.length, 0);
+  const fresh = await session.freeze({ text: 'same text', mode: 'Always Protect', scope, editRevision: 2 });
+  const sent = await session.anchorManaged({ id: fresh.id, scope, currentText: 'same text', editRevision: 2 });
+  assert.equal(sent.state, 'SUBMISSION_OBSERVED'); assert.equal(commands.length, 1); assert.equal(calls, 2);
+  assert.equal(session.runtime.snapshot().attempts[sent.attempt.attemptId].confirmation.profile, FAST_CONFIRM_PROFILE);
 });

@@ -31,8 +31,13 @@ await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node
 for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator', 'recipient']) {
   await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
     recursive: true,
-    filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live') && !source.endsWith('/.DS_Store'),
+    filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live')
+      && !source.endsWith('/bin/sponsor') && !source.endsWith('/cmd/sponsor') && !source.endsWith('/.DS_Store'),
   });
+}
+await mkdir(join(resources, 'spikes/managed'));
+for (const name of ['client.mjs', 'protocol.mjs']) {
+  await copyFile(join(root, 'spikes/managed', name), join(resources, 'spikes/managed', name));
 }
 await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Private Provenance</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>15.7</string><key>LSUIElement</key><true/></dict></plist>`);
 for (const [executable, identifier] of [

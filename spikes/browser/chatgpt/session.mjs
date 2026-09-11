@@ -5,19 +5,21 @@ import { ReleaseRuntime, digest, validateProtectedTextPayload } from '../../rele
 import { VaultReleaseStore } from '../../demonstrator/store.mjs';
 import { inclusion, anchorPayload } from '../../anchor/merkle.mjs';
 import { verifyAnchor } from '../../anchor/verifier.mjs';
-import { FAST_CONFIRM_PROFILE, collectFastEvidence, verifyFastConfirmation } from '../../anchor/algorand/fast-confirm.mjs';
+import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verifyFastConfirmation } from '../../anchor/algorand/fast-confirm.mjs';
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
+import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
 export class ChatGPTProtectionSession {
   #adapter; #tail = Promise.resolve(); #scope = null; #versions = new Map(); #pending = new Map();
   #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault; #draft = null;
+  #managed;
 
   constructor(directory, adapter, {
     vault = null, vaultKey = null, fastTrust, collectFast = collectFastEvidence, verifyFast = verifyFastConfirmation,
-    verifyArchive = verifyAnchor, fault = () => {},
+    verifyArchive = verifyAnchor, managed = null, fault = () => {},
   } = {}) {
     if (!directory || !adapter || !fastTrust || fastTrust.profile !== FAST_CONFIRM_PROFILE || typeof collectFast !== 'function'
         || (!vault && (!Buffer.isBuffer(vaultKey) || vaultKey.length !== 32))) {
@@ -25,6 +27,7 @@ export class ChatGPTProtectionSession {
     }
     this.directory = directory; this.#adapter = adapter; this.#fastTrust = structuredClone(fastTrust);
     this.#collectFast = collectFast;
+    this.#managed = managed;
     this.#verifyFast = verifyFast; this.#verifyArchive = verifyArchive; this.#ownsVault = !vault;
     this.vault = vault ?? new Vault(join(directory, 'vault'), vaultKey, undefined, { create: true });
     this.receipts = new LocalReceipts(this.vault);
@@ -149,20 +152,58 @@ export class ChatGPTProtectionSession {
     };
   }
 
-  confirmFast({ id, transactionId, scope, currentText, attachments = [], editRevision }) {
+  managedStatus() { return this.#managed?.status() ?? { state: 'NOT_CONFIGURED' }; }
+  connectManaged({ accessCode }) {
+    if (!this.#managed) throw managedError('NOT_CONFIGURED');
+    return this.#managed.connect(accessCode);
+  }
+  disconnectManaged() { return this.#managed?.disconnect() ?? { state: 'NOT_CONFIGURED' }; }
+  anchorManaged(request) { return this.#confirm(request, true); }
+  confirmFast(request) { return this.#confirm(request, false); }
+
+  #confirm({ id, transactionId, scope, currentText, attachments = [], editRevision }, managed) {
     if (this.#version(id).mode !== 'Continuous') {
       this.updateDraft({ text: currentText, attachments, scope, editRevision });
     }
     return this.#serial(async () => {
+      const started = performance.now();
       const version = this.#version(id);
       if (scope !== version.scope || scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
+      if (version.state === 'CANCELLED') throw Error('Version was cancelled');
+      if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
+      if (version.mode !== 'Continuous') {
+        this.#assertCurrentDraft(version, validateProtectedTextPayload({ text: currentText, attachments }));
+        this.#adapter.assertEligible(scope);
+      }
+      if (managed) {
+        if (!version.managed?.transactionId) {
+          try {
+            if (!this.#managed) throw managedError('NOT_CONFIGURED');
+            const submitted = await this.#managed.submit(this.anchorRequest(id).payload);
+            if (!TRANSACTION_PATTERN.test(submitted.transactionId ?? '')) throw managedError('SERVICE_UNAVAILABLE');
+            version.managed = { state: 'SUBMITTED_OR_UNKNOWN', transactionId: submitted.transactionId };
+            this.#event({ kind: 'managed-submission', version: id, recordDigest: version.recordDigest,
+              transactionId: submitted.transactionId, claim: 'SUBMISSION_ONLY; independent confirmation required' });
+          } catch (error) {
+            const safe = managedError(error.code);
+            version.managed = { state: safe.code, message: safe.message };
+            return this.#public(version);
+          }
+        }
+        transactionId = version.managed.transactionId;
+      }
       if (typeof transactionId !== 'string' || transactionId.length === 0) throw Error('Algorand transaction ID required');
+      const collect = () => {
+        const waitMs = FAST_CONFIRM_WAIT_MS - (managed ? Math.ceil(performance.now() - started) : 0);
+        if (waitMs < 1) throw Error('PENDING_FAST_CONFIRMATION: confirmation wait budget expired');
+        return this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId, waitMs });
+      };
       if (version.mode !== 'Continuous') {
         if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
         this.#adapter.assertEligible(scope);
         const current = validateProtectedTextPayload({ text: currentText, attachments });
         if (editRevision !== version.editRevision || digest(current) !== version.digest) throw Error('Stale version');
-        const evidence = await this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId });
+        const evidence = await collect();
         this.#assertCurrentDraft(version, current);
         this.#adapter.assertEligible(scope);
         this.#pending.set(id, structuredClone(evidence));
@@ -177,7 +218,7 @@ export class ChatGPTProtectionSession {
       } else {
         if (!version.attempt) throw Error('Continuous release has not been attempted');
         if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
-        const evidence = await this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId });
+        const evidence = await collect();
         const accepted = await this.#validateFast(version, evidence);
         version.anchor = accepted.report.anchor; version.timestamp = accepted.report.timestamp;
         version.assuranceHistory.push({ anchor: version.anchor, timestamp: version.timestamp,

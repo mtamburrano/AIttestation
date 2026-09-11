@@ -26,6 +26,9 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const browserHost = join(app, 'Contents/MacOS/provenance-browser-host');
   const peerValidator = join(app, 'Contents/MacOS/provenance-bridge-peer-validator');
   const lifecycle = join(app, 'Contents/Resources/spikes/vault/key-lifecycle.mjs');
+  assert.equal(existsSync(join(app, 'Contents/Resources/spikes/managed/client.mjs')), true);
+  assert.equal(existsSync(join(app, 'Contents/Resources/spikes/managed/service.mjs')), false);
+  assert.equal(existsSync(join(app, 'Contents/Resources/spikes/anchor/algorand/bin/sponsor')), false);
   const identifier = executable => spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', executable], { encoding: 'utf8' }).stderr;
   assert.match(identifier(host), /Identifier=ai\.provenance\.consumer\.host/);
   assert.match(identifier(node), /Identifier=ai\.provenance\.consumer\.runtime/);

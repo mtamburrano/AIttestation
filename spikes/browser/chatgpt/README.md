@@ -43,6 +43,24 @@ two-source budget. The two operators are launched concurrently. Timeout, source
 error, pool error, expiry, disagreement, or malformed proof returns no
 authorization. Protected releases stay pending; they never fall back to Continuous.
 
+## Managed account and sponsorship
+
+The composer connects an anchoring account using an access code stored in a
+separate app-bound Keychain item. Freezing automatically requests a sponsored
+transaction from the packaged HTTPS service origin; the user needs no wallet,
+seed phrase or manually entered transaction ID. The service receives only a
+blinded 36-byte commitment payload plus account/operational metadata. The same
+local independent fast-confirmation gate still controls release.
+
+Outage, exhausted allowance and subscription expiry remain explicit. Continuous
+keeps local evidence with an anchor pending; Sealed and Always Protect wait or
+cancel without releasing. Existing transaction IDs can still be observed without
+the account, and local receipts/export/verification remain free. See the
+[managed service contract](../../managed/README.md) for durable quotas, replay,
+account recovery, privacy boundaries and operator configuration. The default
+`managed-config.json` has a null origin; configure it before signing a connected
+build. The service database and sponsor executable are never bundled in the app.
+
 ## Least-authority Chrome adapter
 
 The Manifest V3 extension has only `nativeMessaging`, `tabs`, and the single
@@ -110,8 +128,10 @@ Node runtime and `runtime-main.mjs` with a sanitized environment. The native
 messaging host independently validates the complete app and its live Google Chrome
 Stable parent before launching only the bundled relay. A separately signed peer
 validator performs the runtime-side ancestry check before the relay may authenticate.
-The local composer exposes only status, enrollment, freeze, blinded anchor request,
-transaction observation, release, cancellation, and later proof-upgrade operations.
+The local composer exposes status, account connection, enrollment, draft revisions,
+freeze, blinded sponsorship/transaction observation, release, cancellation, local
+receipts/export and later proof-upgrade operations. Account access cannot invoke
+vault-key operations or change the release policy.
 
 ## Validation
 

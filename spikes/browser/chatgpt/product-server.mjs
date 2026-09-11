@@ -54,11 +54,16 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
       const data = await requestBody(request, request.url === '/upgrade' ? 12 * 1024 * 1024 : BODY_LIMIT); let value;
       switch (request.url) {
         case '/status': value = { browser: runtime.browserState(), protection: runtime.session.status() }; break;
+        case '/managed/status': value = await runtime.session.managedStatus(); break;
+        case '/managed/connect': value = await runtime.session.connectManaged(data); break;
+        case '/managed/disconnect': value = runtime.session.disconnectManaged(); break;
+        case '/managed/anchor': value = await runtime.session.anchorManaged(data); break;
         case '/receipts': value = runtime.session.receipts.list(); break;
         case '/receipts/preview': value = runtime.session.receipts.prepare(data); break;
         case '/receipts/export': value = { content: runtime.session.receipts.export(data.previewId).toString('utf8') }; break;
         case '/receipts/redact': value = runtime.session.receipts.redact(data); break;
         case '/enroll': value = runtime.session.enroll(data); break;
+        case '/draft': value = runtime.session.updateDraft(data); break;
         case '/freeze': value = await runtime.session.freeze(data); break;
         case '/anchor-request': value = runtime.session.anchorRequest(data.id); break;
         case '/confirm': value = await runtime.session.confirmFast(data); break;

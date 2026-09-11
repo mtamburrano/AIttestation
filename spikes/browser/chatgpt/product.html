@@ -14,10 +14,17 @@
 <p id="status" role="status" aria-live="polite">Pair and enroll one supported ChatGPT tab.</p>
 <pre id="receipt">No protected version.</pre></section>
 <section><h2>3. Confirm and release</h2>
-<p>Submit the blinded anchor request through the separately authorized TestNet submission path, then enter its transaction ID. Two pinned, independent algod operators are observed locally.</p>
+<p>Connect your anchoring account once. Freezing a version requests a sponsored anchor automatically. You do not need a wallet or seed phrase.</p>
+<label>Account access code <input id="access-code" type="password" autocomplete="off" maxlength="43"></label>
+<div class="actions"><button id="connect-account">Connect account</button><button id="account-status">Refresh account</button><button id="disconnect-account">Disconnect account</button></div>
+<p id="account" role="status">Checking anchoring account…</p>
+<div class="actions"><button id="managed-anchor" disabled>Retry managed anchoring</button><button id="release" disabled>Release exact sealed version</button></div>
+<p>Without anchoring, Continuous keeps local evidence with a pending anchor. Sealed and Always Protect wait or cancel without releasing. Existing evidence, exports and verification remain available after subscription expiry or service loss.</p>
+<details><summary>Technical TestNet submission</summary>
+<p>For an independently submitted blinded commitment, enter its transaction ID to run local confirmation checks.</p>
 <button id="request" disabled>Show blinded anchor request</button><pre id="anchor">No request yet.</pre>
 <label>Algorand TestNet transaction ID <input id="transaction" pattern="[A-Z2-7]{52}" maxlength="52" autocomplete="off"></label>
-<div class="actions"><button id="confirm" disabled>Observe two operators</button><button id="release" disabled>Release exact sealed version</button></div>
+<button id="confirm" disabled>Observe two operators</button></details>
 <p class="limits">Fast success is only SOURCE_CORROBORATED / SOURCE_REPORTED. Timeout or conflict stays pending. A later valid State Proof may upgrade assurance to CONSENSUS_VERIFIED / BLOCK_HASH_BOUND.</p></section>
 <section><h2>4. Local receipts and selective export</h2>
 <p>Receipts, export and recipient verification are free. Select only the receipts you want to share, then inspect the disclosure preview before saving.</p>

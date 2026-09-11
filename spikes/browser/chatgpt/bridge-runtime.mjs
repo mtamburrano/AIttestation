@@ -125,7 +125,7 @@ export function attestNativePeer(socket, {
  */
 export async function startChromeProtectionRuntime(directory, {
   extensionId = CHATGPT_EXTENSION_ID, fastTrust, vault = null, vaultKey = null,
-  collectFast, verifyFast, verifyArchive, fault, controllerTimeoutMs = 5_000,
+  collectFast, verifyFast, verifyArchive, managed = null, fault, controllerTimeoutMs = 5_000,
   rendezvousPath = join(directory, 'browser-bridge.json'), socketPath = null,
   now = Date.now, attestPeer = attestNativePeer, peerValidatorPath,
 } = {}) {
@@ -155,7 +155,7 @@ export async function startChromeProtectionRuntime(directory, {
     return controller.sendRelease(command);
   }, { extensionId });
   const session = await new ChatGPTProtectionSession(directory, adapter, {
-    vault, vaultKey, fastTrust,
+    vault, vaultKey, fastTrust, managed,
     ...(collectFast === undefined ? {} : { collectFast }),
     ...(verifyFast === undefined ? {} : { verifyFast }),
     ...(verifyArchive === undefined ? {} : { verifyArchive }),

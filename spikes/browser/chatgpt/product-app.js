@@ -16,12 +16,14 @@ function controls() {
   $('confirm').disabled = busy || selected === null || selected.anchor !== 'PENDING' || !/^[A-Z2-7]{52}$/.test($('transaction').value);
   $('release').disabled = busy || selected === null || selected.mode !== 'Sealed'
     || selected.state !== 'SEALED_NOT_SENT' || selected.editRevision !== editRevision;
+  $('managed-anchor').disabled = busy || selected === null || selected.anchor !== 'PENDING' || selected.state === 'CANCELLED';
+  for (const id of ['connect-account', 'account-status', 'disconnect-account']) $(id).disabled = busy;
   for (const id of ['refresh-history', 'preview-export', 'redact']) $(id).disabled = busy;
   $('save-export').disabled = busy || previewId === null;
 }
 
 async function receipt(value) {
-  $('receipt').textContent = `${value.mode}\nState: ${value.state}\nAnchor: ${value.anchor}\nTimestamp: ${value.timestamp}\nVersion: ${value.id}\nEdit revision: ${value.editRevision}`;
+  $('receipt').textContent = `${value.mode}\nState: ${value.state}\nAnchor: ${value.anchor}\nTimestamp: ${value.timestamp}\nVersion: ${value.id}\nEdit revision: ${value.editRevision}${value.managed?.message ? `\n${value.managed.message}` : ''}`;
   await loadReceipts();
 }
 
@@ -86,6 +88,8 @@ action('enroll', async () => {
 
 $('draft').addEventListener('input', () => {
   editRevision++;
+  if (scope !== null) api('/draft', { text: $('draft').value, attachments: [], scope, editRevision })
+    .catch(error => { $('status').textContent = error.message; });
   if (selected && selected.editRevision !== editRevision) $('status').textContent = 'Draft changed. The frozen version is stale; freeze a new version.';
   controls();
 });
@@ -98,7 +102,39 @@ action('freeze', async () => {
   $('status').textContent = selected.mode === 'Continuous'
     ? `${selected.state}. Released without a pre-disclosure anchor claim.`
     : 'PENDING_FAST_CONFIRMATION. Nothing has been released.';
+  await anchorManaged();
 });
+
+function accountStatus(value) {
+  const messages = {
+    NOT_CONFIGURED: 'Managed anchoring is unavailable in this build.',
+    ACCOUNT_REQUIRED: 'Connect your anchoring account using its access code.',
+    UNPAID: 'Subscription expired. Renew your account to request new anchors.',
+    RATE_LIMITED: 'Too many account requests. Retry later.',
+    SERVICE_UNAVAILABLE: 'Anchoring service unavailable. Local evidence and exports remain available.',
+  };
+  $('account').textContent = value.state === 'ACTIVE'
+    ? `Account connected. ${value.remaining} anchors remain this month. Subscription ends ${new Date(value.paidThrough).toLocaleString()}.`
+    : messages[value.state] ?? 'Managed anchoring is unavailable.';
+}
+action('connect-account', async () => {
+  const accessCode = $('access-code').value; $('access-code').value = '';
+  accountStatus(await api('/managed/connect', { accessCode }));
+});
+action('account-status', async () => accountStatus(await api('/managed/status')));
+action('disconnect-account', async () => accountStatus(await api('/managed/disconnect')));
+async function anchorManaged() {
+  const frozen = selected;
+  selected = await api('/managed/anchor', { id: frozen.id, scope,
+    currentText: frozen.mode === 'Continuous' ? undefined : $('draft').value, attachments: [], editRevision });
+  await receipt(selected);
+  $('status').textContent = selected.managed?.message
+    ? `${selected.managed.message} ${selected.mode === 'Continuous' ? 'Local evidence remains; anchoring is pending.' : 'Nothing has been released. Retry or cancel this version.'}`
+    : selected.mode === 'Always Protect' ? `${selected.state}. Confirmed exact version was released automatically.`
+      : selected.mode === 'Continuous' ? 'Local evidence now has a source-corroborated anchor.'
+        : 'Exact version confirmed locally. Ready for sealed release.';
+}
+action('managed-anchor', anchorManaged);
 
 action('request', async () => {
   $('anchor').textContent = JSON.stringify(await api('/anchor-request', { id: selected.id }), null, 2);
@@ -127,4 +163,5 @@ action('cancel', async () => {
 });
 
 action('close', async () => { await api('/close'); $('status').textContent = 'Local runtime closed.'; });
-Promise.all([refresh(), loadReceipts()]).catch(error => { $('status').textContent = error.message; }).finally(controls);
+Promise.all([refresh(), loadReceipts(), api('/managed/status').then(accountStatus)])
+  .catch(error => { $('status').textContent = error.message; }).finally(controls);
