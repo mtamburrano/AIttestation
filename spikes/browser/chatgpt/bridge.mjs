@@ -1,20 +1,24 @@
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
 
 export class ChromeBridgeController {
-  #adapter; #write; #pending = new Map(); #timeoutMs; #connected = true; #localPlatform;
+  #adapter; #write; #pending = new Map(); #timeoutMs; #connected = true; #localBrowser; #localPlatform;
 
-  constructor(adapter, write, { timeoutMs = 5_000, localPlatform = null } = {}) {
+  constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform } = {}) {
     if (!adapter || typeof write !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20_000) {
       throw Error('Invalid Chrome bridge controller');
     }
+    if (!localBrowser || typeof localBrowser !== 'object' || !localPlatform || typeof localPlatform !== 'object') {
+      throw Error('Authenticated local browser and platform identity required');
+    }
     this.#adapter = adapter; this.#write = write; this.#timeoutMs = timeoutMs;
-    this.#localPlatform = localPlatform === null ? null : structuredClone(localPlatform);
+    this.#localBrowser = structuredClone(localBrowser); this.#localPlatform = structuredClone(localPlatform);
   }
 
   receive(message) {
     if (!message || typeof message !== 'object') throw Error('Invalid Chrome bridge message');
     if (message.kind === 'PAP_HELLO') {
-      const hello = this.#localPlatform ? { ...message, platform: structuredClone(this.#localPlatform) } : message;
+      const hello = { ...message, browser: structuredClone(this.#localBrowser),
+        platform: structuredClone(this.#localPlatform) };
       this.#adapter.pair(hello);
       this.#adapter.synchronize(hello);
       return;

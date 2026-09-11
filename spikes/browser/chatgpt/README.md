@@ -8,9 +8,11 @@ the exact version's authorization. Attachments are unsupported.
 
 ## Boundaries and modes
 
-[`session.mjs`](session.mjs) composes the encrypted vault with the durable release
-state machine. Product code must provide an already-opened OS-custodied vault;
-there is no implicit ephemeral production key. The session accepts well-formed
+[`runtime-main.mjs`](runtime-main.mjs) is the fixed packaged entrypoint. It opens
+or creates the app-bound Keychain vault, starts the authenticated native bridge,
+and serves the bearer-paired loopback composer. [`session.mjs`](session.mjs)
+composes that encrypted vault with the durable release state machine; there is no
+implicit ephemeral production key. The session accepts well-formed
 UTF-8 text through 256 KiB without Unicode normalization. A trusted-composer edit
 revision accompanies the digest, so editing and then restoring the same visible
 text cannot reuse a stale authorization.
@@ -31,18 +33,26 @@ as `SOURCE_CORROBORATED` with `SOURCE_REPORTED` time. A later valid State-Proof
 archive adds a monotonic `CONSENSUS_VERIFIED` / `BLOCK_HASH_BOUND` receipt without
 rewriting the evidence that authorized the historical release.
 
-The two-source collector has a hard 20-second budget and injected endpoint I/O so
-the signed local application can enforce its TLS and endpoint allowlist. Timeout,
-source error, pool error, expiry, disagreement, or malformed proof returns no
+The bundled trust profile pins independent AlgoNode and Nodely TestNet algod
+origins. [`fast-observe`](../../anchor/algorand/cmd/fastobserve/main.go) performs
+three GET-only reads per operator (pending transaction, exact round block, and
+SHA-256 transaction proof). It requires HTTPS, disables environment proxies,
+rejects redirects and origin/path/query escapes, bounds connect/TLS/header/body
+work, and has an 18-second process budget inside the collector's hard 20-second
+two-source budget. The two operators are launched concurrently. Timeout, source
+error, pool error, expiry, disagreement, or malformed proof returns no
 authorization. Protected releases stay pending; they never fall back to Continuous.
 
 ## Least-authority Chrome adapter
 
 The Manifest V3 extension has only `nativeMessaging`, `tabs`, and the single
 `https://chatgpt.com/*` host permission. Its public manifest key pins the development
-extension ID. Packaging must install a native-host manifest with that same ID and
-the absolute signed-host path; the template is included here but is not itself an
-installer.
+extension ID. Its JavaScript state explicitly reports browser identity as
+`UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
+only a running parent whose macOS code signature is Google's Stable identifier and
+team, then derives the installed major version and local OS/architecture. The local
+controller replaces the untrusted extension fields with that attested identity and
+fails closed unless the exact supported baseline matches.
 
 The background worker requires exactly one active ChatGPT tab and forwards only a
 versioned release command. The content script recognizes the pinned
@@ -54,9 +64,13 @@ second ambient text source. It reports a local click observation—not provider
 receipt. Once text may have reached the provider DOM, loss of a reply becomes
 `OUTCOME_UNKNOWN`, never a safe retry.
 
-[`native-host.mjs`](native-host.mjs) is a bounded native-messaging-to-Unix-socket
-relay. It accepts only the pinned extension origin and a short-lived, owner-only,
-non-symlink rendezvous record containing a fresh 256-bit token. It exposes no vault,
+[`bridge-runtime.mjs`](bridge-runtime.mjs) creates a fresh owner-only Unix socket,
+256-bit token, runtime epoch, and atomically published short-lived rendezvous. The
+first socket message must be an exact `PAP_BRIDGE_AUTH`; only after constant-time
+token verification does it construct `ChromeBridgeController → ChatGPTChromeAdapter
+→ ChatGPTProtectionSession`. [`native-host.mjs`](native-host.mjs) is the bounded
+native-framing relay used behind the compiled
+[`provenance-browser-host`](native/macos-browser-host.swift). It exposes no vault,
 filesystem, clipboard, signer, or generic command API to the extension.
 
 Eligibility is revoked on edit-revision mismatch, destination/scope change, a
@@ -65,13 +79,43 @@ unrecognized provider markup, nonempty provider composer, or attachment state.
 Unknown and interrupted attempts are never resent automatically; an explicit retry
 creates a new attempt and consumes a new authorization.
 
+## macOS package boundary
+
+First build the pinned Algorand tools, then create a new output directory:
+
+```sh
+make -C spikes/anchor/algorand build
+npm run build:chatgpt -- /tmp/private-provenance-chatgpt-UNIQUE
+```
+
+The builder produces `Private Provenance.app` plus
+`NativeMessagingHosts/ai.provenance.consumer.json`. The manifest targets the
+compiled executable inside the signed app—not a source script or `/usr/bin/env`
+runtime—and allows only the pinned extension origin. It is intentionally not
+installed into a user's Chrome profile by the build. Distribution must sign the
+app with the Keychain access-group entitlement, install that exact manifest via a
+consented installer, and package the extension without changing its pinned ID.
+The local ad-hoc build validates structure and sealing but correctly lacks
+production Keychain authority and is not a public installer.
+
+The fixed app host validates the complete bundle and launches only the bundled
+Node runtime and `runtime-main.mjs` with a sanitized environment. The native
+messaging host independently validates the complete app and its live Google Chrome
+Stable parent before launching only the bundled relay. The local composer exposes
+only status, enrollment, freeze, blinded anchor request, transaction observation,
+release, cancellation, and later proof-upgrade operations.
+
 ## Validation
 
-`npm run test:chatgpt` uses only fresh temporary encrypted stores and in-memory
-browser/source fixtures. `npm run test:algorand` builds both offline verifiers and
-checks the recorded public TestNet archive, fast corroboration, conflict cases, and
-the later State-Proof upgrade. Neither command opens a user Chrome profile, accesses
-a ChatGPT account, submits a transaction, or touches an operational evidence store.
+`npm run test:chatgpt` includes an isolated end-to-end path through actual native
+message framing, a fresh rendezvous and Unix socket, authentication, the controller,
+adapter, durable Sealed session, and correlated release response. Other cases use
+fresh temporary encrypted stores and explicit local fixtures. `npm run
+test:algorand` builds the observer and both offline verifiers, exercises the real
+observer against a fresh loopback TLS algod fixture, and checks the recorded public
+TestNet archive, fast corroboration, conflict cases, and later State-Proof upgrade.
+Neither command opens a user Chrome profile, accesses a ChatGPT account, submits a
+transaction, or touches an operational evidence store.
 
 The content-script fixture is deliberately selector-pinned. Revalidate it against
 the then-current Chrome Stable and an explicitly designated test/owner ChatGPT

@@ -5,24 +5,25 @@ import { ReleaseRuntime, digest, validateProtectedTextPayload } from '../../rele
 import { VaultReleaseStore } from '../../demonstrator/store.mjs';
 import { inclusion, anchorPayload } from '../../anchor/merkle.mjs';
 import { verifyAnchor } from '../../anchor/verifier.mjs';
-import { FAST_CONFIRM_PROFILE, verifyFastConfirmation } from '../../anchor/algorand/fast-confirm.mjs';
+import { FAST_CONFIRM_PROFILE, collectFastEvidence, verifyFastConfirmation } from '../../anchor/algorand/fast-confirm.mjs';
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
 export class ChatGPTProtectionSession {
   #adapter; #tail = Promise.resolve(); #scope = null; #versions = new Map(); #pending = new Map();
-  #fastTrust; #verifyFast; #verifyArchive; #ownsVault; #draft = null;
+  #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault; #draft = null;
 
   constructor(directory, adapter, {
-    vault = null, vaultKey = null, fastTrust, verifyFast = verifyFastConfirmation,
+    vault = null, vaultKey = null, fastTrust, collectFast = collectFastEvidence, verifyFast = verifyFastConfirmation,
     verifyArchive = verifyAnchor, fault = () => {},
   } = {}) {
-    if (!directory || !adapter || !fastTrust || fastTrust.profile !== FAST_CONFIRM_PROFILE
+    if (!directory || !adapter || !fastTrust || fastTrust.profile !== FAST_CONFIRM_PROFILE || typeof collectFast !== 'function'
         || (!vault && (!Buffer.isBuffer(vaultKey) || vaultKey.length !== 32))) {
       throw Error('ChatGPT protection session requires adapter, fast-confirmation trust, and explicit vault custody');
     }
     this.directory = directory; this.#adapter = adapter; this.#fastTrust = structuredClone(fastTrust);
+    this.#collectFast = collectFast;
     this.#verifyFast = verifyFast; this.#verifyArchive = verifyArchive; this.#ownsVault = !vault;
     this.vault = vault ?? new Vault(join(directory, 'vault'), vaultKey, undefined, { create: true });
     this.store = new VaultReleaseStore(directory, this.vault); this.fault = fault;
@@ -144,18 +145,22 @@ export class ChatGPTProtectionSession {
     };
   }
 
-  confirmFast({ id, evidence, scope, currentText, attachments = [], editRevision }) {
+  confirmFast({ id, transactionId, scope, currentText, attachments = [], editRevision }) {
     if (this.#version(id).mode !== 'Continuous') {
       this.updateDraft({ text: currentText, attachments, scope, editRevision });
     }
     return this.#serial(async () => {
       const version = this.#version(id);
       if (scope !== version.scope || scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
+      if (typeof transactionId !== 'string' || transactionId.length === 0) throw Error('Algorand transaction ID required');
       if (version.mode !== 'Continuous') {
         if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
         this.#adapter.assertEligible(scope);
         const current = validateProtectedTextPayload({ text: currentText, attachments });
         if (editRevision !== version.editRevision || digest(current) !== version.digest) throw Error('Stale version');
+        const evidence = await this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId });
+        this.#assertCurrentDraft(version, current);
+        this.#adapter.assertEligible(scope);
         this.#pending.set(id, structuredClone(evidence));
         try { await this.runtime.confirm(id, scope, version.digest); }
         finally { this.#pending.delete(id); }
@@ -168,6 +173,7 @@ export class ChatGPTProtectionSession {
       } else {
         if (!version.attempt) throw Error('Continuous release has not been attempted');
         if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
+        const evidence = await this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId });
         const accepted = await this.#validateFast(version, evidence);
         version.anchor = accepted.report.anchor; version.timestamp = accepted.report.timestamp;
         version.assuranceHistory.push({ anchor: version.anchor, timestamp: version.timestamp,

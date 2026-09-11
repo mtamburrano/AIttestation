@@ -1,7 +1,7 @@
 {
   "name": "ai.provenance.consumer",
   "description": "Private Provenance fixed-purpose ChatGPT bridge",
-  "path": "__ABSOLUTE_SIGNED_NATIVE_HOST_PATH__",
+  "path": "__ABSOLUTE_APP_BUNDLE__/Contents/MacOS/provenance-browser-host",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/"

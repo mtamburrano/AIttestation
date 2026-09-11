@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Private Provenance · ChatGPT</title><link rel="stylesheet" href="/product.css">
+<body><header><span>PRIVATE PROVENANCE</span><span>SUPPORTED CHATGPT TEXT PATH</span></header>
+<main><h1>Compose locally.<br>Release one exact version.</h1>
+<p class="intro">This local page releases text only to one empty, active ChatGPT tab through the signed Chrome bridge. Attachments are unsupported.</p>
+<section><h2>1. Pair one tab</h2><p id="pairing">Waiting for the signed Chrome extension…</p>
+<button id="refresh">Refresh paired tab</button> <button id="enroll" disabled>Enroll detected tab</button>
+<pre id="scope">No scope enrolled.</pre></section>
+<section><h2>2. Protect an exact text version</h2>
+<label>Mode <select id="mode"><option>Sealed</option><option>Continuous</option><option>Always Protect</option></select></label>
+<label>Local draft <textarea id="draft" rows="7" maxlength="262144" placeholder="Exact UTF-8 text; up to 256 KiB"></textarea></label>
+<div class="actions"><button id="freeze" disabled>Freeze version</button><button id="cancel" disabled>Cancel pending version</button></div>
+<p id="status" role="status" aria-live="polite">Pair and enroll one supported ChatGPT tab.</p>
+<pre id="receipt">No protected version.</pre></section>
+<section><h2>3. Confirm and release</h2>
+<p>Submit the blinded anchor request through the separately authorized TestNet submission path, then enter its transaction ID. Two pinned, independent algod operators are observed locally.</p>
+<button id="request" disabled>Show blinded anchor request</button><pre id="anchor">No request yet.</pre>
+<label>Algorand TestNet transaction ID <input id="transaction" pattern="[A-Z2-7]{52}" maxlength="52" autocomplete="off"></label>
+<div class="actions"><button id="confirm" disabled>Observe two operators</button><button id="release" disabled>Release exact sealed version</button></div>
+<p class="limits">Fast success is only SOURCE_CORROBORATED / SOURCE_REPORTED. Timeout or conflict stays pending. A later valid State Proof may upgrade assurance to CONSENSUS_VERIFIED / BLOCK_HASH_BOUND.</p></section>
+<footer><button id="close">Close local runtime</button></footer>
+</main><script type="module" src="/product-app.js"></script></body></html>

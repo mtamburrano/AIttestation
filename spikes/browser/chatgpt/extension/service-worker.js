@@ -28,14 +28,15 @@ async function permissionState() {
 async function stateMessage(kind) {
   const platform = await chrome.runtime.getPlatformInfo();
   let highEntropy = null;
-  try { highEntropy = await navigator.userAgentData?.getHighEntropyValues?.(['platformVersion', 'fullVersionList']) ?? null; }
+  try { highEntropy = await navigator.userAgentData?.getHighEntropyValues?.(['platformVersion']) ?? null; }
   catch {}
-  const chromeVersion = highEntropy?.fullVersionList?.find(entry => entry.brand === 'Google Chrome')?.version;
-  const match = /Chrome\/(\d+)/.exec(navigator.userAgent);
   return {
     kind, extensionId: chrome.runtime.id, adapterProfile: ADAPTER_PROFILE,
     releaseProtocol: RELEASE_PROTOCOL, pageContract: PAGE_CONTRACT, browserSessionId,
-    browser: { product: 'Google Chrome', channel: 'stable', major: Number(chromeVersion?.split('.')[0] ?? match?.[1] ?? 0) },
+    // JavaScript brand strings cannot establish the installed product/channel.
+    // The signed native host replaces this fail-closed value with locally
+    // verified Chrome Stable identity before adapter pairing.
+    browser: { product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 },
     platform: { product: platform.os === 'mac' ? 'macOS' : platform.os, arch: platform.arch, version: highEntropy?.platformVersion ?? '' },
     permissions: ['nativeMessaging', 'tabs'], hostPermission: 'https://chatgpt.com/*',
     permissionState: await permissionState(), tabs: await inspectTabs(),

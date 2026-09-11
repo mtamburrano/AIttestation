@@ -122,7 +122,11 @@ do {
   let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
   let nodeURL = contents.appendingPathComponent("MacOS/node")
   let helperURL = contents.appendingPathComponent("MacOS/provenance-keychain-helper")
+#if PRODUCT_CHATGPT
+  let scriptURL = contents.appendingPathComponent("Resources/spikes/browser/chatgpt/runtime-main.mjs")
+#else
   let scriptURL = contents.appendingPathComponent("Resources/spikes/demonstrator/main.mjs")
+#endif
   let (child, requestFD, responseFD) = try spawnFixedRuntime(nodeURL: nodeURL, scriptURL: scriptURL)
   broker(requestFD, responseFD, helperURL: helperURL)
   close(requestFD); close(responseFD)
