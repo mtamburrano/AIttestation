@@ -1,0 +1,15 @@
+{
+  "sequence": 2,
+  "version": "1.1.0",
+  "teamId": null,
+  "signingIdentity": null,
+  "notaryProfile": "private-provenance-notary",
+  "helperProvisioningProfile": null,
+  "updateOrigin": null,
+  "updatePublicKey": null,
+  "updatePrivateKeyFile": null,
+  "storeListingVerified": false,
+  "dependencyApprovalFile": null,
+  "goExecutable": null,
+  "goModuleCache": null
+}

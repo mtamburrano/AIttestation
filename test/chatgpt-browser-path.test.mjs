@@ -40,7 +40,7 @@ const connection = (overrides = {}) => ({
   pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId,
   browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.1' },
-  permissions: ['nativeMessaging', 'tabs'], hostPermission: 'https://chatgpt.com/*',
+  permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*',
   permissionState: 'granted', ...overrides,
 });
 const tab = (overrides = {}) => ({ id: 17, url: 'https://chatgpt.com/', active: true,
@@ -260,6 +260,7 @@ test('stale edit, scope/tab ambiguity, restart, permission, adapter and provider
     },
     'unsupported provider change': async ({ adapter, session, scope, version }) => {
       assert.throws(() => sync(adapter, [tab({ surfaceSupported: false })]));
+      assert.equal(session.status().eligibility, 'REVOKED', 'the UI must not retain an eligible claim after drift');
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
     'attachment added': async ({ session, scope, version }) => session.release({ id: version.id, scope,
@@ -319,7 +320,8 @@ test('collector queries both configured operators concurrently and maps only bou
 test('extension manifest is limited to the supported ChatGPT surface and exposes no attachment or ambient data permission', async () => {
   const root = new URL('../spikes/browser/chatgpt/extension/', import.meta.url);
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
-  assert.deepEqual(manifest.permissions.slice().sort(), ['nativeMessaging', 'tabs']);
+  assert.deepEqual(manifest.permissions.slice().sort(), ['nativeMessaging']);
+  assert.equal(manifest.incognito, 'not_allowed');
   assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   const publicKey = Buffer.from(manifest.key, 'base64');
@@ -336,14 +338,14 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
 
 test('pinned ChatGPT content script injects exact authorized bytes and fails before exposure on unknown markup', async () => {
   const source = await readFile(new URL('../spikes/browser/chatgpt/extension/content-script.js', import.meta.url), 'utf8');
-  function load({ supported = true, url = 'https://chatgpt.com/' } = {}) {
+  function load({ supported = true, url = 'https://chatgpt.com/', rewrite = false } = {}) {
     let listener, clicked = 0;
     class Textarea {}
     class Editor {
       constructor() { this.textContent = ''; }
       getAttribute(name) { return name === 'contenteditable' ? 'true' : null; }
       replaceChildren(node) { this.textContent = node.value; }
-      dispatchEvent() {}
+      dispatchEvent() { if (rewrite) this.textContent += 'provider rewrite'; }
     }
     const editor = new Editor(), send = { disabled: false, click: () => { clicked++; } };
     const document = {
@@ -388,6 +390,34 @@ test('pinned ChatGPT content script injects exact authorized bytes and fails bef
     expectedUrl: 'https://chatgpt.com/', destination: 'new-chat', attemptId: 'wrong-scope',
     textDigest, textBytes: Buffer.from(text).toString('base64') });
   assert.equal(wrongScope.exposure, 'NONE'); assert.equal(changedScope.editor.textContent, '');
+  const rewritten = load({ rewrite: true });
+  const partial = await rewritten.send({ kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT,
+    expectedUrl: 'https://chatgpt.com/', destination: 'new-chat', attemptId: 'partial-insertion',
+    textDigest, textBytes: Buffer.from(text).toString('base64') });
+  assert.equal(partial.exposure, 'DOM_INJECTED'); assert.equal(partial.submitted, false);
+  assert.equal(rewritten.clicked(), 0); assert.ok(rewritten.editor.textContent.startsWith(text));
+});
+
+test('provider drift observation reports only a fixed capability-change signal before another release', async () => {
+  const source = await readFile(new URL('../spikes/browser/chatgpt/extension/content-script.js', import.meta.url), 'utf8');
+  let observer, supported = true, listener; const messages = [], events = {};
+  const editor = { textContent: '', getAttribute: () => 'true' };
+  const document = { documentElement: {},
+    querySelectorAll: selector => selector === '#prompt-textarea' ? [editor]
+      : selector === 'button[data-testid="send-button"]' && supported ? [{}] : [],
+    querySelector: () => null, addEventListener: (name, callback) => { events[name] = callback; } };
+  runInNewContext(source, { document, HTMLTextAreaElement: class {},
+    location: { origin: 'https://chatgpt.com', pathname: '/c/private-test-id', href: 'https://chatgpt.com/c/private-test-id' },
+    MutationObserver: class { constructor(callback) { observer = callback; } observe() {} },
+    chrome: { runtime: { onMessage: { addListener: callback => { listener = callback; } },
+      sendMessage: async value => messages.push(structuredClone(value)) } } });
+  observer(); assert.equal(messages.length, 0, 'unchanged DOM does not produce telemetry');
+  supported = false; observer(); assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ kind: 'PAP_SURFACE_CHANGED' }]);
+  let state; listener({ kind: 'PAP_INSPECT', pageContract: CHATGPT_PAGE_CONTRACT }, {}, value => { state = value; });
+  assert.equal(state.surfaceSupported, false);
+  editor.textContent = 'secret evidence payload'; events.input();
+  assert.equal(messages.length, 2);
+  assert.doesNotMatch(JSON.stringify(messages), /secret|private-test-id|https|textContent/);
 });
 
 test('native bridge frames bounded messages and correlates only the exact release attempt', async () => {

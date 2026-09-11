@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
 
-export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/1';
+export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/2';
 export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-10';
 export const CHATGPT_RELEASE_PROTOCOL = 'pap-chatgpt-release/1';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
 export const CHATGPT_EXTENSION_ID = 'hdnjjomhchcpcnikfabcnmlhcehbnhbc';
 export const CHROME_BASELINE_MAJOR = 153;
 
-const requiredPermissions = ['nativeMessaging', 'tabs'];
+const requiredPermissions = ['nativeMessaging'];
 const textDigest = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 function fail(message) {

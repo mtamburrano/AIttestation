@@ -40,8 +40,8 @@ export class Vault {
         const envelope = this.#box(wire(state), 'index', 'index');
         this.#db.prepare('UPDATE meta SET envelope=? WHERE id=1').run(wire(envelope));
       }
-      this.#migrate(readerVersion);
       this.#assertKey(); this.#readIndex();
+      this.#migrate(readerVersion);
     } catch (e) { this.#db.close(); throw e; }
   }
   #meta() { return this.#db.prepare('SELECT * FROM meta WHERE id=1').get(); }
@@ -50,9 +50,12 @@ export class Vault {
     if (!Number.isInteger(storedVersion) || storedVersion < 0 || storedVersion > CURRENT_SCHEMA) fail('UNSUPPORTED', 'Vault schema is newer than this application');
     const diskVersion = storedVersion || 1;
     const table = this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vault_schema'").get();
+    if (diskVersion > 1 && !table) fail('UNSUPPORTED', 'Vault schema compatibility metadata missing');
     if (table) {
       const info = this.#db.prepare('SELECT writer_version, minimum_reader FROM vault_schema WHERE id=1').get();
-      if (!info || info.minimum_reader > readerVersion || info.writer_version !== diskVersion) fail('UNSUPPORTED', 'Incompatible vault schema');
+      if (!info || !Number.isInteger(info.minimum_reader) || info.minimum_reader < 1
+          || info.minimum_reader > diskVersion || info.minimum_reader > readerVersion
+          || info.writer_version !== diskVersion) fail('UNSUPPORTED', 'Incompatible vault schema');
     }
     if (readerVersion < CURRENT_SCHEMA || diskVersion === CURRENT_SCHEMA) return;
     this.#db.exec('BEGIN IMMEDIATE');

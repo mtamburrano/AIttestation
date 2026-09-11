@@ -15,11 +15,21 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-boundary-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const output = join(root, 'isolated-build');
-  const build = spawnSync(process.execPath, ['spikes/browser/chatgpt/build-macos.mjs', output], {
+  const build = spawnSync(process.execPath, ['spikes/distribution/build-macos.mjs', '--prepare', output], {
     cwd: import.meta.dirname + '/..', env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 120000,
   });
   assert.equal(build.error, undefined);
   assert.equal(build.status, 0, build.stderr);
+  const provenance = JSON.parse(readFileSync(join(output, 'build-provenance.json')));
+  assert.equal(provenance.signature, 'AD_HOC_ONLY'); assert.equal(provenance.notarized, false);
+  assert.equal(provenance.storeListing, 'NOT_PROVISIONED'); assert.equal(provenance.sourceRebuiltNativeTools, false);
+  assert.ok(provenance.source.files.some(file => file.path === 'spikes/distribution/updater.mjs'));
+  assert.equal(existsSync(join(output, 'Chrome-Web-Store-upload.zip')), true);
+  const productionCompile = spawnSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(root, 'swift-release-cache'),
+    '-O', '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-framework', 'Security',
+    join(import.meta.dirname, '../spikes/vault/native/macos-app-host.swift'), '-o', join(root, 'release-host-compile-only')],
+  { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 60000 });
+  assert.equal(productionCompile.status, 0, productionCompile.stderr);
   const app = join(output, 'Private Provenance.app'), node = join(app, 'Contents/MacOS/node');
   const host = join(app, 'Contents/MacOS/provenance-app-host');
   const helper = join(app, 'Contents/MacOS/provenance-keychain-helper');
@@ -42,6 +52,10 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.deepEqual(nativeManifest.allowed_origins, ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/']);
   const recipient = join(output, 'Recipient/Private Provenance Verifier.app');
   const recipientResources = join(recipient, 'Contents/Resources/spikes');
+  for (const bundle of [app, recipient]) {
+    assert.equal(existsSync(join(bundle, 'Contents/Resources/THIRD_PARTY_NOTICES.md')), true);
+    assert.equal(spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], { env: {}, encoding: 'utf8' }).status, 0);
+  }
   assert.equal(existsSync(join(recipientResources, 'vault/vault.mjs')), false, 'recipient carries no vault storage/key APIs');
   assert.equal(existsSync(join(recipientResources, 'anchor/algorand/bin/live')), false, 'recipient carries no network/submission tool');
   assert.match(identifier(join(recipient, 'Contents/MacOS/provenance-verifier-host')), /Identifier=ai\.provenance\.verifier\.host/);

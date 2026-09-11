@@ -142,7 +142,7 @@ export async function startChromeProtectionRuntime(directory, {
   if (!isAbsolute(selectedSocket) || !resolve(selectedSocket).startsWith(`${canonicalDirectory}${sep}`)
       || Buffer.byteLength(selectedSocket) > 100) throw bridgeError('Unsafe or overlong browser bridge socket path');
 
-  let controller = null, candidateSocket = null, activeSocket = null, latestBrowserState = null, closed = false;
+  let controller = null, candidateSocket = null, activeSocket = null, latestBrowserState = null, closed = false, integrationDisabled = false;
   let currentToken = randomBytes(32), expiresAt = 0, refreshTimer, publishTail = Promise.resolve();
   let pairedResolve;
   const paired = new Promise(resolvePaired => { pairedResolve = resolvePaired; });
@@ -176,7 +176,7 @@ export async function startChromeProtectionRuntime(directory, {
   };
 
   const server = createServer({ pauseOnConnect: true }, socket => {
-    if (closed || candidateSocket || activeSocket) { socket.destroy(); return; }
+    if (closed || integrationDisabled || candidateSocket || activeSocket) { socket.destroy(); return; }
     candidateSocket = socket;
     let authenticated = false, peerIdentity = null, bytes = Buffer.alloc(0), connectionController = null;
     let authTimer;
@@ -256,6 +256,10 @@ export async function startChromeProtectionRuntime(directory, {
     adapter, session, runtimeEpoch, rendezvousPath, socketPath: selectedSocket,
     waitForPairing: () => paired,
     browserState: () => structuredClone(latestBrowserState),
+    disableIntegration() {
+      integrationDisabled = true; adapter.invalidate('integration removed');
+      candidateSocket?.destroy(); activeSocket?.destroy(); controller?.disconnect(); latestBrowserState = null;
+    },
     async close() {
       if (closed) return; closed = true; clearInterval(refreshTimer);
       candidateSocket?.destroy(); activeSocket?.destroy(); controller?.disconnect(); controller = null;

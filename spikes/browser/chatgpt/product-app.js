@@ -2,6 +2,7 @@ const secret = location.hash.slice(1); history.replaceState(null, '', '/');
 const $ = id => document.getElementById(id);
 let detected = null, scope = null, selected = null, editRevision = 0, busy = false;
 let previewId = null;
+let installationConfigured = false, updateAvailable = false;
 
 async function api(path, data = {}) {
   const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${secret}` }, body: JSON.stringify(data) });
@@ -20,7 +21,49 @@ function controls() {
   for (const id of ['connect-account', 'account-status', 'disconnect-account']) $(id).disabled = busy;
   for (const id of ['refresh-history', 'preview-export', 'redact']) $(id).disabled = busy;
   $('save-export').disabled = busy || previewId === null;
+  for (const id of ['enable-integration', 'open-store', 'check-update', 'offer-export', 'save-diagnostics', 'remove-integration']) {
+    $(id).disabled = busy || !installationConfigured;
+  }
+  $('download-update').disabled = busy || !updateAvailable;
 }
+
+async function installationStatus() {
+  const result = await api('/installation/status'); installationConfigured = result.integration !== 'NOT_CONFIGURED';
+  $('installation-state').textContent = {
+    NOT_CONFIGURED: 'Consumer signing and Chrome Web Store distribution are not configured in this development build.',
+    ENABLED: 'Local Chrome connection enabled. Add the store extension, then pair one supported tab.',
+    DISABLED: 'Local Chrome connection is disabled.',
+    CONFLICT: 'An existing connection file could not be recognized. It has been left untouched.',
+  }[result.integration];
+}
+action('enable-integration', async () => { await api('/installation/enable'); await installationStatus(); });
+action('open-store', async () => { await api('/installation/store'); });
+action('offer-export', async () => {
+  await api('/installation/export-opportunity'); $('removal-options').hidden = false;
+});
+action('remove-integration', async () => {
+  await api('/installation/remove', { exportDecision: $('export-decision').value });
+  scope = null; detected = null; selected = null; $('removal-options').hidden = true;
+  $('scope').textContent = 'No scope enrolled.';
+  $('pairing').textContent = 'Connection removed. Reopen the app to reconnect.';
+  await installationStatus(); $('status').textContent = 'Connection removed. Evidence and keys retained on this Mac.';
+});
+action('save-diagnostics', async () => {
+  const result = await api('/installation/diagnostics');
+  const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a'); link.href = url; link.download = 'provenance-support.json'; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+action('check-update', async () => {
+  updateAvailable = false;
+  const result = await api('/installation/check-update'); updateAvailable = result.state === 'AVAILABLE';
+  $('update-state').textContent = updateAvailable
+    ? `Version ${result.version} is available. Its download will be verified before opening.` : 'The installed release is current.';
+});
+action('download-update', async () => {
+  updateAvailable = false; $('update-state').textContent = 'Downloading and verifying the update…';
+  const result = await api('/installation/download-update'); $('update-state').textContent = result.instruction;
+});
 
 async function receipt(value) {
   $('receipt').textContent = `${value.mode}\nState: ${value.state}\nAnchor: ${value.anchor}\nTimestamp: ${value.timestamp}\nVersion: ${value.id}\nEdit revision: ${value.editRevision}${value.managed?.message ? `\n${value.managed.message}` : ''}`;
@@ -76,6 +119,11 @@ async function refresh() {
   $('pairing').textContent = detected
     ? `Detected tab ${detected.id}: ${detected.destination}`
     : 'No single active, empty, supported ChatGPT tab is paired.';
+  if (state.protection.eligibility === 'REVOKED') {
+    scope = null; detected = null; selected = null;
+    $('scope').textContent = 'Protection eligibility revoked. Existing receipts remain available.';
+    $('pairing').textContent = 'The supported browser or provider state changed. Reopen the app and pair again.';
+  }
 }
 
 action('refresh', refresh);
@@ -162,6 +210,16 @@ action('cancel', async () => {
   $('status').textContent = 'Pending version cancelled. No downgrade or release occurred.';
 });
 
-action('close', async () => { await api('/close'); $('status').textContent = 'Local runtime closed.'; });
-Promise.all([refresh(), loadReceipts(), api('/managed/status').then(accountStatus)])
+action('close', async () => {
+  clearInterval(pairingTimer); await api('/close'); scope = null; selected = null; detected = null;
+  $('status').textContent = 'Local runtime closed.';
+});
+const pairingTimer = setInterval(() => {
+  if (!busy) refresh().then(controls).catch(() => {
+    scope = null; selected = null; detected = null;
+    $('pairing').textContent = 'Local connection unavailable. Reopen the app and pair again.'; controls();
+  });
+}, 2000);
+addEventListener('beforeunload', () => clearInterval(pairingTimer));
+Promise.all([refresh(), loadReceipts(), installationStatus(), api('/managed/status').then(accountStatus)])
   .catch(error => { $('status').textContent = error.message; }).finally(controls);

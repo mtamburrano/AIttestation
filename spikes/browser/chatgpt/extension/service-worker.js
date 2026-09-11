@@ -1,10 +1,11 @@
-const ADAPTER_PROFILE = 'pap-chatgpt-chrome/1';
+const ADAPTER_PROFILE = 'pap-chatgpt-chrome/2';
 const RELEASE_PROTOCOL = 'pap-chatgpt-release/1';
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-10';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
 let nativePort;
 let reconnectDelay = 1000, reconnectTimer;
+let activeReleases = 0, deferredSurface = false;
 
 async function inspectTabs() {
   const tabs = await chrome.tabs.query({ url: 'https://chatgpt.com/*' });
@@ -21,7 +22,7 @@ async function inspectTabs() {
 }
 
 async function permissionState() {
-  const granted = await chrome.permissions.contains({ permissions: ['nativeMessaging', 'tabs'], origins: ['https://chatgpt.com/*'] });
+  const granted = await chrome.permissions.contains({ permissions: ['nativeMessaging'], origins: ['https://chatgpt.com/*'] });
   return granted ? 'granted' : 'revoked';
 }
 
@@ -38,7 +39,7 @@ async function stateMessage(kind) {
     // verified Chrome Stable identity before adapter pairing.
     browser: { product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 },
     platform: { product: platform.os === 'mac' ? 'macOS' : platform.os, arch: platform.arch, version: highEntropy?.platformVersion ?? '' },
-    permissions: ['nativeMessaging', 'tabs'], hostPermission: 'https://chatgpt.com/*',
+    permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*',
     permissionState: await permissionState(), tabs: await inspectTabs(),
   };
 }
@@ -93,9 +94,14 @@ function connect() {
   nativePort = chrome.runtime.connectNative(NATIVE_HOST);
   nativePort.onMessage.addListener(message => {
     reconnectDelay = 1000;
+    if (message.kind === 'PAP_RELEASE') activeReleases++;
     Promise.resolve(message.kind === 'PAP_RELEASE' ? handleRelease(message) : stateMessage('PAP_STATE'))
       .then(value => nativePort?.postMessage(value))
-      .catch(() => nativePort?.postMessage({ kind: 'PAP_ADAPTER_ERROR', browserSessionId }));
+      .catch(() => nativePort?.postMessage({ kind: 'PAP_ADAPTER_ERROR', browserSessionId }))
+      .finally(() => {
+        if (message.kind === 'PAP_RELEASE') activeReleases--;
+        if (activeReleases === 0 && deferredSurface) { deferredSurface = false; publishState(); }
+      });
   });
   nativePort.onDisconnect.addListener(() => {
     nativePort = undefined; clearTimeout(reconnectTimer);
@@ -105,6 +111,16 @@ function connect() {
 }
 
 const publishState = () => stateMessage('PAP_STATE').then(value => nativePort?.postMessage(value)).catch(() => {});
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.kind !== 'PAP_SURFACE_CHANGED' || Object.keys(message).length !== 1
+      || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id)) return;
+  try {
+    if (new URL(sender.url).origin !== 'https://chatgpt.com') return;
+    // Report self-induced composer changes after the correlated dispatch reply;
+    // navigation and permission changes still invalidate immediately.
+    if (activeReleases) deferredSurface = true; else publishState();
+  } catch {}
+});
 chrome.permissions.onRemoved.addListener(publishState);
 chrome.tabs.onActivated.addListener(publishState);
 chrome.tabs.onCreated.addListener(publishState);

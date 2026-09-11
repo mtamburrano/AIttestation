@@ -28,7 +28,7 @@ try {
   { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 } finally { await rm(moduleCache, { recursive: true, force: true }); }
 await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node-LICENSE.txt'));
-for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator', 'recipient']) {
+for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator', 'recipient', 'distribution']) {
   await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
     recursive: true,
     filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live')

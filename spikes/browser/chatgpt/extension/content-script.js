@@ -34,6 +34,23 @@ function surface() {
   };
 }
 
+// Only fixed capability bits leave the page on drift; no DOM text, selectors,
+// conversation identifiers or evidence bytes are included in this notification.
+if (typeof MutationObserver === 'function') {
+  let lastSurface = JSON.stringify(surface());
+  const changed = () => {
+    const next = JSON.stringify(surface());
+    if (next === lastSurface) return;
+    lastSurface = next;
+    chrome.runtime.sendMessage({ kind: 'PAP_SURFACE_CHANGED' }).catch(() => {});
+  };
+  new MutationObserver(changed).observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true, characterData: true,
+  });
+  document.addEventListener('input', changed, true);
+  document.addEventListener('change', changed, true);
+}
+
 function injectExactText(node, text) {
   if (node instanceof HTMLTextAreaElement) {
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
@@ -80,7 +97,9 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message.expectedUrl !== location.href || message.destination !== before.destination
         || !before.surfaceSupported || !before.composerEmpty || before.attachmentsPresent) return result;
     const editor = composers()[0];
-    injectExactText(editor, text); result.exposure = 'DOM_INJECTED';
+    // Insertion may partially succeed before provider normalization or an input
+    // handler fails. From this point, never report a safe no-exposure retry.
+    result.exposure = 'DOM_INJECTED'; injectExactText(editor, text);
     const send = document.querySelectorAll('button[data-testid="send-button"]');
     if (send.length !== 1 || send[0].disabled || textOf(editor) !== text || attachmentsPresent()) return result;
     send[0].click(); result.submitted = true; result.observation = 'LOCAL_CLICK_DISPATCHED'; return result;

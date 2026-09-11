@@ -52,6 +52,20 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
       if (request.method !== 'POST' || request.headers.origin !== origin
           || request.headers.authorization !== `Bearer ${secret}`) throw Error('Unpaired local composer');
       const data = await requestBody(request, request.url === '/upgrade' ? 12 * 1024 * 1024 : BODY_LIMIT); let value;
+      if (request.url.startsWith('/installation/')) {
+        const operations = { '/installation/status': 'status', '/installation/enable': 'enable',
+          '/installation/store': 'store', '/installation/export-opportunity': 'offerExport',
+          '/installation/remove': 'remove', '/installation/diagnostics': 'diagnostics',
+          '/installation/check-update': 'checkUpdate', '/installation/download-update': 'downloadUpdate' };
+        const operation = operations[request.url];
+        if (!operation) throw Error('Unsupported installation operation');
+        if (!runtime.maintenance) {
+          if (operation === 'status') return reply(response, 200, { integration: 'NOT_CONFIGURED', storeURL: null });
+          throw Error('Signed distribution is not configured in this build');
+        }
+        try { return reply(response, 200, await runtime.maintenance[operation](data)); }
+        catch { return reply(response, 400, { error: 'Installation action could not complete. Evidence has been retained. Restart the app or save the content-free support report.' }); }
+      }
       switch (request.url) {
         case '/status': value = { browser: runtime.browserState(), protection: runtime.session.status() }; break;
         case '/managed/status': value = await runtime.session.managedStatus(); break;

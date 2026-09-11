@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DurableVault, MacOSKeychainStore } from '../../vault/key-lifecycle.mjs';
@@ -10,14 +10,27 @@ import { startChromeProtectionRuntime } from './bridge-runtime.mjs';
 import { startProductComposer } from './product-server.mjs';
 import { ManagedAnchoringClient } from '../../managed/client.mjs';
 import { MANAGED_NETWORK, MANAGED_GENESIS } from '../../managed/protocol.mjs';
+import { InstallationLifecycle, STORE_URL } from '../../distribution/lifecycle.mjs';
+import { DesktopUpdater } from '../../distribution/updater.mjs';
+import { validateInstalledRelease } from '../../distribution/config.mjs';
 
 const defaultSupportDirectory = join(homedir(), 'Library', 'Application Support', 'Private Provenance');
 
 export async function startPackagedChatGPT({
   supportDirectory = defaultSupportDirectory, fastTrust = null, keyStore, vault = null,
   collectFast, verifyFast, verifyArchive, attestPeer, managed = undefined, openBrowser = false,
+  installation = undefined,
 } = {}) {
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
+  let installedRelease = null;
+  if (installation === undefined) {
+    installedRelease = JSON.parse(await readFile(new URL('../../distribution/installed-release.json', import.meta.url), 'utf8'));
+    installation = installedRelease ? await new InstallationLifecycle({
+      supportDirectory, chromeSupportDirectory: join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome'),
+      browserHost: join(dirname(process.execPath), 'provenance-browser-host'),
+      sequence: validateInstalledRelease(installedRelease).sequence,
+    }).init() : null;
+  }
   const trust = fastTrust ?? parseCanonical(await readFile(new URL('fast-trust.json', import.meta.url)), 16 * 1024);
   if (managed === undefined) {
     const config = parseCanonical((await readFile(new URL('managed-config.json', import.meta.url), 'utf8')).trim(), 4096);
@@ -48,6 +61,33 @@ export async function startPackagedChatGPT({
       ...(verifyArchive === undefined ? {} : { verifyArchive }),
       ...(attestPeer === undefined ? {} : { attestPeer }),
     });
+    const updater = installedRelease ? new DesktopUpdater({ config: installedRelease, lifecycle: installation,
+      schema: () => vault.schemaInfo(), directory: join(supportDirectory, 'Updates') }) : null;
+    const openLocal = path => new Promise((resolve, reject) => {
+      const child = spawn('/usr/bin/open', [path], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
+      child.once('error', () => reject(Error('Unable to open the selected release resource')));
+      child.once('exit', code => code === 0 ? resolve() : reject(Error('Unable to open the selected release resource')));
+    });
+    bridge.maintenance = installation ? {
+      status: () => installation.status(),
+      enable: () => installation.enable(),
+      async store() { await installation.record('storeOpened'); await openLocal(STORE_URL); return { opened: true }; },
+      async offerExport() { await installation.record('exportOffered'); return { evidence: 'RETAINED', exportAvailable: true }; },
+      async remove(data) {
+        // End bridge authority before removing the registration. A concurrent
+        // admitted attempt is drained by the ordinary close path, never retried.
+        bridge.disableIntegration();
+        return installation.remove(data);
+      },
+      diagnostics: () => installation.diagnostics({ paired: bridge.browserState() !== null, update: updater?.state }),
+      async checkUpdate() { if (!updater) throw Error('Updates are not configured'); return updater.check(); },
+      async downloadUpdate() {
+        if (!updater) throw Error('Updates are not configured');
+        const result = await updater.download(); await openLocal(result.path);
+        return { state: result.state, instruction: 'Close Private Provenance, replace the app in Finder, then reopen and pair your tab. Evidence stays on this Mac.' };
+      },
+    } : null;
+    if (installation) bridge.waitForPairing().then(() => installation.record('paired')).catch(() => {});
     composer = await startProductComposer(bridge, { onClose: async () => {
       await bridge.close(); if (ownedVault) vault.close();
     } });
@@ -74,5 +114,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   startPackagedChatGPT({ openBrowser: process.argv.includes('--open') }).then(runtime => {
     const close = () => runtime.close().finally(() => process.exit());
     process.once('SIGINT', close); process.once('SIGTERM', close);
-  }).catch(error => { process.stderr.write(`${error.message}\n`); process.exitCode = 1; });
+  }).catch(() => { process.stderr.write('PRIVATE_PROVENANCE_START_FAILED\n'); process.exitCode = 1; });
 }

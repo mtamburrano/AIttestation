@@ -294,7 +294,11 @@ export class ChatGPTProtectionSession {
     });
   }
 
-  status() { return { scope: this.#scope, versions: [...this.#versions.values()].map(value => this.#public(value)) }; }
+  status() {
+    let eligibility = this.#scope ? 'ELIGIBLE' : 'UNENROLLED';
+    if (this.#scope) try { this.#adapter.assertEligible(this.#scope); } catch { eligibility = 'REVOKED'; }
+    return { scope: this.#scope, eligibility, versions: [...this.#versions.values()].map(value => this.#public(value)) };
+  }
   async drain() { await this.#tail; }
   close() { if (this.#ownsVault) this.vault.close(); }
 }

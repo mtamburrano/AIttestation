@@ -1,13 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Private Provenance — ChatGPT release adapter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApFngn/kYPMPQciqSHfNy12QfG2FmNfXn8ZYcl7RWw4LZWnYgZ2Zd/MlYWc3saCUpY8FCVg22ZUi90l9zEDYbEBP972rixuvz+nd02USDg4RpSNtG/+WlMs9LC1VRNEqGBXjlq5uIaRvbLBiZV56jd9CnpOMk8hp8pwEm+IFUWzCMmkbPRcoLgGmLPZ5ujEV1j2itdN1MNhJA4RizdzgQjTWgyO4hWkvhDXG0JT/XRvAgFW/delFNPBZthyQRrT4A0Ybv+vCJr+f4XNBZr+nZDBGcRnCGnzrdjDDRr67nGzpTV+kqk402poLePOaDifdURNQbSRr1BzFFwG9BTDBmIQIDAQAB",
   "minimum_chrome_version": "153",
   "description": "Releases already-authorized text from the local trusted composer to one supported ChatGPT tab.",
   "permissions": [
-    "nativeMessaging",
-    "tabs"
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"
@@ -15,6 +14,7 @@
   "background": {
     "service_worker": "service-worker.js"
   },
+  "incognito": "not_allowed",
   "content_scripts": [
     {
       "matches": [

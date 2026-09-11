@@ -63,9 +63,12 @@ build. The service database and sponsor executable are never bundled in the app.
 
 ## Least-authority Chrome adapter
 
-The Manifest V3 extension has only `nativeMessaging`, `tabs`, and the single
+The Manifest V3 extension has only `nativeMessaging` and the single
 `https://chatgpt.com/*` host permission. Its public manifest key pins the development
-extension ID. Its JavaScript state explicitly reports browser identity as
+extension ID. Host-scoped tab access replaces the broad `tabs` permission;
+incognito access is disabled. This development ID is not a provisioned Web Store
+listing. Adapter profile version 2 rejects the older permission contract.
+Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and
 team. Independently, the app-side peer validator derives the installed major version
@@ -104,7 +107,18 @@ unrecognized provider markup, nonempty provider composer, or attachment state.
 Unknown and interrupted attempts are never resent automatically; an explicit retry
 creates a new attempt and consumes a new authorization.
 
+DOM/input changes trigger a fixed content-free surface notification, followed by
+the runtime's ordinary capability check. Unrecognized provider markup revokes
+enrollment; the provider cannot download new selectors or retain a protected state
+through an unsigned configuration update.
+
 ## macOS package boundary
+
+The [distribution builder and support runbook](../../distribution/README.md) adds
+consented registration/removal, export opportunity, signed update verification,
+rollback/schema gates, dependency inventory and build provenance. Consumer controls
+remain unavailable until a fully provisioned release is packaged. The local
+development builder below remains ad-hoc and never installs a native manifest.
 
 First build the pinned Algorand tools, then create a new output directory:
 

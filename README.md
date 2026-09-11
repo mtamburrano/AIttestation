@@ -58,6 +58,13 @@ does not establish guarantees against storage hardware failure or journal tamper
 
 ## Supported ChatGPT browser path
 
+The [distribution implementation](spikes/distribution/README.md) prepares macOS
+packages with build provenance and dependency inventory, signed-update checks,
+guided Chrome connection/removal, migration regression fixtures and private support
+diagnostics. Production Developer ID/Keychain provisioning, notarization credentials,
+Web Store publication and installed validation remain required. Development builds
+are explicitly ad-hoc; the existing extension ID is not evidence of a store listing.
+
 The [first scoped browser path](spikes/browser/chatgpt/README.md) adds a text-only
 256 KiB trusted composer, a least-authority Chrome/ChatGPT extension contract, all
 three protection modes, an authenticated native rendezvous, a fixed signed macOS
