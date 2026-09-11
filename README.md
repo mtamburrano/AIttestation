@@ -56,6 +56,16 @@ The demo intentionally leaves its printed synthetic journal for inspection.
 Atomic rename and file/directory sync model process-crash durability; this spike
 does not establish guarantees against storage hardware failure or journal tampering.
 
+## Supported ChatGPT browser path
+
+The [first scoped browser path](spikes/browser/chatgpt/README.md) adds a text-only
+256 KiB trusted composer, a least-authority Chrome/ChatGPT extension contract, all
+three protection modes, and local `PAP_ALGORAND_FAST_CONFIRM_V1` verification.
+Fast confirmation is explicitly source-corroborated rather than consensus-verified;
+later State-Proof evidence upgrades assurance without changing historical release
+authorization. Automated fixtures cover stale edits, tab/scope ambiguity, restart,
+permission/protocol/provider drift, timeout/conflict, and unsupported attachments.
+
 ## Encrypted evidence slice
 
 The separate [vault library](spikes/vault/README.md) adds encrypted private dedup,

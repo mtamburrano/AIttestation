@@ -1,0 +1,9 @@
+{
+  "name": "ai.provenance.consumer",
+  "description": "Private Provenance fixed-purpose ChatGPT bridge",
+  "path": "__ABSOLUTE_SIGNED_NATIVE_HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/"
+  ]
+}

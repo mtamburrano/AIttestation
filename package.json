@@ -5,6 +5,7 @@
   "engines": { "node": ">=22.13" },
   "scripts": {
     "test": "node --test test/*.test.mjs",
+    "test:chatgpt": "node --test test/chatgpt-browser-path.test.mjs",
     "test:browser": "node test/browser.mjs",
     "test:algorand": "cd spikes/anchor/algorand && make build test && cd ../../.. && node test/algorand-archive.mjs",
     "demo:release": "node spikes/release/demo.mjs",

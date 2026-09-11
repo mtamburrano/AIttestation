@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { parseCanonical, canonical } from '../spikes/vault/format.mjs';
 import { verifyDisclosure } from '../spikes/vault/records.mjs';
 import { verifyAnchor } from '../spikes/anchor/verifier.mjs';
+import { FAST_CONFIRM_PROFILE, verifyFastConfirmation } from '../spikes/anchor/algorand/fast-confirm.mjs';
 
 const root = new URL('../spikes/anchor/algorand/proof/testdata/', import.meta.url);
 const bundle = readFileSync(new URL('anchor-envelope.json', root));
@@ -24,4 +26,26 @@ const forged = structuredClone(envelope); forged.proof.rpcConfirmed = true;
 assert.equal(verifyAnchor(Buffer.from(canonical(forged)), trust, envelope.recordDigest).independentlyVerified, false);
 assert.equal(verifyAnchor(bundle, { ...trust, genesis: 'wrong' }, envelope.recordDigest).independentlyVerified, false);
 assert.equal(verifyAnchor(bundle, trust, envelope.recordDigest, { algorandVerifierPath: '/nonexistent/provenance-test-verifier' }).anchor, 'UNSUPPORTED');
-console.log(`PASS: archived TestNet disclosure + anchor verified independently at round ${r.round}; forged/missing roots fail closed.`);
+const archive = JSON.parse(readFileSync(new URL('testnet-archive.json', root)));
+const expectedPayload = Buffer.from(JSON.parse(readFileSync(new URL('expected-payload.json', root))), 'base64');
+const blockHeaderHash = createHash('sha512-256').update('BH').update(Buffer.from(archive.fullHeader, 'base64')).digest('base64');
+const operators = [
+  { id: 'operator-a', organization: 'Independent A', endpoint: 'https://algod-a.example' },
+  { id: 'operator-b', organization: 'Independent B', endpoint: 'https://algod-b.example' },
+];
+const evidence = {
+  profile: FAST_CONFIRM_PROFILE, network: archive.network, genesis: archive.genesis, consensus: archive.consensus,
+  transactionId: archive.transactionId, transaction: archive.transaction, signedTxnInBlock: archive.signedTxnInBlock,
+  fullHeader: archive.fullHeader, transactionProof: archive.transactionProof, observedWaitMillis: 3210,
+  sources: operators.map((operator, index) => ({ operatorId: operator.id, organization: operator.organization,
+    endpoint: operator.endpoint, transactionId: archive.transactionId, confirmedRound: archive.round,
+    blockHeaderHash, sourceClaimedTime: `2026-09-10T12:00:0${index}Z`, poolError: '', error: '', expired: false })),
+};
+const fastTrust = { profile: FAST_CONFIRM_PROFILE, network: archive.network, genesis: archive.genesis,
+  applicationServiceOrigin: 'https://anchor.provenance.example', operators };
+const fast = verifyFastConfirmation(evidence, fastTrust, expectedPayload);
+assert.equal(fast.anchor, 'SOURCE_CORROBORATED'); assert.equal(fast.timestamp, 'SOURCE_REPORTED');
+assert.equal(fast.authorized, true); assert.equal(fast.round, archive.round);
+const conflict = structuredClone(evidence); conflict.sources[1].confirmedRound++;
+assert.throws(() => verifyFastConfirmation(conflict, fastTrust, expectedPayload), /not authorized/);
+console.log(`PASS: fast two-operator inclusion at round ${fast.round}, then archived State-Proof upgrade; forged, conflicting, or missing roots fail closed.`);

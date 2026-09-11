@@ -6,6 +6,7 @@ import (
 )
 
 const Profile = "pap-algorand-sp/1"
+const FastProfile = "PAP_ALGORAND_FAST_CONFIRM_V1"
 const Consensus = "https://github.com/algorandfoundation/specs/tree/268b63433a907455d439995bf916f6b296018f4f"
 const Network = "testnet-v1.0"
 const Genesis = "SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="
@@ -59,6 +60,66 @@ type Request struct {
 	Archive         Archive `json:"archive"`
 	Trust           *Trust  `json:"trust"`
 	ExpectedPayload []byte  `json:"expectedPayload"`
+}
+
+type FastOperator struct {
+	ID           string `json:"id"`
+	Organization string `json:"organization"`
+	Endpoint     string `json:"endpoint"`
+}
+
+type FastTrust struct {
+	Profile                  string         `json:"profile"`
+	Network                  string         `json:"network"`
+	Genesis                  string         `json:"genesis"`
+	ApplicationServiceOrigin string         `json:"applicationServiceOrigin"`
+	Operators                []FastOperator `json:"operators"`
+}
+
+type FastSourceReport struct {
+	OperatorID        string `json:"operatorId"`
+	Organization      string `json:"organization"`
+	Endpoint          string `json:"endpoint"`
+	TransactionID     string `json:"transactionId"`
+	ConfirmedRound    uint64 `json:"confirmedRound"`
+	BlockHeaderHash   []byte `json:"blockHeaderHash"`
+	SourceClaimedTime string `json:"sourceClaimedTime"`
+	PoolError         string `json:"poolError"`
+	Error             string `json:"error"`
+	Expired           bool   `json:"expired"`
+}
+
+type FastEvidence struct {
+	Profile            string                  `json:"profile"`
+	Network            string                  `json:"network"`
+	Genesis            string                  `json:"genesis"`
+	Consensus          string                  `json:"consensus"`
+	TransactionID      string                  `json:"transactionId"`
+	Transaction        []byte                  `json:"transaction"`
+	SignedTxnInBlock   []byte                  `json:"signedTxnInBlock"`
+	FullHeader         []byte                  `json:"fullHeader"`
+	TransactionProof   models.TransactionProof `json:"transactionProof"`
+	Sources            []FastSourceReport      `json:"sources"`
+	ObservedWaitMillis uint64                  `json:"observedWaitMillis"`
+}
+
+type FastRequest struct {
+	Evidence        FastEvidence `json:"evidence"`
+	Trust           FastTrust    `json:"trust"`
+	ExpectedPayload []byte       `json:"expectedPayload"`
+}
+
+type FastReport struct {
+	Profile            string   `json:"profile"`
+	Anchor             string   `json:"anchor"`
+	Timestamp          string   `json:"timestamp"`
+	Authorized         bool     `json:"authorized"`
+	Round              uint64   `json:"round,omitempty"`
+	BlockTime          int64    `json:"blockTime,omitempty"`
+	BlockHeaderHash    []byte   `json:"blockHeaderHash,omitempty"`
+	SourceClaimedTimes []string `json:"sourceClaimedTimes,omitempty"`
+	Assurance          string   `json:"assurance"`
+	Reason             string   `json:"reason"`
 }
 
 func Encode(value any) []byte {

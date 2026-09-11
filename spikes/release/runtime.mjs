@@ -3,6 +3,7 @@ import { open, rename, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const digest = payload => createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+export const MAX_PROTECTED_TEXT_BYTES = 256 * 1024;
 export const capabilities = Object.freeze({
   boundary: 'trusted_local_composer', provider: 'synthetic-loopback-only',
   visibleText: 'exact UTF-8 of declared DOM textContent extraction',
@@ -11,6 +12,31 @@ export const capabilities = Object.freeze({
   providerReceipt: 'UNKNOWN', filesystemAPI: false, signerAPI: false,
   confirmation: 'TEST_STUB_ONLY; no external anchor assurance',
 });
+
+function wellFormed(value) {
+  if (typeof value.isWellFormed === 'function') return value.isWellFormed();
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(++i);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  return true;
+}
+
+// The supported browser profile is deliberately text-only. JavaScript would
+// silently replace lone surrogates while UTF-8 encoding, so reject them instead
+// of claiming that a different byte string was protected.
+export function validateProtectedTextPayload(payload) {
+  if (!payload || Object.keys(payload).sort().join(',') !== 'attachments,text'
+      || typeof payload.text !== 'string' || !wellFormed(payload.text)
+      || !Array.isArray(payload.attachments) || payload.attachments.length !== 0
+      || Buffer.byteLength(payload.text, 'utf8') > MAX_PROTECTED_TEXT_BYTES) {
+    throw Error('Unsupported protected payload: exact UTF-8 text up to 256 KiB and no attachments required');
+  }
+  return { text: payload.text, attachments: [] };
+}
 
 export function validatePayload(payload) {
   if (!payload || typeof payload.text !== 'string' || !Array.isArray(payload.attachments)
@@ -27,11 +53,13 @@ export function validatePayload(payload) {
 // Laboratory defaults are plaintext and stub-confirmed. Integrations supply
 // trusted storage and confirmation adapters at the local runtime boundary.
 export class ReleaseRuntime {
-  #state; #file; #dir; #tail = Promise.resolve(); #dispatch; #fault; #store; #confirm;
-  constructor(directory, dispatch, fault = () => {}, { store, confirm } = {}) {
+  #state; #file; #dir; #tail = Promise.resolve(); #dispatch; #fault; #store; #confirm; #validate; #protocol;
+  constructor(directory, dispatch, fault = () => {}, {
+    store, confirm, validate = validatePayload, protocol = 'release-fixture/1',
+  } = {}) {
     this.#dir = directory; this.#file = join(directory, 'release-test-journal.json');
     this.#dispatch = dispatch; this.#fault = fault;
-    this.#store = store; this.#confirm = confirm;
+    this.#store = store; this.#confirm = confirm; this.#validate = validate; this.#protocol = protocol;
   }
   async init() {
     try { this.#state = this.#store ? await this.#store.load() : JSON.parse(await readFile(this.#file, 'utf8')); }
@@ -62,13 +90,14 @@ export class ReleaseRuntime {
     if (!seal || seal.scope !== scope) throw Error('Seal/scope mismatch');
     return seal;
   }
-  seal(payload, scope) {
+  seal(payload, scope, mode = 'Sealed') {
     return this.#serial(async () => {
       if (typeof scope !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(scope)) throw Error('Invalid scope');
-      const frozen = validatePayload(payload);
+      if (!['Continuous', 'Sealed', 'Always Protect'].includes(mode)) throw Error('Invalid protection mode');
+      const frozen = this.#validate(payload);
       const next = structuredClone(this.#state);
       const id = randomUUID();
-      next.seals[id] = { id, scope, payload: frozen, digest: digest(frozen), confirmation: null, authorization: null, priorAttempt: null };
+      next.seals[id] = { id, scope, mode, payload: frozen, digest: digest(frozen), confirmation: null, authorization: null, priorAttempt: null };
       await this.#persist(next);
       return { id, digest: digest(frozen), scope };
     });
@@ -76,7 +105,8 @@ export class ReleaseRuntime {
   confirm(id, scope, expectedDigest) {
     return this.#serial(async () => {
       const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
-      if (seal.digest !== expectedDigest || seal.confirmation) throw Error('Stale or duplicate confirmation');
+      if (seal.mode === 'Continuous') throw Error('Continuous anchoring cannot grant pre-release authorization');
+      if (seal.digest !== expectedDigest || seal.confirmation || seal.cancelled) throw Error('Stale, cancelled, or duplicate confirmation');
       seal.confirmation = this.#confirm ? await this.#confirm(structuredClone(seal))
         : { policy: 'synthetic-confirmation/1', digest: seal.digest, result: 'TEST_CONFIRMED' };
       if (!seal.confirmation || seal.confirmation.digest !== seal.digest) throw Error('Confirmation version mismatch');
@@ -89,24 +119,61 @@ export class ReleaseRuntime {
       const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
       const attempt = next.attempts[priorAttempt];
       if (explicit !== true || !attempt || attempt.sealId !== id || seal.priorAttempt !== priorAttempt
-          || !['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].includes(attempt.state) || seal.authorization) throw Error('Retry not authorized');
+          || attempt.releaseClass === 'RETROSPECTIVE_CONTINUOUS'
+          || !['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].includes(attempt.state) || seal.authorization || seal.cancelled) throw Error('Retry not authorized');
       seal.authorization = randomUUID();
       await this.#persist(next);
     });
   }
-  release({ id, scope, expectedDigest, currentPayload, protocol = 'release-fixture/1' }) {
+  cancel(id, scope, expectedDigest) {
     return this.#serial(async () => {
       const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
-      if (protocol !== 'release-fixture/1' || expectedDigest !== seal.digest
-          || digest(validatePayload(currentPayload)) !== seal.digest) throw Error('Stale version or protocol mismatch');
+      if (seal.digest !== expectedDigest || seal.priorAttempt || seal.cancelled) throw Error('Stale or attempted seal');
+      seal.authorization = null; seal.cancelled = true;
+      await this.#persist(next);
+    });
+  }
+  release(request) {
+    return this.#serial(async () => {
+      const { id, scope, expectedDigest, currentPayload, protocol = this.#protocol } = request;
+      const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
+      if (seal.mode === 'Continuous' || seal.cancelled || protocol !== this.#protocol || expectedDigest !== seal.digest
+          || digest(this.#validate(currentPayload)) !== seal.digest) throw Error('Stale version or protocol mismatch');
       if (!seal.confirmation || !seal.authorization) throw Error('No unconsumed confirmation authorization');
       const attemptId = randomUUID();
       const attempt = { attemptId, sealId: id, digest: seal.digest, scope, protocol,
         confirmation: seal.confirmation, authorization: seal.authorization,
-        priorAttempt: seal.priorAttempt, state: 'DISPATCHING' };
+        priorAttempt: seal.priorAttempt, releaseClass: 'PRE_DISCLOSURE_PROTECTED', state: 'DISPATCHING' };
       next.attempts[attemptId] = attempt;
       seal.authorization = null; seal.priorAttempt = attemptId;
       await this.#fault('before-consumption');
+      await this.#persist(next);
+      await this.#fault('after-consumption');
+      let state;
+      try {
+        state = await this.#dispatch({ ...structuredClone(attempt), payload: structuredClone(seal.payload) });
+        if (!['SUBMISSION_OBSERVED', 'FAILED_BEFORE_EGRESS', 'OUTCOME_UNKNOWN'].includes(state)) state = 'OUTCOME_UNKNOWN';
+      } catch { state = 'OUTCOME_UNKNOWN'; }
+      await this.#fault('after-egress');
+      const completed = structuredClone(this.#state);
+      completed.attempts[attemptId].state = state;
+      await this.#persist(completed);
+      return { attemptId, state, providerReceipt: 'UNKNOWN' };
+    });
+  }
+  releaseContinuous(request) {
+    return this.#serial(async () => {
+      const { id, scope, expectedDigest, currentPayload, protocol = this.#protocol } = request;
+      const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
+      if (seal.mode !== 'Continuous' || protocol !== this.#protocol || expectedDigest !== seal.digest
+          || digest(this.#validate(currentPayload)) !== seal.digest || seal.priorAttempt) {
+        throw Error('Stale, duplicate, mode, or protocol mismatch');
+      }
+      const attemptId = randomUUID();
+      const attempt = { attemptId, sealId: id, digest: seal.digest, scope, protocol,
+        confirmation: null, authorization: null, priorAttempt: null,
+        releaseClass: 'RETROSPECTIVE_CONTINUOUS', state: 'DISPATCHING' };
+      next.attempts[attemptId] = attempt; seal.priorAttempt = attemptId;
       await this.#persist(next);
       await this.#fault('after-consumption');
       let state;
