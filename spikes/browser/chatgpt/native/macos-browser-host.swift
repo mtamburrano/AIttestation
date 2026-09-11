@@ -6,7 +6,6 @@ private let applicationIdentifier = "ai.provenance.consumer.host"
 private let chromeIdentifier = "com.google.Chrome"
 private let chromeTeamIdentifier = "EQHXZ8M8AV"
 private let extensionOrigin = "chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/"
-private let attestationProfile = "pap-native-browser-attestation/1"
 
 private enum HostFailure: Error { case rejected, spawn }
 
@@ -58,46 +57,18 @@ private func parentChromeBundle() throws -> Bundle {
   return bundle
 }
 
-private func machineArchitecture() throws -> String {
-  var size = 0
-  guard sysctlbyname("hw.machine", nil, &size, nil, 0) == 0, size > 1, size < 128 else {
-    throw HostFailure.rejected
-  }
-  var bytes = [CChar](repeating: 0, count: size)
-  guard sysctlbyname("hw.machine", &bytes, &size, nil, 0) == 0 else { throw HostFailure.rejected }
-  return String(cString: bytes)
-}
-
-private func attestation() throws -> String {
-  let chrome = try parentChromeBundle()
-  guard let fullVersion = chrome.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-        let first = fullVersion.split(separator: ".").first,
-        let major = Int(first), major > 0 else { throw HostFailure.rejected }
-  let system = ProcessInfo.processInfo.operatingSystemVersion
-  let architecture = try machineArchitecture()
-  guard architecture == "arm64" else { throw HostFailure.rejected }
-  let value: [String: Any] = [
-    "profile": attestationProfile,
-    "browser": ["product": "Google Chrome", "channel": "stable", "major": major],
-    "platform": ["product": "macOS", "arch": architecture,
-      "version": "\(system.majorVersion).\(system.minorVersion).\(system.patchVersion)"],
-  ]
-  let bytes = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-  return bytes.base64EncodedString()
-}
-
 private func ownedHome() throws -> String {
   guard let record = getpwuid(getuid()), let home = record.pointee.pw_dir else { throw HostFailure.spawn }
   return String(cString: home)
 }
 
-private func runFixedRelay(origin: String, encodedAttestation: String) throws -> Int32 {
+private func runFixedRelay(origin: String) throws -> Int32 {
   let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
   let node = contents.appendingPathComponent("MacOS/node")
   let script = contents.appendingPathComponent("Resources/spikes/browser/chatgpt/native-host.mjs")
   let process = Process()
   process.executableURL = node
-  process.arguments = [script.path, origin, encodedAttestation]
+  process.arguments = [script.path, origin]
   process.environment = ["HOME": try ownedHome(), "PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"]
   process.standardInput = FileHandle.standardInput
   process.standardOutput = FileHandle.standardOutput
@@ -114,7 +85,8 @@ do {
     throw HostFailure.rejected
   }
   try validateSignedApplication()
-  let status = try runFixedRelay(origin: CommandLine.arguments[1], encodedAttestation: attestation())
+  _ = try parentChromeBundle()
+  let status = try runFixedRelay(origin: CommandLine.arguments[1])
   exit(status)
 } catch {
   exit(EXIT_FAILURE)

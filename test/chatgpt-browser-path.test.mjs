@@ -12,12 +12,12 @@ import { ChatGPTChromeAdapter, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT,
   CHATGPT_RELEASE_PROTOCOL } from '../spikes/browser/chatgpt/adapter.mjs';
 import { ChromeBridgeController } from '../spikes/browser/chatgpt/bridge.mjs';
 import { encodeNativeFrame, NativeFrameDecoder, NATIVE_BRIDGE_PROFILE,
-  NATIVE_BROWSER_ATTESTATION_PROFILE, rendezvousRecord, runNativeHost } from '../spikes/browser/chatgpt/native-host.mjs';
+  rendezvousRecord, runNativeHost } from '../spikes/browser/chatgpt/native-host.mjs';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
 import { ChatGPTProtectionSession } from '../spikes/browser/chatgpt/session.mjs';
 import { FAST_CONFIRM_PROFILE, collectFastEvidence } from '../spikes/anchor/algorand/fast-confirm.mjs';
 import { MAX_PROTECTED_TEXT_BYTES, validateProtectedTextPayload } from '../spikes/release/runtime.mjs';
-import { b64, canonical } from '../spikes/vault/format.mjs';
+import { canonical } from '../spikes/vault/format.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 
 const extensionId = 'hdnjjomhchcpcnikfabcnmlhcehbnhbc';
@@ -415,14 +415,18 @@ test('packaged composer and isolated native framing drive the real bridge, adapt
   const root = await realpath(await mkdtemp('/private/tmp/provenance-native-e2e-'));
   const input = new PassThrough(), output = new PassThrough();
   const attestation = {
-    profile: NATIVE_BROWSER_ATTESTATION_PROFILE,
     browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
     platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' },
   };
+  let peerAttempts = 0;
   const runtime = await startPackagedChatGPT({ supportDirectory: root,
     fastTrust, keyStore: new MemoryKeyStore(), openBrowser: false,
     collectFast: async ({ transactionId }) => ({ collectedBy: 'two-operator-observer', transactionId }),
     verifyFast: () => structuredClone(fastReport),
+    attestPeer: async () => {
+      if (++peerAttempts === 1) throw Error('test-only unauthorized direct peer');
+      return structuredClone(attestation);
+    },
   });
   let nativeSocket;
   t.after(async () => {
@@ -434,14 +438,16 @@ test('packaged composer and isolated native framing drive the real bridge, adapt
 
   const record = JSON.parse(await readFile(runtime.rendezvousPath, 'utf8'));
   const rejected = createConnection(runtime.socketPath); await once(rejected, 'connect');
+  const rejectedClosed = new Promise(resolve => rejected.once('close', resolve));
+  rejected.on('error', () => {});
   rejected.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile: NATIVE_BRIDGE_PROFILE,
     extensionOrigin: `chrome-extension://${extensionId}/`, runtimeEpoch: record.runtimeEpoch,
-    token: b64(randomBytes(32)), browser: attestation.browser, platform: attestation.platform })}\n`);
-  await once(rejected, 'close');
-  assert.equal(runtime.browserState(), null);
+    token: record.token })}\n`);
+  await rejectedClosed;
+  assert.equal(peerAttempts, 1); assert.equal(runtime.browserState(), null);
 
   nativeSocket = await runNativeHost({ extensionOrigin: `chrome-extension://${extensionId}/`,
-    rendezvousPath: runtime.rendezvousPath, input, output, localAttestation: attestation });
+    rendezvousPath: runtime.rendezvousPath, input, output });
   input.write(encodeNativeFrame({ kind: 'PAP_HELLO', ...connection({
     browser: { product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 },
     platform: { product: 'unknown', arch: 'unknown', version: '' },

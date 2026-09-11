@@ -20,6 +20,7 @@ try {
     [join(root, 'spikes/vault/native/macos-app-host.swift'), 'provenance-app-host', ['-D', 'PRODUCT_CHATGPT']],
     [join(root, 'spikes/vault/native/macos-keychain-helper.swift'), 'provenance-keychain-helper', []],
     [join(root, 'spikes/browser/chatgpt/native/macos-browser-host.swift'), 'provenance-browser-host', []],
+    [join(root, 'spikes/browser/chatgpt/native/macos-peer-validator.swift'), 'provenance-bridge-peer-validator', []],
   ]) execFileSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', moduleCache, '-O', ...definitions,
     '-framework', 'Security', source, '-o', join(contents, 'MacOS', executable)],
   { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
@@ -36,6 +37,7 @@ for (const [executable, identifier] of [
   [join(contents, 'MacOS/node'), 'ai.provenance.consumer.runtime'],
   [join(contents, 'MacOS/provenance-keychain-helper'), 'ai.provenance.keychain-helper'],
   [join(contents, 'MacOS/provenance-browser-host'), 'ai.provenance.consumer.browser-host'],
+  [join(contents, 'MacOS/provenance-bridge-peer-validator'), 'ai.provenance.consumer.bridge-peer-validator'],
 ]) execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', identifier, executable],
 { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', app], { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });

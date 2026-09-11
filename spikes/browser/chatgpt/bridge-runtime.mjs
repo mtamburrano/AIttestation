@@ -1,4 +1,5 @@
 import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
 import { getuid } from 'node:process';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
@@ -10,8 +11,11 @@ import { ChatGPTProtectionSession } from './session.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord } from './native-host.mjs';
 
 const MAX_LINE_BYTES = 512 * 1024;
+const MAX_PEER_RESULT_BYTES = 4 * 1024;
 const AUTH_TIMEOUT_MS = 2_000;
+const PEER_VALIDATION_TIMEOUT_MS = 5_000;
 const RENDEZVOUS_LIFETIME_MS = 4 * 60_000;
+export const NATIVE_PEER_VALIDATION_PROFILE = 'pap-native-peer-validation/1';
 
 function bridgeError(message) {
   const error = Error(message); error.code = 'UNSUPPORTED_PATH'; return error;
@@ -70,6 +74,52 @@ const listen = (server, path) => new Promise((resolveListen, reject) => {
 const stop = server => new Promise(resolveStop => server.close(resolveStop));
 
 /**
+ * Duplicates the accepted Unix socket into a fixed-purpose native validator.
+ * On macOS, LOCAL_PEERPID remains attached to the duplicated descriptor; the
+ * helper checks the live relay -> signed browser host -> Google Chrome ancestry
+ * before returning the browser/platform identity used by the adapter.
+ */
+export function attestNativePeer(socket, {
+  validatorPath = join(dirname(process.execPath), 'provenance-bridge-peer-validator'),
+} = {}) {
+  return new Promise((resolvePeer, rejectPeer) => {
+    let child;
+    try {
+      child = spawn(validatorPath, [], { env: {}, stdio: ['ignore', 'pipe', 'ignore', socket], windowsHide: true });
+    } catch (cause) { rejectPeer(bridgeError(`Native peer validator unavailable: ${cause.message}`)); return; }
+    let settled = false, size = 0; const chunks = [];
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); socket.off('close', disconnected); callback(value);
+    };
+    const fail = message => {
+      child.kill('SIGKILL'); finish(rejectPeer, bridgeError(message));
+    };
+    const disconnected = () => fail('Browser bridge peer disconnected during validation');
+    const timer = setTimeout(() => fail('Native peer validation timed out'), PEER_VALIDATION_TIMEOUT_MS);
+    socket.once('close', disconnected);
+    child.once('error', () => fail('Native peer validator unavailable'));
+    child.stdout.on('data', chunk => {
+      size += chunk.length;
+      if (size > MAX_PEER_RESULT_BYTES) fail('Native peer validator exceeded its output limit');
+      else chunks.push(Buffer.from(chunk));
+    });
+    child.once('close', code => {
+      if (settled) return;
+      if (code !== 0) { finish(rejectPeer, bridgeError('Unauthorized browser bridge peer')); return; }
+      try {
+        const identity = parseCanonical(Buffer.concat(chunks), MAX_PEER_RESULT_BYTES);
+        keys(identity, ['profile', 'browser', 'platform']);
+        keys(identity.browser, ['product', 'channel', 'major']);
+        keys(identity.platform, ['product', 'arch', 'version']);
+        if (identity.profile !== NATIVE_PEER_VALIDATION_PROFILE) throw bridgeError('Invalid native peer identity');
+        finish(resolvePeer, { browser: structuredClone(identity.browser), platform: structuredClone(identity.platform) });
+      } catch { finish(rejectPeer, bridgeError('Invalid native peer identity')); }
+    });
+  });
+}
+
+/**
  * Owns the authenticated native rendezvous and composes the production chain:
  * Chrome native messaging -> controller -> adapter -> protected session.
  */
@@ -77,9 +127,11 @@ export async function startChromeProtectionRuntime(directory, {
   extensionId = CHATGPT_EXTENSION_ID, fastTrust, vault = null, vaultKey = null,
   collectFast, verifyFast, verifyArchive, fault, controllerTimeoutMs = 5_000,
   rendezvousPath = join(directory, 'browser-bridge.json'), socketPath = null,
-  now = Date.now,
+  now = Date.now, attestPeer = attestNativePeer, peerValidatorPath,
 } = {}) {
-  if (!isAbsolute(directory) || !/^[a-p]{32}$/.test(extensionId)) throw bridgeError('Invalid browser bridge configuration');
+  if (!isAbsolute(directory) || !/^[a-p]{32}$/.test(extensionId) || typeof attestPeer !== 'function') {
+    throw bridgeError('Invalid browser bridge configuration');
+  }
   await ownerDirectory(directory);
   const canonicalDirectory = await realpath(directory);
   if (resolve(rendezvousPath) !== rendezvousPath || dirname(rendezvousPath) !== canonicalDirectory) {
@@ -90,7 +142,7 @@ export async function startChromeProtectionRuntime(directory, {
   if (!isAbsolute(selectedSocket) || !resolve(selectedSocket).startsWith(`${canonicalDirectory}${sep}`)
       || Buffer.byteLength(selectedSocket) > 100) throw bridgeError('Unsafe or overlong browser bridge socket path');
 
-  let controller = null, activeSocket = null, latestBrowserState = null, closed = false;
+  let controller = null, candidateSocket = null, activeSocket = null, latestBrowserState = null, closed = false;
   let currentToken = randomBytes(32), expiresAt = 0, refreshTimer, publishTail = Promise.resolve();
   let pairedResolve;
   const paired = new Promise(resolvePaired => { pairedResolve = resolvePaired; });
@@ -123,13 +175,14 @@ export async function startChromeProtectionRuntime(directory, {
     return operation;
   };
 
-  const server = createServer(socket => {
-    if (closed || activeSocket) { socket.destroy(); return; }
-    let authenticated = false, bytes = Buffer.alloc(0), connectionController = null;
-    const authTimer = setTimeout(() => socket.destroy(), AUTH_TIMEOUT_MS);
+  const server = createServer({ pauseOnConnect: true }, socket => {
+    if (closed || candidateSocket || activeSocket) { socket.destroy(); return; }
+    candidateSocket = socket;
+    let authenticated = false, peerIdentity = null, bytes = Buffer.alloc(0), connectionController = null;
+    let authTimer;
     const fail = () => socket.destroy();
     socket.on('error', () => {});
-    socket.on('data', chunk => {
+    const receive = chunk => {
       try {
         bytes = Buffer.concat([bytes, Buffer.from(chunk)]);
         if (bytes.length > MAX_LINE_BYTES * 2) return fail();
@@ -138,18 +191,17 @@ export async function startChromeProtectionRuntime(directory, {
           const line = bytes.subarray(0, newline); bytes = bytes.subarray(newline + 1);
           if (!authenticated) {
             const auth = parseLine(line, true);
-            keys(auth, ['kind', 'profile', 'extensionOrigin', 'runtimeEpoch', 'token', 'browser', 'platform']);
-            keys(auth.browser, ['product', 'channel', 'major']);
-            keys(auth.platform, ['product', 'arch', 'version']);
+            keys(auth, ['kind', 'profile', 'extensionOrigin', 'runtimeEpoch', 'token']);
             const supplied = unb64(auth.token, 32);
             if (activeSocket || auth.kind !== 'PAP_BRIDGE_AUTH' || auth.profile !== NATIVE_BRIDGE_PROFILE
                 || auth.extensionOrigin !== extensionOrigin || auth.runtimeEpoch !== runtimeEpoch
                 || now() >= expiresAt || !timingSafeEqual(supplied, currentToken)) return fail();
-            authenticated = true; clearTimeout(authTimer); activeSocket = socket;
+            authenticated = true; clearTimeout(authTimer); candidateSocket = null; activeSocket = socket;
             connectionController = new ChromeBridgeController(adapter, message => {
               if (socket.destroyed) throw bridgeError('Browser bridge disconnected');
               socket.write(`${canonical(message)}\n`);
-            }, { timeoutMs: controllerTimeoutMs, localBrowser: auth.browser, localPlatform: auth.platform });
+            }, { timeoutMs: controllerTimeoutMs, localBrowser: peerIdentity.browser,
+              localPlatform: peerIdentity.platform });
             controller = connectionController;
             // Consume the just-used token. A replacement is published for a
             // later Chrome reconnect while this socket remains the only peer.
@@ -165,14 +217,25 @@ export async function startChromeProtectionRuntime(directory, {
           }
         }
       } catch { fail(); }
-    });
+    };
     socket.once('close', () => {
       clearTimeout(authTimer);
+      if (candidateSocket === socket) candidateSocket = null;
       if (activeSocket === socket) activeSocket = null;
       if (controller === connectionController) controller = null;
       latestBrowserState = null;
       connectionController?.disconnect();
     });
+    Promise.resolve().then(() => attestPeer(socket,
+      peerValidatorPath === undefined ? {} : { validatorPath: peerValidatorPath })).then(identity => {
+      keys(identity, ['browser', 'platform']);
+      keys(identity.browser, ['product', 'channel', 'major']);
+      keys(identity.platform, ['product', 'arch', 'version']);
+      if (closed || socket.destroyed) return fail();
+      peerIdentity = structuredClone(identity);
+      authTimer = setTimeout(() => socket.destroy(), AUTH_TIMEOUT_MS);
+      socket.on('data', receive); socket.resume();
+    }).catch(fail);
   });
 
   try {
@@ -195,7 +258,7 @@ export async function startChromeProtectionRuntime(directory, {
     browserState: () => structuredClone(latestBrowserState),
     async close() {
       if (closed) return; closed = true; clearInterval(refreshTimer);
-      activeSocket?.destroy(); controller?.disconnect(); controller = null;
+      candidateSocket?.destroy(); activeSocket?.destroy(); controller?.disconnect(); controller = null;
       await session.drain(); session.close(); await stop(server);
       await publishTail;
       try { await unlink(selectedSocket); } catch {}

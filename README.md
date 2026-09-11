@@ -61,8 +61,8 @@ does not establish guarantees against storage hardware failure or journal tamper
 The [first scoped browser path](spikes/browser/chatgpt/README.md) adds a text-only
 256 KiB trusted composer, a least-authority Chrome/ChatGPT extension contract, all
 three protection modes, an authenticated native rendezvous, a fixed signed macOS
-host, and local `PAP_ALGORAND_FAST_CONFIRM_V1` verification backed by two bounded
-TLS algod observers.
+host, runtime-side macOS socket-peer/code-sign validation, and local
+`PAP_ALGORAND_FAST_CONFIRM_V1` verification backed by two bounded TLS algod observers.
 Fast confirmation is explicitly source-corroborated rather than consensus-verified;
 later State-Proof evidence upgrades assurance without changing historical release
 authorization. Automated fixtures cover stale edits, tab/scope ambiguity, restart,

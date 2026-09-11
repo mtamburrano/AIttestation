@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
+import { createConnection } from 'node:net';
+import { startChromeProtectionRuntime } from '../spikes/browser/chatgpt/bridge-runtime.mjs';
+import { NATIVE_BRIDGE_PROFILE } from '../spikes/browser/chatgpt/native-host.mjs';
+import { canonical } from '../spikes/vault/format.mjs';
 
-test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain authority', { skip: process.platform !== 'darwin' }, t => {
-  const root = mkdtempSync(join(tmpdir(), 'provenance-native-boundary-test-'));
+test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain authority', { skip: process.platform !== 'darwin' }, async t => {
+  const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-boundary-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const output = join(root, 'isolated-build');
   const build = spawnSync(process.execPath, ['spikes/browser/chatgpt/build-macos.mjs', output], {
@@ -18,19 +23,41 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const host = join(app, 'Contents/MacOS/provenance-app-host');
   const helper = join(app, 'Contents/MacOS/provenance-keychain-helper');
   const browserHost = join(app, 'Contents/MacOS/provenance-browser-host');
+  const peerValidator = join(app, 'Contents/MacOS/provenance-bridge-peer-validator');
   const lifecycle = join(app, 'Contents/Resources/spikes/vault/key-lifecycle.mjs');
   const identifier = executable => spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', executable], { encoding: 'utf8' }).stderr;
   assert.match(identifier(host), /Identifier=ai\.provenance\.consumer\.host/);
   assert.match(identifier(node), /Identifier=ai\.provenance\.consumer\.runtime/);
   assert.match(identifier(helper), /Identifier=ai\.provenance\.keychain-helper/);
   assert.match(identifier(browserHost), /Identifier=ai\.provenance\.consumer\.browser-host/);
+  assert.match(identifier(peerValidator), /Identifier=ai\.provenance\.consumer\.bridge-peer-validator/);
   assert.ok((statSync(browserHost).mode & 0o111) !== 0, 'native messaging host must be executable');
+  assert.ok((statSync(peerValidator).mode & 0o111) !== 0, 'peer validator must be executable');
   const nativeManifest = JSON.parse(readFileSync(join(output, 'NativeMessagingHosts/ai.provenance.consumer.json')));
   assert.equal(nativeManifest.path, browserHost);
   assert.deepEqual(nativeManifest.allowed_origins, ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/']);
   const rejectedBrowserParent = spawnSync(browserHost,
     ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/'], { env: {}, encoding: 'utf8', timeout: 15000 });
   assert.notEqual(rejectedBrowserParent.status, 0, 'native host must reject a non-Chrome Stable parent');
+
+  const bridgeDirectory = join(root, 'stolen-token-runtime');
+  const bridge = await startChromeProtectionRuntime(bridgeDirectory, {
+    vaultKey: randomBytes(32), peerValidatorPath: peerValidator,
+    fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' },
+  });
+  try {
+    const record = JSON.parse(readFileSync(bridge.rendezvousPath, 'utf8'));
+    const direct = createConnection(bridge.socketPath); await once(direct, 'connect');
+    const directClosed = new Promise(resolve => direct.once('close', resolve));
+    direct.on('error', () => {});
+    direct.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile: NATIVE_BRIDGE_PROFILE,
+      extensionOrigin: 'chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/',
+      runtimeEpoch: record.runtimeEpoch, token: record.token })}\n`);
+    await directClosed;
+    assert.equal(bridge.browserState(), null,
+      'same-user direct client must be rejected even with the exact rendezvous token');
+  } finally { await bridge.close(); }
+
   const attack = join(root, 'attacker-selected.mjs');
   writeFileSync(attack, `
     import { spawnSync } from 'node:child_process';

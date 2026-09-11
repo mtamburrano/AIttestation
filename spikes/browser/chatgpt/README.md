@@ -50,9 +50,10 @@ The Manifest V3 extension has only `nativeMessaging`, `tabs`, and the single
 extension ID. Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and
-team, then derives the installed major version and local OS/architecture. The local
-controller replaces the untrusted extension fields with that attested identity and
-fails closed unless the exact supported baseline matches.
+team. Independently, the app-side peer validator derives the installed major version
+and local OS/architecture from that same live process chain. The local controller
+uses only this runtime-side identity and fails closed unless the exact supported
+baseline matches; browser or platform fields sent over the bridge are not accepted.
 
 The background worker requires exactly one active ChatGPT tab and forwards only a
 versioned release command. The content script recognizes the pinned
@@ -66,9 +67,15 @@ receipt. Once text may have reached the provider DOM, loss of a reply becomes
 
 [`bridge-runtime.mjs`](bridge-runtime.mjs) creates a fresh owner-only Unix socket,
 256-bit token, runtime epoch, and atomically published short-lived rendezvous. The
-first socket message must be an exact `PAP_BRIDGE_AUTH`; only after constant-time
-token verification does it construct `ChromeBridgeController → ChatGPTChromeAdapter
-→ ChatGPTProtectionSession`. [`native-host.mjs`](native-host.mjs) is the bounded
+accepted socket is paused before any bytes are parsed and duplicated into the fixed
+[`macos-peer-validator`](native/macos-peer-validator.swift). Using `LOCAL_PEERPID`,
+the validator requires the exact signed bundled Node relay, its exact signed
+`provenance-browser-host` parent, and that host's live Google-signed Chrome Stable
+parent. It derives browser/platform identity from that chain. Only after peer
+validation and constant-time verification of an exact `PAP_BRIDGE_AUTH` does the
+runtime construct `ChromeBridgeController → ChatGPTChromeAdapter →
+ChatGPTProtectionSession`. Thus the rendezvous token is a second factor, not a
+same-user process identity claim. [`native-host.mjs`](native-host.mjs) is the bounded
 native-framing relay used behind the compiled
 [`provenance-browser-host`](native/macos-browser-host.swift). It exposes no vault,
 filesystem, clipboard, signer, or generic command API to the extension.
@@ -101,22 +108,28 @@ production Keychain authority and is not a public installer.
 The fixed app host validates the complete bundle and launches only the bundled
 Node runtime and `runtime-main.mjs` with a sanitized environment. The native
 messaging host independently validates the complete app and its live Google Chrome
-Stable parent before launching only the bundled relay. The local composer exposes
-only status, enrollment, freeze, blinded anchor request, transaction observation,
-release, cancellation, and later proof-upgrade operations.
+Stable parent before launching only the bundled relay. A separately signed peer
+validator performs the runtime-side ancestry check before the relay may authenticate.
+The local composer exposes only status, enrollment, freeze, blinded anchor request,
+transaction observation, release, cancellation, and later proof-upgrade operations.
 
 ## Validation
 
 `npm run test:chatgpt` includes an isolated end-to-end path through actual native
 message framing, a fresh rendezvous and Unix socket, authentication, the controller,
-adapter, durable Sealed session, and correlated release response. Other cases use
-fresh temporary encrypted stores and explicit local fixtures. `npm run
+adapter, durable Sealed session, and correlated release response. It also proves a
+client holding the exact current token cannot proceed when peer authorization fails.
+The macOS packaging regression invokes the real peer validator against a direct
+same-user socket client and confirms rejection before bridge pairing. Other cases
+use fresh temporary encrypted stores and explicit local fixtures. `npm run
 test:algorand` builds the observer and both offline verifiers, exercises the real
 observer against a fresh loopback TLS algod fixture, and checks the recorded public
 TestNet archive, fast corroboration, conflict cases, and later State-Proof upgrade.
 Neither command opens a user Chrome profile, accesses a ChatGPT account, submits a
 transaction, or touches an operational evidence store.
 
-The content-script fixture is deliberately selector-pinned. Revalidate it against
-the then-current Chrome Stable and an explicitly designated test/owner ChatGPT
-account with synthetic text before release; any provider drift disables protection.
+The content-script fixture is deliberately selector-pinned. A release candidate
+still needs a bounded owner-run check through the installed manifest and actual
+Chrome Stable native-messaging process chain, followed by synthetic text in an
+explicitly designated test/owner ChatGPT account. Automated tests do not establish
+that external parent/DOM boundary; any provider drift disables protection.

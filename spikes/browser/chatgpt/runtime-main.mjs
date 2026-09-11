@@ -13,7 +13,7 @@ const defaultSupportDirectory = join(homedir(), 'Library', 'Application Support'
 
 export async function startPackagedChatGPT({
   supportDirectory = defaultSupportDirectory, fastTrust = null, keyStore, vault = null,
-  collectFast, verifyFast, verifyArchive, openBrowser = false,
+  collectFast, verifyFast, verifyArchive, attestPeer, openBrowser = false,
 } = {}) {
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
   const trust = fastTrust ?? parseCanonical(await readFile(new URL('fast-trust.json', import.meta.url)), 16 * 1024);
@@ -32,6 +32,7 @@ export async function startPackagedChatGPT({
       ...(collectFast === undefined ? {} : { collectFast }),
       ...(verifyFast === undefined ? {} : { verifyFast }),
       ...(verifyArchive === undefined ? {} : { verifyArchive }),
+      ...(attestPeer === undefined ? {} : { attestPeer }),
     });
     composer = await startProductComposer(bridge, { onClose: async () => {
       await bridge.close(); if (ownedVault) vault.close();
