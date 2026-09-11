@@ -8,7 +8,7 @@ export const ALGORAND_CONSENSUS_ALLOWLIST = Object.freeze([
   'https://github.com/algorandfoundation/specs/tree/268b63433a907455d439995bf916f6b296018f4f',
 ]);
 
-export function verifyAnchor(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath } = {}) {
+export function verifyAnchor(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath, timeoutMs = 30000 } = {}) {
   const report = { structure: 'VALID', recordInclusion: 'INVALID', anchor: 'INDETERMINATE',
     timestamp: 'INDETERMINATE', independentlyVerified: false, assurance: 'NONE', reason: '' };
   try {
@@ -28,12 +28,18 @@ export function verifyAnchor(input, trustedConfiguration, expectedRecordDigest, 
     if (trustedConfiguration.network !== adapter.network || trustedConfiguration.genesis !== adapter.genesis
         || trustedConfiguration.profile !== adapter.profile) fail('INVALID', 'Independent network/profile mismatch');
     const payload = b64(anchorPayload(unb64(bundle.batch.root, 32)));
+    if (bundle.proof === null) { report.reason = 'Anchor proof missing'; return report; }
     if (adapter.profile === 'pap-algorand-sp/1') {
       if (!trustedConfiguration.checkpoint) { report.reason = 'Independent checkpoint missing'; return report; }
+      if (bundle.proof.format === 'algorand-archive/1' && ['transaction', 'signedTxnInBlock', 'fullHeader', 'lightHeader', 'transactionProof', 'lightProof', 'chain']
+        .some(field => bundle.proof[field] === undefined || bundle.proof[field] === null || bundle.proof[field] === ''
+          || (field === 'chain' && Array.isArray(bundle.proof[field]) && !bundle.proof[field].length))) {
+        report.reason = 'Archived proof material missing'; return report;
+      }
       const binary = algorandVerifierPath ?? fileURLToPath(new URL('./algorand/bin/verify', import.meta.url));
       const result = spawnSync(binary, [], { input: JSON.stringify({ archive: bundle.proof,
         trust: trustedConfiguration.checkpoint, expectedPayload: Buffer.from(payload, 'base64url').toString('base64') }),
-        encoding: 'utf8', env: {}, timeout: 30000, maxBuffer: 65536 });
+        encoding: 'utf8', env: {}, timeout: timeoutMs, maxBuffer: 65536 });
       if (result.error) {
         report.anchor = 'UNSUPPORTED'; report.reason = 'Native Algorand verifier unavailable or resource limit exceeded'; return report;
       }

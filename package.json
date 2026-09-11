@@ -12,6 +12,9 @@
     "demo:consumer": "node spikes/demonstrator/main.mjs",
     "build:consumer": "node spikes/demonstrator/build-macos.mjs",
     "build:chatgpt": "node spikes/browser/chatgpt/build-macos.mjs",
+    "build:verifier": "node spikes/recipient/build-macos.mjs",
+    "verify:evidence": "node spikes/recipient/verify.mjs",
+    "test:recipient-browser": "node test/recipient-browser.mjs",
     "test:consumer-browser": "node test/demonstrator-browser.mjs",
     "test:consumer-archive": "node test/demonstrator-archive.mjs"
   }

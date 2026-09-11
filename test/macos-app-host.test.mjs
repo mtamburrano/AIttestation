@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -8,7 +8,8 @@ import { once } from 'node:events';
 import { createConnection } from 'node:net';
 import { startChromeProtectionRuntime } from '../spikes/browser/chatgpt/bridge-runtime.mjs';
 import { NATIVE_BRIDGE_PROFILE } from '../spikes/browser/chatgpt/native-host.mjs';
-import { canonical } from '../spikes/vault/format.mjs';
+import { canonical, parseCanonical } from '../spikes/vault/format.mjs';
+import { portableBundle } from '../spikes/recipient/portable.mjs';
 
 test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain authority', { skip: process.platform !== 'darwin' }, async t => {
   const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-boundary-test-'));
@@ -36,6 +37,25 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const nativeManifest = JSON.parse(readFileSync(join(output, 'NativeMessagingHosts/ai.provenance.consumer.json')));
   assert.equal(nativeManifest.path, browserHost);
   assert.deepEqual(nativeManifest.allowed_origins, ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/']);
+  const recipient = join(output, 'Recipient/Private Provenance Verifier.app');
+  const recipientResources = join(recipient, 'Contents/Resources/spikes');
+  assert.equal(existsSync(join(recipientResources, 'vault/vault.mjs')), false, 'recipient carries no vault storage/key APIs');
+  assert.equal(existsSync(join(recipientResources, 'anchor/algorand/bin/live')), false, 'recipient carries no network/submission tool');
+  assert.match(identifier(join(recipient, 'Contents/MacOS/provenance-verifier-host')), /Identifier=ai\.provenance\.verifier\.host/);
+  const fixtures = new URL('../spikes/anchor/algorand/proof/testdata/', import.meta.url);
+  const disclosure = parseCanonical(readFileSync(new URL('disclosure.json', fixtures)));
+  const envelope = parseCanonical(readFileSync(new URL('anchor-envelope.json', fixtures)));
+  const checkpoint = JSON.parse(readFileSync(new URL('independent-checkpoint.json', fixtures)));
+  const trust = { profile: checkpoint.profile, network: checkpoint.network, genesis: checkpoint.genesis, checkpoint };
+  const exportFile = join(root, 'public-recorded-evidence.json'), trustFile = join(root, 'separate-checkpoint.json');
+  writeFileSync(exportFile, canonical(portableBundle(disclosure, [envelope]))); writeFileSync(trustFile, JSON.stringify(trust));
+  const guard = join(root, 'deny-network.mjs');
+  writeFileSync(guard, `import net from 'node:net';import tls from 'node:tls';import http from 'node:http';import https from 'node:https';import {syncBuiltinESMExports} from 'node:module';const deny=()=>{throw Error('NETWORK_FORBIDDEN')};net.connect=net.createConnection=tls.connect=http.request=http.get=https.request=https.get=deny;globalThis.fetch=deny;syncBuiltinESMExports();`);
+  const cleanVerification = spawnSync(join(recipient, 'Contents/MacOS/node'), ['--import', guard,
+    join(recipientResources, 'recipient/verify.mjs'), exportFile, trustFile], { cwd: root, env: {}, encoding: 'utf8', timeout: 30000 });
+  assert.equal(cleanVerification.status, 0, cleanVerification.stderr);
+  assert.equal(JSON.parse(cleanVerification.stdout).records[0].anchor, 'CONSENSUS_VERIFIED');
+  assert.equal(JSON.parse(cleanVerification.stdout).records[0].timestamp, 'BLOCK_HASH_BOUND');
   const rejectedBrowserParent = spawnSync(browserHost,
     ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/'], { env: {}, encoding: 'utf8', timeout: 15000 });
   assert.notEqual(rejectedBrowserParent.status, 0, 'native host must reject a non-Chrome Stable parent');
@@ -84,4 +104,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const altered = spawnSync(host, [], { env: {}, encoding: 'utf8', timeout: 15000 });
   assert.equal(altered.error, undefined);
   assert.notEqual(altered.status, 0, 'native host must reject a modified application entrypoint');
+  appendFileSync(join(recipientResources, 'recipient/main.mjs'), '\n// test-only signature violation\n');
+  const alteredRecipient = spawnSync(join(recipient, 'Contents/MacOS/provenance-verifier-host'), [], { env: {}, encoding: 'utf8', timeout: 15000 });
+  assert.notEqual(alteredRecipient.status, 0, 'recipient host must reject a modified entrypoint before opening any UI');
 });

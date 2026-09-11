@@ -198,7 +198,7 @@ export class DurableVault {
   }
   lock() { if (this.#vault) { this.#vault.close(); this.#vault = null; } }
   close() { this.lock(); }
-  capture(bytes) { return this.#require().capture(bytes); }
+  capture(bytes, options) { return this.#require().capture(bytes, options); }
   inspect() { return this.#require().inspect(); }
   read(digest) { return this.#require().read(digest); }
   verifyAll() { return this.#require().verifyAll(); }

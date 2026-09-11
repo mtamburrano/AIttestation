@@ -19,5 +19,15 @@
 <label>Algorand TestNet transaction ID <input id="transaction" pattern="[A-Z2-7]{52}" maxlength="52" autocomplete="off"></label>
 <div class="actions"><button id="confirm" disabled>Observe two operators</button><button id="release" disabled>Release exact sealed version</button></div>
 <p class="limits">Fast success is only SOURCE_CORROBORATED / SOURCE_REPORTED. Timeout or conflict stays pending. A later valid State Proof may upgrade assurance to CONSENSUS_VERIFIED / BLOCK_HASH_BOUND.</p></section>
+<section><h2>4. Local receipts and selective export</h2>
+<p>Receipts, export and recipient verification are free. Select only the receipts you want to share, then inspect the disclosure preview before saving.</p>
+<button id="refresh-history">Refresh receipt history</button><div id="history">No receipts loaded.</div>
+<label><input type="checkbox" id="include-evidence" checked> Include exact selected evidence bytes</label>
+<div class="actions"><button id="preview-export">Preview disclosure</button><button id="save-export" disabled>Save previewed export</button></div>
+<pre id="disclosure-preview">No disclosure preview.</pre>
+<details><summary>Create a redacted derivative</summary>
+<p>Select one receipt above and enter the replacement text. A new signed derivative keeps an explicit source reference. Original bytes stay in your vault and are not added to the derivative export. Original anchor and release assurance are not inherited.</p>
+<textarea id="redacted-text" rows="4" maxlength="262144" placeholder="Text to include in the new derivative"></textarea><button id="redact">Create derivative</button></details>
+<p>Recipients can open the included Private Provenance Verifier app and choose this export plus a separately trusted checkpoint. Verification runs on their device without your vault, account or a company endpoint.</p></section>
 <footer><button id="close">Close local runtime</button></footer>
 </main><script type="module" src="/product-app.js"></script></body></html>

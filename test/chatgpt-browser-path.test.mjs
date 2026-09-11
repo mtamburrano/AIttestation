@@ -17,7 +17,8 @@ import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs
 import { ChatGPTProtectionSession } from '../spikes/browser/chatgpt/session.mjs';
 import { FAST_CONFIRM_PROFILE, collectFastEvidence } from '../spikes/anchor/algorand/fast-confirm.mjs';
 import { MAX_PROTECTED_TEXT_BYTES, validateProtectedTextPayload } from '../spikes/release/runtime.mjs';
-import { canonical } from '../spikes/vault/format.mjs';
+import { canonical, parseCanonical } from '../spikes/vault/format.mjs';
+import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 
 const extensionId = 'hdnjjomhchcpcnikfabcnmlhcehbnhbc';
@@ -281,10 +282,20 @@ test('later State-Proof verification upgrades assurance without rewriting fast r
     transactionId: 'upgrade-transaction' });
   await session.release({ id: version.id, scope, currentText: 'upgrade', editRevision: 1 });
   const attemptBefore = session.runtime.snapshot().attempts[fast.attempt?.attemptId] ?? Object.values(session.runtime.snapshot().attempts)[0];
-  const upgraded = await session.upgradeConsensus({ id: version.id, envelope: Buffer.from('{}'), trust: {} });
+  const request = session.anchorRequest(version.id);
+  const envelope = Buffer.from(canonical({ profile: 'pap-anchor-envelope/1', recordDigest: version.recordDigest,
+    batch: request.batch, adapter: { profile: 'pap-algorand-sp/1', network: 'test-only-network', genesis: 'test-only-genesis' }, proof: { synthetic: true } }));
+  const upgraded = await session.upgradeConsensus({ id: version.id, envelope, trust: {} });
   assert.equal(upgraded.anchor, 'CONSENSUS_VERIFIED'); assert.equal(upgraded.timestamp, 'BLOCK_HASH_BOUND');
   assert.deepEqual(session.runtime.snapshot().attempts[attemptBefore.attemptId].confirmation, attemptBefore.confirmation);
   assert.equal(attemptBefore.confirmation.result, 'SOURCE_CORROBORATED');
+  const preview = session.receipts.prepare({ ids: [version.descriptorId] });
+  const exported = session.receipts.export(preview.previewId), bundle = parseCanonical(exported);
+  assert.equal(bundle.publicProofObjects.length, 1);
+  const receipt = verifyPortable(exported).records.find(r => r.recordDigest === version.recordDigest);
+  assert.equal(receipt.releaseControl, 'CLIENT_ENFORCED_ASSERTION');
+  assert.equal(receipt.anchor, 'INDETERMINATE');
+  assert.equal(receipt.localAssertions.find(a => a.kind === 'release-outcome').authorizationAnchor, 'SOURCE_CORROBORATED');
   await assert.rejects(session.upgradeConsensus({ id: version.id, envelope: Buffer.from('{}'), trust: {} }), /Duplicate/);
 });
 

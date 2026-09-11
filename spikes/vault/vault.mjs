@@ -172,7 +172,7 @@ export class Vault {
       this.#fault('after-commit');
     } catch (e) { if (this.#db.isTransaction) this.#db.exec('ROLLBACK'); throw e; }
   }
-  capture(input) {
+  capture(input, options = {}) {
     const bytes = Buffer.from(input); if (bytes.length > LIMITS.object) fail('LIMIT_EXCEEDED', 'Object size');
     const index = this.#readIndex();
     if (index.records.length >= LIMITS.objects) fail('LIMIT_EXCEEDED', 'Record count');
@@ -185,7 +185,7 @@ export class Vault {
       additions.push([blobId, this.#box(bytes, 'evidence', digest)]);
       index.objects.push({ id: blobId, digest, length: String(bytes.length) });
     }
-    const record = makeRecord(bytes, this.#signing, BigInt(index.checkpoint) + 1n, index.records.at(-1)?.recordDigest ?? null);
+    const record = makeRecord(bytes, this.#signing, BigInt(index.checkpoint) + 1n, index.records.at(-1)?.recordDigest ?? null, options);
     goodRecord(record, bytes);
     index.records.push(record); index.checkpoint = record.manifest.sequence;
     this.#commit(index, additions);

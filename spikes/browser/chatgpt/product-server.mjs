@@ -20,11 +20,11 @@ function reply(response, status, value, type = 'application/json') {
   response.end(type === 'application/json' ? JSON.stringify(value) : value);
 }
 
-async function requestBody(request) {
+async function requestBody(request, limit = BODY_LIMIT) {
   const chunks = []; let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > BODY_LIMIT) throw Error('Local composer request limit exceeded');
+    if (size > limit) throw Error('Local composer request limit exceeded');
     chunks.push(chunk);
   }
   const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
@@ -51,9 +51,13 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
       }
       if (request.method !== 'POST' || request.headers.origin !== origin
           || request.headers.authorization !== `Bearer ${secret}`) throw Error('Unpaired local composer');
-      const data = await requestBody(request); let value;
+      const data = await requestBody(request, request.url === '/upgrade' ? 12 * 1024 * 1024 : BODY_LIMIT); let value;
       switch (request.url) {
         case '/status': value = { browser: runtime.browserState(), protection: runtime.session.status() }; break;
+        case '/receipts': value = runtime.session.receipts.list(); break;
+        case '/receipts/preview': value = runtime.session.receipts.prepare(data); break;
+        case '/receipts/export': value = { content: runtime.session.receipts.export(data.previewId).toString('utf8') }; break;
+        case '/receipts/redact': value = runtime.session.receipts.redact(data); break;
         case '/enroll': value = runtime.session.enroll(data); break;
         case '/freeze': value = await runtime.session.freeze(data); break;
         case '/anchor-request': value = runtime.session.anchorRequest(data.id); break;

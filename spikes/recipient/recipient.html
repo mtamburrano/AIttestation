@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Private Provenance · Verify evidence</title><link rel="stylesheet" href="/recipient.css">
+<body><main><h1>Verify evidence locally</h1>
+<p>Free, offline verification. Select an evidence export and, separately, a checkpoint you trust. Files are processed on this device. No account or subscription is needed.</p>
+<label>Evidence export (up to 16 MiB)<input type="file" id="bundle" accept=".json,application/json"></label>
+<label>Independently selected trust / checkpoint (optional, up to 64 KiB)<input type="file" id="trust" accept=".json,application/json"></label>
+<p>A checkpoint supplied by the sender is not automatically trustworthy. Its authenticity is your separate trust assumption. Without one, anchor assurance remains indeterminate.</p>
+<button id="verify">Verify selected files</button><p id="status" role="status" aria-live="polite">Select local files to begin.</p>
+<div id="results"></div><details><summary>Full dimensional report</summary><pre id="report"></pre></details>
+<p>Signatures authenticate key assertions. Evidence and anchors do not prove authorship, legal rights, provider receipt, complete activity or exact creation time. Redacted derivatives have their own bytes and assurance.</p>
+<button id="close">Close verifier</button></main><script type="module" src="/recipient.js"></script></body></html>

@@ -70,6 +70,15 @@ permission/protocol/provider drift, timeout/conflict, and unsupported attachment
 Use `npm run build:chatgpt -- NEW_OUTPUT_DIRECTORY` after building the pinned Go
 tools to create the app and its not-yet-installed native-host manifest.
 
+The composer also includes [free local receipts and recipient verification](spikes/recipient/README.md):
+selective disclosure previews, immutable local downloads, explicit redacted
+derivatives, and shared public anchor proof objects. The build includes a separate
+recipient app with its own Node/native verifier, no vault/key authority and no
+account requirement. Recipients choose trust independently and can verify supported
+archived anchors offline. Reports keep seven assurance dimensions separate.
+`npm run test:recipient-browser` checks the local export/recipient flow in a fresh,
+network-restricted headless Chrome profile with synthetic evidence.
+
 ## Encrypted evidence slice
 
 The separate [vault library](spikes/vault/README.md) adds encrypted private dedup,

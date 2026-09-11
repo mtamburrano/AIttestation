@@ -2,12 +2,14 @@ import { mkdir, cp, copyFile, writeFile, stat, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { buildRecipient, assertPortableExecutable } from '../../recipient/build-macos.mjs';
 
 if (process.platform !== 'darwin' || process.argv.length !== 3) {
   throw Error('Usage on macOS: node spikes/browser/chatgpt/build-macos.mjs NEW_OUTPUT_DIRECTORY');
 }
 const started = performance.now(), output = resolve(process.argv[2]);
 const root = fileURLToPath(new URL('../../../', import.meta.url));
+assertPortableExecutable(process.execPath);
 await Promise.all(['verify', 'fast-verify', 'fast-observe'].map(name => stat(join(root, 'spikes/anchor/algorand/bin', name))));
 await mkdir(output, { mode: 0o700 });
 const app = join(output, 'Private Provenance.app'), contents = join(app, 'Contents');
@@ -26,7 +28,7 @@ try {
   { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 } finally { await rm(moduleCache, { recursive: true, force: true }); }
 await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node-LICENSE.txt'));
-for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator']) {
+for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator', 'recipient']) {
   await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
     recursive: true,
     filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live') && !source.endsWith('/.DS_Store'),
@@ -50,6 +52,7 @@ await writeFile(join(nativeManifestDirectory, 'ai.provenance.consumer.json'), JS
   allowed_origins: ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/'],
 }, null, 2));
 await cp(join(root, 'spikes/browser/chatgpt/README.md'), join(output, 'Start Here.md'));
+await buildRecipient(join(output, 'Recipient'));
 await writeFile(join(output, 'build-measurement.json'), JSON.stringify({
   platform: process.platform, arch: process.arch, node: process.version,
   buildMs: performance.now() - started, signature: 'AD_HOC_ONLY', notarized: false,

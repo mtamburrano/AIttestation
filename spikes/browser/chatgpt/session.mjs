@@ -7,6 +7,7 @@ import { inclusion, anchorPayload } from '../../anchor/merkle.mjs';
 import { verifyAnchor } from '../../anchor/verifier.mjs';
 import { FAST_CONFIRM_PROFILE, collectFastEvidence, verifyFastConfirmation } from '../../anchor/algorand/fast-confirm.mjs';
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
+import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
@@ -26,6 +27,7 @@ export class ChatGPTProtectionSession {
     this.#collectFast = collectFast;
     this.#verifyFast = verifyFast; this.#verifyArchive = verifyArchive; this.#ownsVault = !vault;
     this.vault = vault ?? new Vault(join(directory, 'vault'), vaultKey, undefined, { create: true });
+    this.receipts = new LocalReceipts(this.vault);
     this.store = new VaultReleaseStore(directory, this.vault); this.fault = fault;
   }
 
@@ -46,7 +48,7 @@ export class ChatGPTProtectionSession {
   #serial(operation) {
     const next = this.#tail.then(operation); this.#tail = next.catch(() => {}); return next;
   }
-  #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value })); }
+  #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value }), { type: 'observation' }); }
   #version(id) { const value = this.#versions.get(id); if (!value) throw Error('Unknown version'); return value; }
   #public(value) {
     const { payload: _payload, ...visible } = value;
@@ -89,7 +91,9 @@ export class ChatGPTProtectionSession {
       currentPayload: payload, protocol: CHATGPT_RELEASE_PROTOCOL };
     version.attempt = continuous ? await this.runtime.releaseContinuous(request) : await this.runtime.release(request);
     version.state = version.attempt.state;
+    const durableAttempt = this.runtime.snapshot().attempts[version.attempt.attemptId];
     this.#event({ kind: 'release-outcome', version: version.id, mode: version.mode,
+      recordDigest: version.recordDigest, releaseClass: durableAttempt.releaseClass, confirmation: durableAttempt.confirmation,
       anchor: version.anchor, timestamp: version.timestamp, ...version.attempt });
   }
 
@@ -129,7 +133,7 @@ export class ChatGPTProtectionSession {
     }
     const receipt = this.#event({
       kind: 'fast-confirmation', version: version.id, recordDigest: version.recordDigest,
-      expectedAnchorPayload: request.payload, report, evidence,
+      expectedAnchorPayload: request.payload, report, ...storePublicProof(this.vault, evidence),
     });
     return { report: structuredClone(report), receiptId: receipt.manifest.eventId };
   }
@@ -233,7 +237,7 @@ export class ChatGPTProtectionSession {
       }
       const receipt = this.#event({ kind: 'consensus-assurance-upgrade', version: id,
         recordDigest: version.recordDigest, priorAnchor: version.anchor, priorTimestamp: version.timestamp,
-        report, envelope: archivedEvidence });
+        report, ...storeAnchor(this.vault, archivedEvidence) });
       version.anchor = report.anchor; version.timestamp = report.timestamp;
       version.assuranceHistory.push({ anchor: report.anchor, timestamp: report.timestamp,
         profile: 'pap-algorand-sp/1', round: report.round, receiptId: receipt.manifest.eventId });

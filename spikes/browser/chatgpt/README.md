@@ -133,3 +133,19 @@ still needs a bounded owner-run check through the installed manifest and actual
 Chrome Stable native-messaging process chain, followed by synthetic text in an
 explicitly designated test/owner ChatGPT account. Automated tests do not establish
 that external parent/DOM boundary; any provider drift disables protection.
+
+## Receipts and recipient export
+
+The local composer retains a selectable receipt history across vault reopen and
+recovery. Preview the exact disclosed records, metadata and bytes before saving;
+unselected activity is not included. Redacted text creates a new signed derivative
+with an explicit source link and independent assurance. Shared archive bodies are
+encrypted once in the vault and included once in each export, with per-record
+references. Fast confirmation stays a historical client assertion for recipients;
+archival verification uses a separately selected checkpoint.
+
+The build's `Recipient` folder contains **Private Provenance Verifier.app** with
+the runtime and native proof verifier needed on a clean Mac. It has no vault,
+Keychain broker, account, subscription or company endpoint. See the
+[recipient format and verification guide](../../recipient/README.md) for limits,
+trust assumptions, supported older exports and the seven report dimensions.
