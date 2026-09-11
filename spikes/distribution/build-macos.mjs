@@ -1,4 +1,4 @@
-import { copyFile, cp, lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -11,12 +11,52 @@ import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { readOwned } from './files.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const extensionRoot = join(root, 'spikes/browser/chatgpt/extension');
+const requiredExtensionIconSizes = ['16', '32', '48', '128'];
 const run = (command, args, extra = {}) => execFileSync(command, args, {
   env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', maxBuffer: 4 * 1024 * 1024, ...extra,
 });
 const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>${Object.entries(values).map(([key, value]) =>
   `<key>${key}</key>${value === true ? '<true/>' : Array.isArray(value)
     ? `<array>${value.map(item => `<string>${item}</string>`).join('')}</array>` : `<string>${value}</string>`}`).join('')}</dict></plist>`;
+
+export function prepareChromeWebStoreManifest(manifest) {
+  const uploadManifest = structuredClone(manifest);
+  delete uploadManifest.key;
+  return uploadManifest;
+}
+
+async function validateExtensionPackage(manifest, directory) {
+  if (typeof manifest.key !== 'string' || !manifest.key) {
+    throw Error('Development extension manifest must retain its public key');
+  }
+  if (!requiredExtensionIconSizes.every(size => typeof manifest.icons?.[size] === 'string')) {
+    throw Error('Chrome Web Store upload requires 16, 32, 48 and 128 pixel icons');
+  }
+  for (const size of requiredExtensionIconSizes) {
+    const icon = manifest.icons[size];
+    if (!icon || icon.startsWith('/') || icon.split('/').includes('..')) throw Error('Extension icon path is unsafe');
+    const info = await stat(join(directory, icon));
+    if (!info.isFile()) throw Error(`Extension icon is not a file: ${icon}`);
+  }
+}
+
+export async function createChromeWebStoreUpload(output) {
+  const staging = await mkdtemp(join(output, '.chrome-web-store-upload-'));
+  try {
+    const packageRoot = join(staging, 'extension');
+    await cp(extensionRoot, packageRoot, { recursive: true });
+    const manifestPath = join(packageRoot, 'manifest.json');
+    const developmentManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    await validateExtensionPackage(developmentManifest, packageRoot);
+    await writeFile(manifestPath, `${JSON.stringify(prepareChromeWebStoreManifest(developmentManifest), null, 2)}\n`);
+    const archive = join(output, 'Chrome-Web-Store-upload.zip');
+    run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', packageRoot, archive]);
+    return archive;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
 
 export function validateBuildConfig(config) {
   const installed = validateInstalledRelease({ profile: 'pap-installed-release/1',
@@ -122,7 +162,7 @@ export async function buildDistribution(output, config = null) {
     run('/usr/bin/codesign', ['--force', '--sign', '-', bundle]);
   }
   await copyFile(join(root, 'spikes/distribution/INSTALL.md'), join(output, 'Install and remove.md'));
-  run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', join(root, 'spikes/browser/chatgpt/extension'), join(output, 'Chrome-Web-Store-upload.zip')]);
+  await createChromeWebStoreUpload(output);
   if (!config) {
     await writeFile(join(output, 'build-provenance.json'), canonical({ profile: 'pap-build-provenance/1',
       signature: 'AD_HOC_ONLY', notarized: false, storeListing: 'NOT_PROVISIONED', source: sources,

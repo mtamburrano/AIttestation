@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { DesktopUpdater } from '../spikes/distribution/updater.mjs';
 import { RELEASE_PROFILE, sha256, verifyRelease } from '../spikes/distribution/release.mjs';
-import { validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
+import { createChromeWebStoreUpload, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
 import { dependencyInventory } from '../spikes/distribution/inventory.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
@@ -168,6 +168,32 @@ test('current, previous, and future compatibility fixtures do not broaden the pi
     if (fixture.supported) assert.doesNotThrow(pair, fixture.name); else assert.throws(pair, /UNSUPPORTED_PATH/, fixture.name);
   }
   assert.equal(matrix.cases[0].adapterProfile, CHATGPT_ADAPTER_PROFILE);
+});
+
+test('Chrome Web Store upload strips only the development key and includes validated icons', { skip: process.platform !== 'darwin' }, async t => {
+  const root = await temporary(t);
+  const archive = await createChromeWebStoreUpload(root);
+  const sourcePath = join(import.meta.dirname, '../spikes/browser/chatgpt/extension/manifest.json');
+  const sourceManifest = JSON.parse(await readFile(sourcePath, 'utf8'));
+  const listing = spawnSync('/usr/bin/unzip', ['-Z1', archive], { encoding: 'utf8' });
+  assert.equal(listing.status, 0, listing.stderr);
+  const uploadManifestResult = spawnSync('/usr/bin/unzip', ['-p', archive, 'manifest.json'], { encoding: 'utf8' });
+  assert.equal(uploadManifestResult.status, 0, uploadManifestResult.stderr);
+  const uploadManifest = JSON.parse(uploadManifestResult.stdout);
+  assert.equal(typeof sourceManifest.key, 'string');
+  assert.equal(uploadManifest.key, undefined);
+  assert.deepEqual(uploadManifest.icons, sourceManifest.icons);
+  assert.deepEqual(uploadManifest.permissions, ['nativeMessaging']);
+  assert.deepEqual(uploadManifest.host_permissions, ['https://chatgpt.com/*']);
+  for (const icon of Object.values(sourceManifest.icons)) {
+    assert.match(listing.stdout, new RegExp(`(?:^|\\n)${icon.replaceAll('.', '\\.')}(?:\\n|$)`));
+    const sourceIcon = await readFile(join(import.meta.dirname, '../spikes/browser/chatgpt/extension', icon));
+    const uploadIcon = spawnSync('/usr/bin/unzip', ['-p', archive, icon]);
+    assert.equal(uploadIcon.status, 0, uploadIcon.stderr?.toString());
+    assert.deepEqual(uploadIcon.stdout, sourceIcon);
+  }
+  const unchangedSource = JSON.parse(await readFile(sourcePath, 'utf8'));
+  assert.deepEqual(unchangedSource, sourceManifest);
 });
 
 test('release placeholders cannot produce a production configuration and inventory pins all direct and transitive Go dependencies', async () => {

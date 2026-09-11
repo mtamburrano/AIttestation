@@ -5,6 +5,12 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApFngn/kYPMPQciqSHfNy12QfG2FmNfXn8ZYcl7RWw4LZWnYgZ2Zd/MlYWc3saCUpY8FCVg22ZUi90l9zEDYbEBP972rixuvz+nd02USDg4RpSNtG/+WlMs9LC1VRNEqGBXjlq5uIaRvbLBiZV56jd9CnpOMk8hp8pwEm+IFUWzCMmkbPRcoLgGmLPZ5ujEV1j2itdN1MNhJA4RizdzgQjTWgyO4hWkvhDXG0JT/XRvAgFW/delFNPBZthyQRrT4A0Ybv+vCJr+f4XNBZr+nZDBGcRnCGnzrdjDDRr67nGzpTV+kqk402poLePOaDifdURNQbSRr1BzFFwG9BTDBmIQIDAQAB",
   "minimum_chrome_version": "153",
   "description": "Releases already-authorized text from the local trusted composer to one supported ChatGPT tab.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "nativeMessaging"
   ],

@@ -63,20 +63,30 @@ validation is required.
    configuration. The profile name is reserved; credentials have not been
    validated. Submission sends only the built public artifacts to Apple.
 4. Create the Chrome Web Store developer account and upload
-   `Chrome-Web-Store-upload.zip` as a draft. In the dashboard, verify its public
-   key produces `hdnjjomhchcpcnikfabcnmlhcehbnhbc`. Complete the listing, privacy
-   disclosures, permission justification and store review. Only after the
-   listing exists and installation succeeds may `storeListingVerified` be true.
-   If the store assigns a different key, stop and update all pinned origins/native
-   checks with tests; do not substitute an unpacked extension as release evidence.
-5. Provision an HTTPS update origin you control. Reserve `/desktop/stable.json`
+   `Chrome-Web-Store-upload.zip` as a draft. The upload package intentionally has
+   no `key`, so the Web Store can assign the listing identity. Record the assigned
+   Item ID and public key from the draft before changing any repository files. The
+   package must retain only `nativeMessaging` and `https://chatgpt.com/*`, with the
+   declared icon assets; a successful upload is not identity approval.
+5. Under review, compare the assigned identity with the intended release. Once
+   approved, repin the keyed development manifest to the assigned public key and
+   update the native-messaging allowed origin, adapter extension-ID constants and
+   current/previous compatibility fixtures together. Run the relevant regression
+   suite and record the Item ID/public-key match. Do not replace the upload package
+   with the keyed development package, and do not leave a stale identity in any
+   pinned check.
+6. Complete the listing, privacy disclosures, permission justification and store
+   review. Set `storeListingVerified` true only after the listing is published and
+   installation succeeds with the reviewed identity; draft creation or upload
+   success alone must never set it.
+7. Provision an HTTPS update origin you control. Reserve `/desktop/stable.json`
    and `/desktop/Private-Provenance-VERSION-SEQUENCE.dmg`; redirects, credentials,
    query strings and compressed transfer representations are rejected. Generate
    an Ed25519 release-signing key outside VCS, owner-readable only (mode 0600),
    and record the public JWK `x` value. Keep an offline recovery copy under the
    operator's control. Rotating this root requires a separately reviewed trust
    transition; an unsigned server response cannot rotate it.
-6. Supply an absolute Go executable and explicit pre-populated module cache.
+8. Supply an absolute Go executable and explicit pre-populated module cache.
    Generate the approval inventory with `npm run build:distribution -- --inventory
    /absolute/go /absolute/new-dependency-inventory.json`; this prints its digest
    and includes the exact Go compiler identity. The prepare-only inventory has
@@ -90,7 +100,7 @@ validation is required.
    binary or module pin invalidates it. No release security/license approval is
    currently supplied. Resolve the Falcon wrapper/module-wide license coverage
    gap described in `DEPENDENCIES.md` before asserting license approval.
-7. Complete the signed installed checks below in **Private Provenance Test**,
+9. Complete the signed installed checks below in **Private Provenance Test**,
    using a specifically designated ChatGPT test account and synthetic text only.
    No live test has been run, and no existing conversations may be inspected.
    Do not reuse a default Chrome profile. Provision the account if that dedicated
