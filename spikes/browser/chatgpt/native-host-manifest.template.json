@@ -4,6 +4,6 @@
   "path": "__ABSOLUTE_APP_BUNDLE__/Contents/MacOS/provenance-browser-host",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/"
+    "chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/"
   ]
 }

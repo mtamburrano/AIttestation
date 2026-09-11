@@ -49,7 +49,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.ok((statSync(peerValidator).mode & 0o111) !== 0, 'peer validator must be executable');
   const nativeManifest = JSON.parse(readFileSync(join(output, 'NativeMessagingHosts/ai.provenance.consumer.json')));
   assert.equal(nativeManifest.path, browserHost);
-  assert.deepEqual(nativeManifest.allowed_origins, ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/']);
+  assert.deepEqual(nativeManifest.allowed_origins, ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/']);
   const recipient = join(output, 'Recipient/Private Provenance Verifier.app');
   const recipientResources = join(recipient, 'Contents/Resources/spikes');
   for (const bundle of [app, recipient]) {
@@ -74,7 +74,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.equal(JSON.parse(cleanVerification.stdout).records[0].anchor, 'CONSENSUS_VERIFIED');
   assert.equal(JSON.parse(cleanVerification.stdout).records[0].timestamp, 'BLOCK_HASH_BOUND');
   const rejectedBrowserParent = spawnSync(browserHost,
-    ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/'], { env: {}, encoding: 'utf8', timeout: 15000 });
+    ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/'], { env: {}, encoding: 'utf8', timeout: 15000 });
   assert.notEqual(rejectedBrowserParent.status, 0, 'native host must reject a non-Chrome Stable parent');
 
   const bridgeDirectory = join(root, 'stolen-token-runtime');
@@ -88,7 +88,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
     const directClosed = new Promise(resolve => direct.once('close', resolve));
     direct.on('error', () => {});
     direct.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile: NATIVE_BRIDGE_PROFILE,
-      extensionOrigin: 'chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/',
+      extensionOrigin: 'chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/',
       runtimeEpoch: record.runtimeEpoch, token: record.token })}\n`);
     await directClosed;
     assert.equal(bridge.browserState(), null,

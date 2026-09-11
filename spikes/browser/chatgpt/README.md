@@ -64,9 +64,10 @@ build. The service database and sponsor executable are never bundled in the app.
 ## Least-authority Chrome adapter
 
 The Manifest V3 extension has only `nativeMessaging` and the single
-`https://chatgpt.com/*` host permission. Its public manifest key pins the development
-extension ID. Host-scoped tab access replaces the broad `tabs` permission;
-incognito access is disabled. This development ID is not a provisioned Web Store
+`https://chatgpt.com/*` host permission. Its public manifest key pins the assigned
+Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
+that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
+access is disabled. The draft item is not yet a published or verified Web Store
 listing. Adapter profile version 2 rejects the older permission contract.
 Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts

@@ -58,7 +58,7 @@ test('consented integration is reversible, idempotent, export-aware, and preserv
   assert.equal((await lifecycle.enable()).integration, 'ENABLED');
   const unrelated = join(root, 'chrome-test-only/NativeMessagingHosts/unrelated.json'); await writeFile(unrelated, 'untouched');
   const manifest = JSON.parse(await readFile(lifecycle.manifestPath));
-  assert.deepEqual(manifest.allowed_origins, ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/']);
+  assert.deepEqual(manifest.allowed_origins, ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/']);
   await assert.rejects(lifecycle.remove({ exportDecision: 'keep-local' }), /EXPORT_OPPORTUNITY/);
   await lifecycle.record('exportOffered');
   assert.deepEqual(await lifecycle.remove({ exportDecision: 'keep-local' }), { integration: 'DISABLED', evidence: 'RETAINED', keys: 'RETAINED' });
@@ -159,8 +159,8 @@ test('missing or incompatible migration metadata fails closed before newer or ol
 test('current, previous, and future compatibility fixtures do not broaden the pinned protected path', async () => {
   const matrix = JSON.parse(await readFile(new URL('../spikes/distribution/fixtures/compatibility.json', import.meta.url)));
   for (const fixture of matrix.cases) {
-    const adapter = new ChatGPTChromeAdapter(() => {}, { extensionId: 'hdnjjomhchcpcnikfabcnmlhcehbnhbc' });
-    const pair = () => adapter.pair({ extensionId: 'hdnjjomhchcpcnikfabcnmlhcehbnhbc', adapterProfile: fixture.adapterProfile,
+    const adapter = new ChatGPTChromeAdapter(() => {}, { extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca' });
+    const pair = () => adapter.pair({ extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca', adapterProfile: fixture.adapterProfile,
       releaseProtocol: CHATGPT_RELEASE_PROTOCOL, pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session',
       browser: { product: 'Google Chrome', channel: 'stable', major: fixture.chromeMajor },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.9' },

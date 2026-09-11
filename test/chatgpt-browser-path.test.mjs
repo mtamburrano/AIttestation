@@ -25,7 +25,7 @@ import { ManagedAnchoringClient } from '../spikes/managed/client.mjs';
 import { startManagedServer } from '../spikes/managed/http.mjs';
 import { MANAGED_NETWORK, managedError } from '../spikes/managed/protocol.mjs';
 
-const extensionId = 'hdnjjomhchcpcnikfabcnmlhcehbnhbc';
+const extensionId = 'medilhopfckldjgdnchfkpmfmfnkadca';
 const browserSessionId = 'browser-session-0000000000000001';
 const fastTrust = {
   profile: FAST_CONFIRM_PROFILE, network: 'testnet-v1.0', genesis: 'test-genesis',

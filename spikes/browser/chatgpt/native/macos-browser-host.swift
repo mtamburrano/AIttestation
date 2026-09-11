@@ -5,7 +5,7 @@ import Security
 private let applicationIdentifier = "ai.provenance.consumer.host"
 private let chromeIdentifier = "com.google.Chrome"
 private let chromeTeamIdentifier = "EQHXZ8M8AV"
-private let extensionOrigin = "chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/"
+private let extensionOrigin = "chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/"
 
 private enum HostFailure: Error { case rejected, spawn }
 

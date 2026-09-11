@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Private Provenance — ChatGPT release adapter",
   "version": "1.1.0",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApFngn/kYPMPQciqSHfNy12QfG2FmNfXn8ZYcl7RWw4LZWnYgZ2Zd/MlYWc3saCUpY8FCVg22ZUi90l9zEDYbEBP972rixuvz+nd02USDg4RpSNtG/+WlMs9LC1VRNEqGBXjlq5uIaRvbLBiZV56jd9CnpOMk8hp8pwEm+IFUWzCMmkbPRcoLgGmLPZ5ujEV1j2itdN1MNhJA4RizdzgQjTWgyO4hWkvhDXG0JT/XRvAgFW/delFNPBZthyQRrT4A0Ybv+vCJr+f4XNBZr+nZDBGcRnCGnzrdjDDRr67nGzpTV+kqk402poLePOaDifdURNQbSRr1BzFFwG9BTDBmIQIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAru1f1wdcIRFxvLi0Vx0iuuU8WoX5eVUimIqFb48sT673ULWn8+xP+Ua8FRWyLn1uK5oC9Hc6ddo8tzKyyNz7NVUXx8bzUF8Z2Oi5WsUYoAlwHr8KLRGuTk5CM9rZF4rLyGATGPHeyk9xmie+TyBFeH6LjVxijaW/TeZm8EB5cxf5MFiZEHFxaxBYSHsKP9YD70qLpaOo4vtcjdpcTHdAjMIqd3qsAlm9x/K4wMvUOui+pmSieD0y4TTDKPs9T9Y7YgqV/tx3vXJ5dMOshrtV8jw/QDOv/QpWB0oy3mMTFDrQ+VMHM8OVTiixNlvI+7Wptc42tcIUu2gVArKKHNhoEQIDAQAB",
   "minimum_chrome_version": "153",
   "description": "Releases already-authorized text from the local trusted composer to one supported ChatGPT tab.",
   "icons": {

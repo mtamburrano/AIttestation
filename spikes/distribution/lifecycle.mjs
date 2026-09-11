@@ -4,7 +4,7 @@ import { canonical, keys, parseCanonical } from '../vault/format.mjs';
 import { atomicWrite, ownedDirectory, readOwned, syncDirectory } from './files.mjs';
 import { distributionError } from './release.mjs';
 
-export const EXTENSION_ID = 'hdnjjomhchcpcnikfabcnmlhcehbnhbc';
+export const EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
 export const STORE_URL = `https://chromewebstore.google.com/detail/${EXTENSION_ID}`;
 const EVENTS = ['launch', 'integrationEnabled', 'storeOpened', 'paired', 'exportOffered', 'integrationRemoved', 'updateChecked', 'updateDownloaded'];
 

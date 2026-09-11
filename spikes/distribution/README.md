@@ -3,7 +3,9 @@
 The distribution implementation is local and testable, but production signing,
 notarization, Chrome Web Store publication and the installed Chrome/provider
 boundary have not been validated. `installed-release.json` is deliberately `null`.
-The existing extension ID identifies development code, not a store listing.
+The keyed development manifest matches the assigned Chrome Web Store draft item
+`medilhopfckldjgdnchfkpmfmfnkadca`; publication and installed validation remain
+required.
 Do not promote a development build based on passing synthetic fixtures.
 
 ## Build inputs and outputs
@@ -64,17 +66,17 @@ validation is required.
    validated. Submission sends only the built public artifacts to Apple.
 4. Create the Chrome Web Store developer account and upload
    `Chrome-Web-Store-upload.zip` as a draft. The upload package intentionally has
-   no `key`, so the Web Store can assign the listing identity. Record the assigned
-   Item ID and public key from the draft before changing any repository files. The
-   package must retain only `nativeMessaging` and `https://chatgpt.com/*`, with the
-   declared icon assets; a successful upload is not identity approval.
-5. Under review, compare the assigned identity with the intended release. Once
-   approved, repin the keyed development manifest to the assigned public key and
-   update the native-messaging allowed origin, adapter extension-ID constants and
-   current/previous compatibility fixtures together. Run the relevant regression
-   suite and record the Item ID/public-key match. Do not replace the upload package
-   with the keyed development package, and do not leave a stale identity in any
-   pinned check.
+   no `key`, so the Web Store can assign the listing identity. The assigned draft
+   Item ID is `medilhopfckldjgdnchfkpmfmfnkadca`, and its public key is pinned in
+   the keyed development manifest. The package must retain only `nativeMessaging`
+   and `https://chatgpt.com/*`, with the declared icon assets; a successful upload
+   is not identity approval.
+5. Under review, compare the assigned identity with the intended release. The
+   keyed development manifest, native-messaging allowed origin, adapter extension
+   ID constants and current/previous compatibility fixtures are now pinned to that
+   assigned identity. Run the relevant regression suite and record the Item
+   ID/public-key match. Do not replace the upload package with the keyed development
+   package, and do not leave a stale identity in any pinned check.
 6. Complete the listing, privacy disclosures, permission justification and store
    review. Set `storeListingVerified` true only after the listing is published and
    installation succeeds with the reviewed identity; draft creation or upload

@@ -54,7 +54,7 @@ const nativeManifestDirectory = join(output, 'NativeMessagingHosts'); await mkdi
 await writeFile(join(nativeManifestDirectory, 'ai.provenance.consumer.json'), JSON.stringify({
   name: 'ai.provenance.consumer', description: 'Private Provenance fixed-purpose ChatGPT bridge',
   path: join(contents, 'MacOS/provenance-browser-host'), type: 'stdio',
-  allowed_origins: ['chrome-extension://hdnjjomhchcpcnikfabcnmlhcehbnhbc/'],
+  allowed_origins: ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/'],
 }, null, 2));
 await cp(join(root, 'spikes/browser/chatgpt/README.md'), join(output, 'Start Here.md'));
 await buildRecipient(join(output, 'Recipient'));
