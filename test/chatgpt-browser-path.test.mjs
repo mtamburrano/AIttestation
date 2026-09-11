@@ -571,6 +571,53 @@ test('wallet-free managed flow sends only a blinded root and old exports survive
   assert.deepEqual(session.receipts.export(after.previewId), exported, 'new failures never rewrite old evidence/export bytes');
 });
 
+test('managed retry replays the exact signed transaction after an ambiguous broadcast', async t => {
+  const serviceRoot = await mkdtemp(join(tmpdir(), 'provenance-managed-retry-test-'));
+  let now = Date.parse('2026-09-11T12:00:00Z');
+  const prepared = [], broadcasts = [];
+  const service = new ManagedSponsorship(serviceRoot, { now: () => now, sponsor: {
+    async prepare(payload) {
+      prepared.push(payload);
+      return { network: MANAGED_NETWORK, transactionId: 'B'.repeat(52),
+        signedTransaction: Buffer.from('frozen signed transaction').toString('base64'), feeMicroAlgos: 1000 };
+    },
+    async broadcast(value) {
+      broadcasts.push(structuredClone(value));
+      if (broadcasts.length === 1) throw Error('ambiguous upstream broadcast');
+    },
+  } });
+  const server = await startManagedServer(service); let closed = false;
+  t.after(async () => { if (!closed) await server.close(); service.close(); await rm(serviceRoot, { recursive: true, force: true }); });
+  const account = service.provision({ paidThrough: now + 100000 });
+  const client = new ManagedAnchoringClient({ origin: server.origin, keyStore: new MemoryKeyStore(), allowLoopbackForTests: true });
+  await client.connect(account.accessCode);
+  let observationPending = true;
+  const { session, scope } = await fixture(t, { managed: client,
+    collectFast: async ({ transactionId }) => {
+      assert.equal(transactionId, 'B'.repeat(52));
+      if (observationPending) throw Error('PENDING_FAST_CONFIRMATION: independent source unavailable');
+      return { synthetic: true, transactionId };
+    } });
+  const text = 'PRIVATE_RETRY_CANARY_e\u0301☕';
+  const version = await session.freeze({ text, mode: 'Sealed', scope, editRevision: 1 });
+  const args = { id: version.id, scope, currentText: text, editRevision: 1 };
+
+  await assert.rejects(session.anchorManaged(args), /PENDING_FAST_CONFIRMATION/);
+  assert.equal(broadcasts.length, 1, 'the first service call makes one ambiguous broadcast');
+  assert.equal(prepared.length, 1, 'the ambiguous result does not prepare a replacement transaction');
+  const firstBroadcast = canonical(broadcasts[0]);
+
+  now += 10001;
+  observationPending = false;
+  const confirmed = await session.anchorManaged(args);
+  assert.equal(confirmed.managed.transactionId, 'B'.repeat(52));
+  assert.equal(confirmed.anchor, 'SOURCE_CORROBORATED');
+  assert.equal(confirmed.state, 'SEALED_NOT_SENT');
+  assert.equal(broadcasts.length, 2, 'an explicit retry reaches the service replay path');
+  assert.equal(prepared.length, 1, 'replay reuses the originally prepared transaction');
+  assert.equal(canonical(broadcasts[1]), firstBroadcast, 'replay broadcasts the exact same signed bytes');
+});
+
 test('outage, exhausted quota and unpaid account preserve the semantics of all three modes', async t => {
   for (const failure of ['SERVICE_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'UNPAID']) {
     for (const mode of ['Continuous', 'Sealed', 'Always Protect']) {

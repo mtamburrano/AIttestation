@@ -176,19 +176,27 @@ export class ChatGPTProtectionSession {
         this.#adapter.assertEligible(scope);
       }
       if (managed) {
-        if (!version.managed?.transactionId) {
-          try {
-            if (!this.#managed) throw managedError('NOT_CONFIGURED');
-            const submitted = await this.#managed.submit(this.anchorRequest(id).payload);
-            if (!TRANSACTION_PATTERN.test(submitted.transactionId ?? '')) throw managedError('SERVICE_UNAVAILABLE');
-            version.managed = { state: 'SUBMITTED_OR_UNKNOWN', transactionId: submitted.transactionId };
+        const savedTransactionId = version.managed?.transactionId;
+        try {
+          if (!this.#managed) throw managedError('NOT_CONFIGURED');
+          const submitted = await this.#managed.submit(this.anchorRequest(id).payload);
+          if (!TRANSACTION_PATTERN.test(submitted.transactionId ?? '')
+              || (savedTransactionId && submitted.transactionId !== savedTransactionId)) {
+            throw managedError('SERVICE_UNAVAILABLE');
+          }
+          version.managed = { state: 'SUBMITTED_OR_UNKNOWN', transactionId: savedTransactionId ?? submitted.transactionId };
+          if (!savedTransactionId) {
             this.#event({ kind: 'managed-submission', version: id, recordDigest: version.recordDigest,
               transactionId: submitted.transactionId, claim: 'SUBMISSION_ONLY; independent confirmation required' });
-          } catch (error) {
-            const safe = managedError(error.code);
+          }
+        } catch (error) {
+          const safe = managedError(error.code);
+          if (!savedTransactionId) {
             version.managed = { state: safe.code, message: safe.message };
             return this.#public(version);
           }
+          // A saved transaction may already have landed; service retry failure must not block its independent observation.
+          version.managed = { state: safe.code, message: safe.message, transactionId: savedTransactionId };
         }
         transactionId = version.managed.transactionId;
       }
