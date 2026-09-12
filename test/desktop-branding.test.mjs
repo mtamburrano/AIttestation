@@ -34,6 +34,13 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
   delete sources['spikes/distribution/release-inputs.mjs'];
   assert.deepEqual(sources['spikes/distribution/preflight.mjs'], ['pap-release-preflight/1']);
   delete sources['spikes/distribution/preflight.mjs'];
+  assert.deepEqual(sources['spikes/distribution/verify-artifacts.mjs'], [
+    'ai.provenance.consumer', 'ai.provenance.consumer.host', 'ai.provenance.consumer.json', 'ai.provenance.consumer.json',
+    'ai.provenance.keychain-helper', 'ai.provenance.verifier.host', 'medilhopfckldjgdnchfkpmfmfnkadca',
+    'pap-artifact-policy-verification/1', 'pap-build-provenance/1', 'pap-dependency-inventory/2',
+    'pap-installed-release/1', 'pap-release-candidate/1',
+  ]);
+  delete sources['spikes/distribution/verify-artifacts.mjs'];
   assert.deepEqual(sources, baseline.sources, 'Technical identities require a separate reviewed migration');
   for (const [file, expected] of Object.entries(baseline.json)) {
     const actual = JSON.parse(await read(file));

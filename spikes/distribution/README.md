@@ -121,6 +121,108 @@ regressions using fresh temporary Git repositories, synthetic toolchains,
 generated test keys and CMS profiles. Tests do not use operator release configs,
 Apple credentials, an existing module cache or a browser/profile.
 
+### Offline artifact policy verification
+
+From a trusted reviewed checkout, inspect the **complete prepared output
+directory** with a separate public expectation file:
+
+```sh
+npm run --silent verify:distribution -- /absolute/prepared-output /absolute/public-artifact-policy.json
+```
+
+For an environment without inherited Node options or package-manager hooks:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin /absolute/trusted-node/bin/node \
+  spikes/distribution/verify-artifacts.mjs /absolute/prepared-output /absolute/public-artifact-policy.json
+```
+
+The command writes one bounded JSON report to stdout; exit status 0 means the
+artifact policy passed, and 1 means rejection. It reads local regular files only,
+does not execute/import bundled code, and does not mount a disk image, install,
+access Keychain or production state, or contact any service. Use canonical paths
+without symlinked ancestors. The expectation file is public JSON, **not** an
+operator release config, approval file or private key. An RC example is:
+
+```json
+{
+  "releaseChannel": "release-candidate",
+  "sourceDigest": "REPLACE_WITH_THE_64_HEX_DIGEST_OF_THE_REVIEWED_SOURCE",
+  "sequence": 4,
+  "version": "1.2.0",
+  "teamId": "REPLACE_WITH_YOUR_TEN_CHARACTER_TEAM_ID",
+  "updateOrigin": "https://updates.example.invalid",
+  "updatePublicKey": "REPLACE_WITH_YOUR_43_CHARACTER_ED25519_PUBLIC_JWK_X"
+}
+```
+
+Use the intended channel, version/sequence, team, origin and public root from the
+reviewed release inputs. Obtain `sourceDigest` from the successful preflight for
+those exact reviewed inputs, or calculate it directly from that checkout:
+
+```sh
+node --input-type=module -e 'import { sourceInventory } from "./spikes/distribution/inventory.mjs"; console.log((await sourceInventory(process.cwd())).sha256)'
+```
+
+Do not copy expectations from an untrusted package: an attacker can rewrite
+unsigned metadata and its hashes together. For production, change
+`releaseChannel` to `production` and specify the intended production values. For
+development, supply exactly `releaseChannel: "development"` and `sourceDigest`;
+omit the signed-release fields. Older prepare outputs without bundle inventories
+fail closed and must be rebuilt.
+
+The verifier checks these independent relationships:
+
+- Channel/class, signing/notarization **claims**, measurements and file policy
+  agree. RC has matching outer/bundled candidate metadata, a null installed-release
+  marker, disabled updates, candidate Finder labels and guides, and no stable
+  manifest. Its version and sequence must match expectations. Development cannot
+  inherit either release channel. Production requires the installed production
+  contract and a current Ed25519-signed stable manifest under the expected root.
+- The source inventory matches the expected source digest; dependency inventory,
+  complete bundle inventories, copied source and notices agree. Runtime/updater
+  source is tied to that same reviewed digest, so a null marker alone cannot
+  establish disabled updates. Production also authenticates the provenance and
+  dependency digests and the exact disk-image hash/size; RC checks its measured
+  disk-image hash/size. The recorded Go build plan and input-tree digests are
+  checked without requiring the compiler, module cache or approval source file.
+- Bundle/helper IDs, versions and executable paths retain the fixed identities.
+  The keyed extension derives the pinned Store ID, native messaging allows only
+  that origin, and the upload ZIP contains the same extension bytes with only
+  the manifest's development key removed. Store packaging omits resource forks,
+  extended attributes, quarantine and ACL metadata. Archive inspection occurs in memory.
+- Extra channel files, stale staging, unsupported paths, links, hard links,
+  special files, duplicate JSON/plist fields and ambiguous ZIP entries reject.
+  Known private-key/credential filenames, PEM and DER private keys, private JWKs,
+  token data and approval source JSON reject even under renamed files; compressed
+  Store ZIP contents receive the same checks. The complete directory is checked
+  again before success to catch changes during inspection.
+
+`pap-artifact-policy-verification/1` reports contain only fixed check/failure
+codes, the validated channel and successful public digests. A failure clears
+digests/update status, marks later checks `NOT_RUN`, and never prints input paths,
+secret contents or raw errors. Inspection is bounded to 50,000 filesystem entries,
+32 directory levels, 1 GiB per file, 6 GiB total, 256 MiB retained small-file data,
+16 MiB per JSON/Store ZIP and 256 ZIP entries. The CLI has a two-minute deadline.
+
+A passing report is **not release approval**. It always reports
+`releaseReady: false`, `appleTrust: "NOT_CHECKED"` and
+`diskImageContents: "NOT_INSPECTED"`. Disk images are opaque hashed files here:
+their internal payload and its correspondence to the adjacent bundles require a
+separate inspection. Arbitrarily encoded secrets and filesystem extended
+attributes are outside this scanner. Apple signing/notarization, provisioning
+trust/expiry, current independent security/license approval, Store publication
+and installed behavior remain separate release gates. Synthetic fixtures can
+pass the artifact policy without possessing Apple signatures.
+
+`npm run test:distribution` includes valid and tampered synthetic outputs for all
+three channels, a real `ditto` Store ZIP check, and a macOS check with filesystem
+writes, network, Mach lookups and Apple Events denied. The broader Node suite also
+checks a newly prepared ad-hoc app against a source digest captured before its
+build. All test state and generated keys stay in fresh test-only temporary
+directories; no operator release input, installed state or external account is
+used.
+
 ### Pre-publication release candidates
 
 The candidate disk image is named `Attestamp-Release-Candidate-VERSION-SEQUENCE.dmg`.

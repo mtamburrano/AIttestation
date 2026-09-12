@@ -10,11 +10,14 @@ import { startChromeProtectionRuntime } from '../spikes/browser/chatgpt/bridge-r
 import { NATIVE_BRIDGE_PROFILE } from '../spikes/browser/chatgpt/native-host.mjs';
 import { canonical, parseCanonical } from '../spikes/vault/format.mjs';
 import { portableBundle } from '../spikes/recipient/portable.mjs';
+import { sourceInventory } from '../spikes/distribution/inventory.mjs';
+import { verifyDistribution } from '../spikes/distribution/verify-artifacts.mjs';
 
 test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain authority', { skip: process.platform !== 'darwin' }, async t => {
   const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-boundary-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const output = join(root, 'isolated-build');
+  const expectedSource = await sourceInventory(join(import.meta.dirname, '..'));
   const build = spawnSync(process.execPath, ['spikes/distribution/build-macos.mjs', '--prepare', output], {
     cwd: import.meta.dirname + '/..', env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 120000,
   });
@@ -27,6 +30,8 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.equal(provenance.storeListing, 'NOT_PROVISIONED'); assert.equal(provenance.sourceRebuiltNativeTools, false);
   assert.ok(provenance.source.files.some(file => file.path === 'spikes/distribution/updater.mjs'));
   assert.equal(existsSync(join(output, 'Chrome-Web-Store-upload.zip')), true);
+  const artifactPolicy = await verifyDistribution(output, { releaseChannel: 'development', sourceDigest: expectedSource.sha256 });
+  assert.equal(artifactPolicy.status, 'PASSED', JSON.stringify(artifactPolicy));
   const productionCompile = spawnSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(root, 'swift-release-cache'),
     '-O', '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-framework', 'Security',
     join(import.meta.dirname, '../spikes/vault/native/macos-app-host.swift'), '-o', join(root, 'release-host-compile-only')],

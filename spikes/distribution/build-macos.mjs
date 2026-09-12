@@ -55,7 +55,9 @@ export async function createChromeWebStoreUpload(output) {
     await validateExtensionPackage(developmentManifest, packageRoot);
     await writeFile(manifestPath, `${JSON.stringify(prepareChromeWebStoreManifest(developmentManifest), null, 2)}\n`);
     const archive = join(output, 'Chrome-Web-Store-upload.zip');
-    run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', packageRoot, archive]);
+    // Store uploads contain extension files only; resource forks and extended
+    // attributes would add unreviewed AppleDouble entries to the public ZIP.
+    run('/usr/bin/ditto', ['-c', '-k', '--norsrc', '--noextattr', '--noqtn', '--noacl', packageRoot, archive]);
     return archive;
   } finally {
     await rm(staging, { recursive: true, force: true });
@@ -151,6 +153,7 @@ export async function buildDistribution(output, config = null) {
       releaseChannel: 'development', releaseClass: 'DEVELOPMENT', signature: 'AD_HOC_ONLY', notarized: false,
       storeListing: 'NOT_PROVISIONED', source: sources,
       dependencyDigest, sourceRebuiltNativeTools: false,
+      bundles: { application: await fileInventory(app), verifier: await fileInventory(recipient) },
       manualMeasurements: { osPermissionSteps: null, storePermissionSteps: null, installedPairingMs: null } }));
     return { output, releaseReady: false };
   }
