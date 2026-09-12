@@ -123,9 +123,13 @@ fresh build from a `releaseChannel: "production"` config with
    (SHA-256 of the exact canonical inventory), `reviewer`, `securityApproved: true`,
    `licensesApproved: true`, and an ISO `expiresAt`. This file is an operator
    release assertion, not an independently cryptographic audit. A changed Node
-   binary or module pin invalidates it. No release security/license approval is
-   currently supplied. Resolve the Falcon wrapper/module-wide license coverage
-   gap described in `DEPENDENCIES.md` before asserting license approval.
+   binary, Go executable, module pin, checksum file or bundled notice invalidates
+   it. No release security/license approval is currently supplied. Falcon's
+   module-wide MIT notice and deterministic-mode attribution are retained in
+   `THIRD_PARTY_NOTICES.md`. The inspected Node v22.23.1 and Go 1.25.1 tools still
+   require patched, supported replacements as described in `DEPENDENCIES.md`.
+   Regenerate the inventory with the selected release tools and complete their
+   security/license review before asserting approval.
 9. Complete the signed installed checks below in **Private Provenance Test**,
    using a specifically designated ChatGPT test account and synthetic text only.
    No live test has been run, and no existing conversations may be inspected.

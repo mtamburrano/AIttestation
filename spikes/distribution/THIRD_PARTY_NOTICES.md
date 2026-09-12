@@ -161,7 +161,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-## golang.org/x/crypto v0.45.0
+## golang.org/x/crypto v0.52.0
 
 Copyright 2009 The Go Authors.
 
@@ -192,7 +192,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-## golang.org/x/sys v0.38.0
+## golang.org/x/sys v0.45.0
 
 Copyright 2009 The Go Authors.
 
@@ -223,14 +223,16 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-## Falcon verification source notice
+## github.com/algorand/falcon v0.0.0-20220727072124-02a2a64c4414
 
-Pinned module: github.com/algorand/falcon v0.0.0-20220727072124-02a2a64c4414.
-This MIT notice is present in vrfy.c and other upstream Falcon sources.
-No top-level module license was found in this cached version. Coverage of
-the deterministic wrapper must be resolved before release license approval.
+Source: [README.txt at commit 02a2a64c44147775e6870b2d957f2cfda1437895](https://github.com/algorand/falcon/blob/02a2a64c44147775e6870b2d957f2cfda1437895/README.txt).
+The module-wide README licenses this implementation, including its deterministic
+mode, under MIT. It credits Thomas Pornin for the main code and David Lazar for
+the deterministic mode, with input from Chris Peikert and others at Algorand, Inc.
+The verification sources, including vrfy.c, additionally retain the
+Copyright (c) 2017-2019 Falcon Project notice under the same MIT terms.
 
-Copyright (c) 2017-2019  Falcon Project
+Copyright (c) 2017-2020  Falcon Project
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
