@@ -129,10 +129,10 @@ First build the pinned Algorand tools, then create a new output directory:
 
 ```sh
 make -C spikes/anchor/algorand build
-npm run build:chatgpt -- /tmp/private-provenance-chatgpt-UNIQUE
+npm run build:chatgpt -- /tmp/attestamp-chatgpt-test-UNIQUE
 ```
 
-The builder produces `Private Provenance.app` plus
+The builder produces `Attestamp.app` plus
 `NativeMessagingHosts/ai.provenance.consumer.json`. The manifest targets the
 compiled executable inside the signed app—not a source script or `/usr/bin/env`
 runtime—and allows only the pinned extension origin. It is intentionally not
@@ -183,7 +183,7 @@ encrypted once in the vault and included once in each export, with per-record
 references. Fast confirmation stays a historical client assertion for recipients;
 archival verification uses a separately selected checkpoint.
 
-The build's `Recipient` folder contains **Private Provenance Verifier.app** with
+The build's `Recipient` folder contains **Attestamp Verifier.app** with
 the runtime and native proof verifier needed on a clean Mac. It has no vault,
 Keychain broker, account, subscription or company endpoint. See the
 [recipient format and verification guide](../../recipient/README.md) for limits,

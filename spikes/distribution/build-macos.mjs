@@ -19,9 +19,9 @@ const run = (command, args, extra = {}) => execFileSync(command, args, {
 const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>${Object.entries(values).map(([key, value]) =>
   `<key>${key}</key>${value === true ? '<true/>' : Array.isArray(value)
     ? `<array>${value.map(item => `<string>${item}</string>`).join('')}</array>` : `<string>${value}</string>`}`).join('')}</dict></plist>`;
-const releaseCandidateNotice = `# RELEASE CANDIDATE — PRE-PUBLICATION REVIEW ONLY
+const releaseCandidateNotice = `# ATTESTAMP RELEASE CANDIDATE — PRE-PUBLICATION REVIEW ONLY
 
-This signed and notarized build is for designated reviewer validation before the Chrome Web Store listing is published. It is not a production release, has no stable update channel, and must not be promoted in place. Produce a fresh production build after the listing and installed validation are complete.`;
+This signed and notarized Attestamp build is for designated reviewer validation before the Chrome Web Store listing is published. It is not a production release, has no stable update channel, and must not be promoted in place. Produce a fresh production build after the listing and installed validation are complete.`;
 
 export function prepareChromeWebStoreManifest(manifest) {
   const uploadManifest = structuredClone(manifest);
@@ -80,7 +80,7 @@ export function releaseArtifactContract(config) {
   const candidate = plan.releaseClass === 'RELEASE_CANDIDATE';
   return { ...plan,
     artifactName: candidate
-      ? `Private-Provenance-Release-Candidate-${config.version}-${config.sequence}.dmg`
+      ? `Attestamp-Release-Candidate-${config.version}-${config.sequence}.dmg`
       : `Private-Provenance-${config.version}-${config.sequence}.dmg`,
     stableManifest: candidate ? null : 'stable.json',
     bundledInstalledRelease: candidate ? null : 'installed-release.json',
@@ -111,6 +111,7 @@ async function configureHelper(app, config, work) {
   await mkdir(join(helperContents, 'MacOS'), { recursive: true });
   await rename(join(contents, 'MacOS/provenance-keychain-helper'), join(helperContents, 'MacOS/provenance-keychain-helper'));
   await writeFile(join(helperContents, 'Info.plist'), plist({ CFBundleIdentifier: 'ai.provenance.keychain-helper',
+    CFBundleName: 'Attestamp Keychain', CFBundleDisplayName: 'Attestamp Keychain',
     CFBundleExecutable: 'provenance-keychain-helper', CFBundlePackageType: 'APPL', CFBundleVersion: String(config.sequence) }));
   const decoded = join(work, 'helper-profile.plist');
   await writeFile(decoded, run('/usr/bin/security', ['cms', '-D', '-i', config.helperProvisioningProfile]));
@@ -188,7 +189,7 @@ export async function buildDistribution(output, config = null) {
   // native host, accesses an evidence store or installs into Applications.
   run(process.execPath, [join(root, 'spikes/browser/chatgpt/build-macos.mjs'), output]);
   await writeFile(join(output, 'dependency-inventory.json'), canonical(dependencies));
-  const app = join(output, 'Private Provenance.app'), recipient = join(output, 'Recipient/Private Provenance Verifier.app');
+  const app = join(output, 'Attestamp.app'), recipient = join(output, 'Recipient/Attestamp Verifier.app');
   for (const bundle of [app, recipient]) {
     await copyFile(join(root, 'spikes/distribution/THIRD_PARTY_NOTICES.md'), join(bundle, 'Contents/Resources/THIRD_PARTY_NOTICES.md'));
     // Adding notices changes the development seal; reseal before returning an
@@ -248,7 +249,7 @@ export async function buildDistribution(output, config = null) {
         run('/usr/bin/plutil', ['-replace', key, '-string', value, join(bundle, 'Contents/Info.plist')]);
       }
       if (isReleaseCandidate) run('/usr/bin/plutil', ['-insert', 'CFBundleDisplayName', '-string',
-        'Private Provenance Release Candidate', join(bundle, 'Contents/Info.plist')]);
+        bundle === app ? 'Attestamp Release Candidate' : 'Attestamp Verifier Release Candidate', join(bundle, 'Contents/Info.plist')]);
       await signBundle(bundle, config, work, bundle === app ? helper : null);
       const zip = join(work, `${bundle === app ? 'app' : 'verifier'}.zip`);
       run('/usr/bin/ditto', ['-c', '-k', '--keepParent', '--sequesterRsrc', bundle, zip]);
@@ -267,7 +268,7 @@ export async function buildDistribution(output, config = null) {
     const provenanceBytes = canonical(provenance);
     await writeFile(join(output, 'build-provenance.json'), provenanceBytes);
     const payload = join(work, 'payload'); await mkdir(payload);
-    for (const [source, name] of [[app, 'Private Provenance.app'], [recipient, 'Private Provenance Verifier.app']]) {
+    for (const [source, name] of [[app, 'Attestamp.app'], [recipient, 'Attestamp Verifier.app']]) {
       await cp(source, join(payload, name), { recursive: true });
     }
     for (const file of ['Install and remove.md', 'build-provenance.json', 'dependency-inventory.json',
@@ -275,7 +276,7 @@ export async function buildDistribution(output, config = null) {
       await copyFile(join(output, file), join(payload, file));
     }
     const name = releasePlan.artifactName, dmg = join(output, name);
-    run('/usr/bin/hdiutil', ['create', '-srcfolder', payload, '-volname', 'Private Provenance', '-format', 'UDZO', dmg]);
+    run('/usr/bin/hdiutil', ['create', '-srcfolder', payload, '-volname', isReleaseCandidate ? 'Attestamp Release Candidate' : 'Attestamp', '-format', 'UDZO', dmg]);
     run('/usr/bin/codesign', ['--sign', config.signingIdentity, '--timestamp', dmg]);
     const notarization = await notarize(dmg, config.notaryProfile);
     run('/usr/bin/xcrun', ['stapler', 'staple', dmg]); run('/usr/bin/xcrun', ['stapler', 'validate', dmg]);

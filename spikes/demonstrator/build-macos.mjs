@@ -9,7 +9,7 @@ const start = performance.now(), output = resolve(process.argv[2]);
 const root = fileURLToPath(new URL('../../', import.meta.url));
 await Promise.all(['verify', 'fast-verify'].map(name => stat(join(root, 'spikes/anchor/algorand/bin', name))));
 await mkdir(output, { mode: 0o700 });
-const app = join(output, 'Private Provenance Demo.app'), contents = join(app, 'Contents');
+const app = join(output, 'Attestamp Demo.app'), contents = join(app, 'Contents');
 await mkdir(join(contents, 'MacOS'), { recursive: true });
 const resources = join(contents, 'Resources'); await mkdir(resources);
 await copyFile(process.execPath, join(contents, 'MacOS', 'node'));
@@ -25,7 +25,7 @@ await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node
 for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator']) await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
   recursive: true, filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live') && !source.endsWith('/.DS_Store'),
 });
-await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Private Provenance Demo</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/></dict></plist>`);
+await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Attestamp Demo</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/></dict></plist>`);
 for (const [executable, identifier] of [
   [join(contents, 'MacOS/node'), 'ai.provenance.consumer.runtime'],
   [join(contents, 'MacOS/provenance-keychain-helper'), 'ai.provenance.keychain-helper'],

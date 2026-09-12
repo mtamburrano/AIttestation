@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 assertPortableExecutable(process.execPath);
 await Promise.all(['verify', 'fast-verify', 'fast-observe'].map(name => stat(join(root, 'spikes/anchor/algorand/bin', name))));
 await mkdir(output, { mode: 0o700 });
-const app = join(output, 'Private Provenance.app'), contents = join(app, 'Contents');
+const app = join(output, 'Attestamp.app'), contents = join(app, 'Contents');
 await mkdir(join(contents, 'MacOS'), { recursive: true });
 const resources = join(contents, 'Resources'); await mkdir(resources);
 await copyFile(process.execPath, join(contents, 'MacOS', 'node'));
@@ -39,7 +39,7 @@ await mkdir(join(resources, 'spikes/managed'));
 for (const name of ['client.mjs', 'protocol.mjs']) {
   await copyFile(join(root, 'spikes/managed', name), join(resources, 'spikes/managed', name));
 }
-await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Private Provenance</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>15.7</string><key>LSUIElement</key><true/></dict></plist>`);
+await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Attestamp</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>15.7</string><key>LSUIElement</key><true/></dict></plist>`);
 for (const [executable, identifier] of [
   [join(contents, 'MacOS/node'), 'ai.provenance.consumer.runtime'],
   [join(contents, 'MacOS/provenance-keychain-helper'), 'ai.provenance.keychain-helper'],

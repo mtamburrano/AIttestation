@@ -93,7 +93,7 @@ export async function startPackagedChatGPT({
       async downloadUpdate() {
         if (!updater) throw Error('Updates are not configured');
         const result = await updater.download(); await openLocal(result.path);
-        return { state: result.state, instruction: 'Close Private Provenance, replace the app in Finder, then reopen and pair your tab. Evidence stays on this Mac.' };
+        return { state: result.state, instruction: 'Close Attestamp, replace the app in Finder, then reopen and pair your tab. Evidence stays on this Mac.' };
       },
     } : null;
     if (installation) bridge.waitForPairing().then(() => installation.record('paired')).catch(() => {});

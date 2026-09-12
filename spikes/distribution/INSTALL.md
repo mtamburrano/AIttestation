@@ -1,4 +1,4 @@
-# Install, connect and remove
+# Install, connect and remove Attestamp
 
 These instructions apply to a Developer ID signed, Apple-notarized release or
 release candidate. A release candidate is for pre-publication review only and is
@@ -7,9 +7,10 @@ The current repository has no published/verified Web Store listing; its keyed
 manifest matches the assigned draft item identity.
 
 1. On an Apple-silicon Mac running a supported, security-patched macOS version,
-   open the downloaded Private Provenance disk image. Copy both apps to your
-   Applications folder in Finder. Keep the free Verifier app available for exports.
-2. Open Private Provenance and accept the normal macOS first-open confirmation.
+   open the downloaded Attestamp disk image. Copy Attestamp.app and
+   Attestamp Verifier.app to your Applications folder in Finder. Keep the free
+   Attestamp Verifier app available for exports.
+2. Open Attestamp and accept the normal macOS first-open confirmation.
    Do not bypass Gatekeeper or disable system protection. The app uses the local
    Keychain; no wallet, seed phrase, terminal or MCP configuration is needed.
 3. Choose **Enable Chrome connection** in the local app page. This registers only
@@ -35,9 +36,9 @@ must support the existing schema.
 To remove the connection, expand **Remove the connection or get support** and
 choose **Prepare to remove connection**. Review and export selected receipts or
 choose to keep evidence on this Mac. Then remove the Chrome connection, remove
-the extension in Chrome, quit the app and move the app to Trash in Finder. The
-encrypted vault and Keychain items are retained, and the Verifier continues to
-work. Reinstalling and enabling the connection restores access to local history;
+the extension in Chrome, quit Attestamp and move Attestamp.app to Trash in Finder.
+The encrypted vault and Keychain items are retained, and Attestamp Verifier
+continues to work. Reinstalling and enabling the connection restores access to local history;
 it does not restore past permission to send. Do not delete the local evidence
 store or Keychain items as a troubleshooting step.
 

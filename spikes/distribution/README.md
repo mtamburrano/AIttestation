@@ -1,4 +1,4 @@
-# macOS distribution and adapter maintenance
+# Attestamp macOS distribution and adapter maintenance
 
 The distribution implementation is local and testable. A signed/notarized
 release-candidate path is available for review, while Chrome Web Store
@@ -12,7 +12,7 @@ Do not promote a development build based on passing synthetic fixtures.
 ## Build inputs and outputs
 
 `npm run build:distribution -- --prepare NEW_OUTPUT_DIRECTORY` creates a fresh
-ad-hoc application, standalone verifier, uploadable **Attestamp for ChatGPT**
+ad-hoc **Attestamp.app**, standalone **Attestamp Verifier.app**, uploadable **Attestamp for ChatGPT**
 extension ZIP, exact dependency inventory and source-hashed build provenance. It
 does not install anything, touch
 Keychain items, open a browser, publish to a store or contact notarization services.
@@ -56,6 +56,11 @@ signed build reports that installed validation is required.
 
 ### Pre-publication release candidates
 
+The candidate disk image is named `Attestamp-Release-Candidate-VERSION-SEQUENCE.dmg`.
+Finder displays **Attestamp Release Candidate** and **Attestamp Verifier Release
+Candidate** for its two apps. Their bundle directories remain `Attestamp.app` and
+`Attestamp Verifier.app`.
+
 Use `releaseChannel: "release-candidate"` with `storeListingVerified: false` to
 create a Developer ID signed and notarized reviewer artifact before the Web Store
 listing can be published. The candidate UI, provenance, filename and install
@@ -66,6 +71,35 @@ checks cannot advance production state. There is no in-place promotion:
 after the listing is published and the installed boundary is validated, create a
 fresh build from a `releaseChannel: "production"` config with
 `storeListingVerified: true`.
+
+## Consumer names and compatibility identifiers
+
+Attestamp is the consumer name used by the desktop app, local composer, verifier,
+extension and install/remove guidance. The demonstrator is named Attestamp Demo.
+Display names and candidate filenames do not authorize changes to the technical
+identities below. Any migration of these values needs separate compatibility and
+trust review; branding alone must not orphan evidence, change authority or break
+an existing registration/update contract.
+
+| Retained technical identifier | Why it stays unchanged |
+| --- | --- |
+| `ai.provenance.*` bundle, executable-signing and native-messaging identifiers | Native launch and process-ancestry checks pin these identities. |
+| `TEAMID.ai.provenance.evidence-vault`, `ai.provenance.evidence-vault` and `ai.provenance.keychain-helper` | Existing Keychain access group, service and provisioned helper identity. |
+| `Library/Application Support/Private Provenance` | Existing vault, app lock, installation state and browser rendezvous location; renaming it would disconnect local history. |
+| `Helpers/Private Provenance Keychain.app` | Fixed helper path checked by the native launcher; its visible bundle name is Attestamp Keychain. |
+| `Private Provenance fixed-purpose ChatGPT bridge` | Native-host manifest description is included in exact registration ownership comparisons. Changing it would turn existing registrations into conflicts. |
+| `medilhopfckldjgdnchfkpmfmfnkadca` and the extension manifest public key | Pinned Chrome Store identity and allowed extension origin. |
+| `pap-*`, `PAP_*` and `PAP/…` identifiers, schema/profile names and hash domains | Portable evidence, bridge, release, installation and cryptographic compatibility contracts. |
+| `Private-Provenance-VERSION-SEQUENCE.dmg` and `PrivateProvenance-Updater/1` | Production signed-update artifact naming policy and fixed transport identifier. Candidate filenames are separate and use Attestamp. |
+| `private-provenance-notary` | Reserved operator credential-profile name; it is not an app display name. |
+| `Private Provenance Test` | Existing designated Chrome test-profile identifier; these instructions do not rename or access that profile. |
+| `private-provenance-spikes`, repository paths and `provenance-*` executable/export filenames | Internal package and file contracts retained independently of consumer display names. |
+
+Update origins/keys, Apple/Google signing requirements, anchor trust roots and
+provider/adapter contracts also remain unchanged. The regression fixture in
+`test/fixtures/desktop-identities.json` pins technical identities independently
+from visible branding. Local packaging and browser tests use temporary resources;
+they do not satisfy signing, store publication or installed-provider release gates.
 
 ## Provisioning still required
 
@@ -144,7 +178,8 @@ fresh build from a `releaseChannel: "production"` config with
    that are absent from the shipping tools. Invoke the selected Node binary and
    absolute Go executable explicitly, regenerate the inventory, and complete
    independent security/license review before asserting approval.
-9. Complete the signed installed checks below in **Private Provenance Test**,
+9. Complete the signed installed checks below in **Private Provenance Test**
+   (the existing test-profile identifier retained as described below),
    using a specifically designated ChatGPT test account and synthetic text only.
    No live test has been run, and no existing conversations may be inspected.
    Do not reuse a default Chrome profile. Provision the account if that dedicated

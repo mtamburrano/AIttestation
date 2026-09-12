@@ -8,7 +8,7 @@ connected. This is a disposable experiment, not a production protection product.
 ## Open without a terminal
 
 1. Receive the developer-prepared folder for your Mac's architecture. Keep
-   `Private Provenance Demo.app` intact; drag it to a chosen local folder.
+   `Attestamp Demo.app` intact; drag it to a chosen local folder.
 2. Ensure Google Chrome is installed. Double-click the app. It opens the composer
    in a fresh isolated Chrome profile. Your usual tabs, extensions, login and
    keychain are not used. No Node installation, command, wallet or seed phrase is required.

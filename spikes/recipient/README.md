@@ -15,7 +15,7 @@ or transformation of withheld content.
 
 ## Recipient use
 
-The consumer build includes a separate **Private Provenance Verifier.app** in its
+The consumer build includes a separate **Attestamp Verifier.app** in its
 Recipient folder. Copy that folder to a clean Mac, open the app, select the export,
 and optionally select a checkpoint obtained through a separately trusted channel.
 There is no account, subscription, vault, signing key, wallet or company endpoint.

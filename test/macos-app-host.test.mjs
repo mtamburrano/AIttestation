@@ -32,7 +32,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
     join(import.meta.dirname, '../spikes/vault/native/macos-app-host.swift'), '-o', join(root, 'release-host-compile-only')],
   { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 60000 });
   assert.equal(productionCompile.status, 0, productionCompile.stderr);
-  const app = join(output, 'Private Provenance.app'), node = join(app, 'Contents/MacOS/node');
+  const app = join(output, 'Attestamp.app'), node = join(app, 'Contents/MacOS/node');
   const host = join(app, 'Contents/MacOS/provenance-app-host');
   const helper = join(app, 'Contents/MacOS/provenance-keychain-helper');
   const browserHost = join(app, 'Contents/MacOS/provenance-browser-host');
@@ -52,8 +52,21 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const nativeManifest = JSON.parse(readFileSync(join(output, 'NativeMessagingHosts/ai.provenance.consumer.json')));
   assert.equal(nativeManifest.path, browserHost);
   assert.deepEqual(nativeManifest.allowed_origins, ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/']);
-  const recipient = join(output, 'Recipient/Private Provenance Verifier.app');
+  const recipient = join(output, 'Recipient/Attestamp Verifier.app');
   const recipientResources = join(recipient, 'Contents/Resources/spikes');
+  for (const [bundle, name, id] of [[app, 'Attestamp', 'ai.provenance.consumer.host'],
+    [recipient, 'Attestamp Verifier', 'ai.provenance.verifier.host']]) {
+    const info = JSON.parse(spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', join(bundle, 'Contents/Info.plist')],
+      { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' }).stdout);
+    assert.equal(info.CFBundleName, name);
+    assert.equal(info.CFBundleIdentifier, id, 'display branding must not change signed bundle identity');
+  }
+  for (const file of ['Start Here.md', 'Install and remove.md', 'Recipient/Verify locally.md']) {
+    const guidance = readFileSync(join(output, file), 'utf8');
+    assert.match(guidance, /Attestamp/); assert.doesNotMatch(guidance, /private[ -]?provenance/i);
+  }
+  assert.equal(nativeManifest.name, 'ai.provenance.consumer');
+  assert.equal(nativeManifest.description, 'Private Provenance fixed-purpose ChatGPT bridge');
   for (const bundle of [app, recipient]) {
     const notices = readFileSync(join(bundle, 'Contents/Resources/THIRD_PARTY_NOTICES.md'));
     assert.equal(createHash('sha256').update(notices).digest('hex'), dependencies.noticesDigest);

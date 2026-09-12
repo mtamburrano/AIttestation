@@ -1,4 +1,4 @@
-# Private provenance experiments
+# Attestamp experiments
 
 Disposable technical slices for private, portable evidence of human + AI work.
 These experiments are not a production protection product.

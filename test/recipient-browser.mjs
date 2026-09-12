@@ -84,6 +84,9 @@ try {
   const bytes = await readFile(exported), bundle = parseCanonical(bytes);
   assert.equal(bundle.disclosure.records.length, 1); assert.equal(unpack(bundle.disclosure.objects[0].bytes).toString(), 'Share this [REDACTED]');
   await call('Page.navigate', { url: recipient.url }); await wait("document.querySelector('#bundle') !== null");
+  assert.equal(await evaluate('document.title'), 'Attestamp · Verify evidence');
+  assert.equal(await evaluate("document.querySelector('h1').textContent"), 'Attestamp Verifier');
+  assert.doesNotMatch(await evaluate('document.body.innerText'), /private[ -]?provenance/i);
   await setFile('#bundle', exported); await click('verify'); await wait("document.querySelector('#status').textContent.startsWith('Local verification finished')");
   const report = JSON.parse(await evaluate("document.querySelector('#report').textContent"));
   assert.equal(report.records[0].integrity, 'VALID'); assert.equal(report.records[0].anchor, 'INDETERMINATE');

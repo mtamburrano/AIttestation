@@ -372,7 +372,7 @@ test('release channel gating keeps production strict and makes candidates non-pr
   assert.deepEqual(releaseArtifactContract({ ...common, releaseChannel: RELEASE_CHANNELS.CANDIDATE, storeListingVerified: false }), {
     releaseChannel: RELEASE_CHANNELS.CANDIDATE, releaseClass: 'RELEASE_CANDIDATE',
     stableManifestCreated: false, updaterEnabled: false, installedProductionState: false,
-    artifactName: 'Private-Provenance-Release-Candidate-1.2.0-2.dmg', stableManifest: null,
+    artifactName: 'Attestamp-Release-Candidate-1.2.0-2.dmg', stableManifest: null,
     bundledInstalledRelease: null, updaterAvailable: false, promotion: 'FRESH_PRODUCTION_BUILD_REQUIRED',
   });
   assert.deepEqual(releaseBuildPlan({ releaseChannel: RELEASE_CHANNELS.CANDIDATE }), {

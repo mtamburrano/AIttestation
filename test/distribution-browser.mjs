@@ -11,7 +11,7 @@ import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 const root = await realpath(await mkdtemp('/private/tmp/provenance-distribution-browser-test-'));
 let browser, socket, server;
 try {
-  const lifecycle = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
+  let lifecycle = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
     chromeSupportDirectory: join(root, 'fake-chrome'), browserHost: join(root, 'Test.app/Contents/MacOS/host'), sequence: 2 }).init();
   const state = { eligibility: 'UNENROLLED' };
   server = await startProductComposer({ browserState: () => null,
@@ -59,6 +59,11 @@ try {
   await call('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads });
   await call('Page.navigate', { url: server.url });
   await wait("document.querySelector('#installation-state')?.textContent.includes('disabled') && !document.querySelector('#enable-integration').disabled");
+  assert.equal(await evaluate('document.title'), 'Attestamp · ChatGPT');
+  assert.equal(await evaluate("document.querySelector('header span').textContent"), 'ATTESTAMP');
+  const visible = await evaluate('document.body.innerText');
+  assert.match(visible, /Attestamp Verifier app/);
+  assert.doesNotMatch(visible, /private[ -]?provenance/i);
   await click('enable-integration'); await wait("document.querySelector('#installation-state').textContent.includes('enabled')");
   assert.equal((await lifecycle.status()).integration, 'ENABLED');
   await click('check-update'); await wait("!document.querySelector('#download-update').disabled");
@@ -76,6 +81,17 @@ try {
   state.eligibility = 'REVOKED'; await click('refresh');
   await wait("document.querySelector('#scope').textContent.includes('eligibility revoked')");
   assert.equal(await evaluate("document.querySelector('#freeze').disabled && document.querySelector('#release').disabled"), true);
+  lifecycle = await new InstallationLifecycle({ supportDirectory: join(root, 'candidate-support'),
+    chromeSupportDirectory: join(root, 'candidate-chrome'), browserHost: join(root, 'Attestamp.app/Contents/MacOS/host'),
+    sequence: 2, releaseChannel: 'release-candidate' }).init();
+  // The composer clears its pairing fragment. Re-enter through a new document
+  // so navigation cannot become a same-document hash change with stale state.
+  await call('Page.navigate', { url: 'about:blank' });
+  await wait("location.href === 'about:blank'");
+  await call('Page.navigate', { url: server.url });
+  await wait("document.querySelector('#release-channel')?.textContent.startsWith('ATTESTAMP RELEASE CANDIDATE')");
+  assert.equal(await evaluate("document.querySelector('#check-update').disabled && document.querySelector('#download-update').disabled"), true);
+  assert.doesNotMatch(await evaluate('document.body.innerText'), /private[ -]?provenance/i);
   await click('close'); await wait("document.querySelector('#status').textContent === 'Local runtime closed.'");
   console.log(JSON.stringify({ localSetupUI: 'PASS', diagnostics: 'CONTENT_FREE', network: 'LOOPBACK_FIXTURES_ONLY',
     storeInstall: 'NOT_RUN', osPermissions: 'NOT_RUN', signedProviderPairing: 'NOT_RUN' }));

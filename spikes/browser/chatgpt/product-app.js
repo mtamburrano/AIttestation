@@ -33,7 +33,7 @@ async function installationStatus() {
   const result = await api('/installation/status');
   installationConfigured = result.integration !== 'NOT_CONFIGURED'; releaseChannel = result.releaseChannel ?? null;
   $('release-channel').textContent = releaseChannel === 'release-candidate'
-    ? 'RELEASE CANDIDATE — signed and notarized for pre-publication review only. This is not a production release; stable updates are disabled.'
+    ? 'ATTESTAMP RELEASE CANDIDATE — signed and notarized for pre-publication review only. This is not a production release; stable updates are disabled.'
     : releaseChannel === 'production'
       ? 'PRODUCTION RELEASE — signed distribution for the verified Chrome Web Store listing.'
       : 'DEVELOPMENT BUILD — no signed distribution is configured.';

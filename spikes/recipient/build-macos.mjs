@@ -17,7 +17,7 @@ export async function buildRecipient(output) {
   assertPortableExecutable(process.execPath);
   assertPortableExecutable(join(root, 'spikes/anchor/algorand/bin/verify'));
   await mkdir(output, { mode: 0o700 });
-  const app = join(output, 'Private Provenance Verifier.app'), contents = join(app, 'Contents');
+  const app = join(output, 'Attestamp Verifier.app'), contents = join(app, 'Contents');
   const macos = join(contents, 'MacOS'), resources = join(contents, 'Resources');
   await mkdir(macos, { recursive: true }); await mkdir(resources);
   await copyFile(process.execPath, join(macos, 'node'));
@@ -33,7 +33,7 @@ export async function buildRecipient(output) {
       join(root, 'spikes/recipient/macos-verifier-host.swift'), '-o', join(macos, 'provenance-verifier-host')],
     { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
   } finally { await rm(cache, { recursive: true, force: true }); }
-  await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-verifier-host</string><key>CFBundleIdentifier</key><string>ai.provenance.verifier.host</string><key>CFBundleName</key><string>Private Provenance Verifier</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>15.7</string><key>LSUIElement</key><true/></dict></plist>`);
+  await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-verifier-host</string><key>CFBundleIdentifier</key><string>ai.provenance.verifier.host</string><key>CFBundleName</key><string>Attestamp Verifier</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>15.7</string><key>LSUIElement</key><true/></dict></plist>`);
   for (const [path, id] of [[join(macos, 'node'), 'ai.provenance.verifier.runtime'],
     [join(resources, 'spikes/anchor/algorand/bin/verify'), 'ai.provenance.verifier.algorand']]) {
     execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', id, path], { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
