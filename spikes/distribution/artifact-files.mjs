@@ -1,8 +1,10 @@
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { createHash, createPrivateKey } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
+import { LEAK_OVERLAP, PackageLeakError, rejectSecretBytes, rejectSecretChunk, rejectSecretName } from './package-leaks.mjs';
+export { rejectSecretBytes, rejectSecretName } from './package-leaks.mjs';
 
 const MAX_METADATA = 16 * 1024 * 1024;
 export const requireArtifact = condition => { if (!condition) throw Error('ARTIFACT_REJECTED'); };
@@ -10,43 +12,6 @@ export const safeRelative = path => typeof path === 'string' && path.length <= 1
   && path.split('/').every(part => part && part !== '.' && part !== '..') && !/[\\\x00-\x1f\x7f:]/.test(path)
   && path === path.normalize('NFC');
 const stamp = info => [info.dev, info.ino, info.size, info.mode, info.mtimeMs, info.ctimeMs].join(':');
-
-export function rejectSecretName(path) {
-  requireArtifact(!path.split('/').some(part => /^(?:\.git|\.ssh|\.aws|\.release-work|\.swift-module-cache|\.env(?:\..*)?)$/i.test(part)
-    || /\.(?:pem|key|p8|p12|pfx|seed|mnemonic|keychain(?:-db)?)$/i.test(part)
-    || /^(?:id_rsa|id_ed25519|credentials(?:\..*)?|.*(?:dependency[-_]approval|release[-_]approval|private[-_]key|notary[-_]credentials).*)$/i.test(part)
-    || /^release[-_]config(?:\..*)?\.json$/i.test(part) && part !== 'release-config.example.json'));
-}
-
-export function rejectSecretBytes(bytes) {
-  const text = bytes.toString('utf8');
-  requireArtifact(!/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{16,}/.test(text));
-  // Detect key encodings independently of filenames. Public certificates and the
-  // helper's CMS provisioning profile are allowed; private DER keys are not.
-  if (bytes[0] === 0x30 && bytes.length <= 16 * 1024) {
-    for (const type of ['pkcs8', 'pkcs1', 'sec1']) {
-      let privateKey = false;
-      try { createPrivateKey({ key: bytes, format: 'der', type }); privateKey = true; } catch {}
-      requireArtifact(!privateKey);
-    }
-  }
-  if (!/^\s*[\[{]/.test(text)) return;
-  let value;
-  try { value = JSON.parse(text); } catch { return; }
-  function inspect(item, depth = 0) {
-    requireArtifact(depth <= 32);
-    if (!item || typeof item !== 'object') return;
-    requireArtifact(!(item.kty && ['d', 'p', 'q', 'k'].some(key => Object.hasOwn(item, key))));
-    requireArtifact(!(Object.hasOwn(item, 'inventoryDigest')
-      && ['reviewer', 'securityApproved', 'licensesApproved'].some(key => Object.hasOwn(item, key))));
-    for (const [key, child] of Object.entries(item)) {
-      requireArtifact(!/^(?:private[_-]?key|client_secret|api[_-]?key|access_token|refresh_token|password|mnemonic|seed)$/i.test(key)
-        || child === null || child === '');
-      inspect(child, depth + 1);
-    }
-  }
-  inspect(value);
-}
 
 async function inspectFile(path, before, keep) {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -60,14 +25,18 @@ async function inspectFile(path, before, keep) {
       if (!bytesRead) break;
       length += bytesRead; requireArtifact(length <= info.size);
       const bytes = chunk.subarray(0, bytesRead); hash.update(bytes);
+      if (length === bytesRead) requireArtifact(!isZip(bytes, path) || info.size <= MAX_METADATA);
       const scan = Buffer.concat([tail, bytes]);
-      requireArtifact(!/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----\s+[A-Za-z0-9+/=\r\n]{16,}/.test(scan.toString('latin1')));
-      tail = Buffer.from(scan.subarray(-512));
+      rejectSecretChunk(scan);
+      tail = Buffer.from(scan.subarray(-LEAK_OVERLAP));
       if (info.size <= MAX_METADATA) parts.push(Buffer.from(bytes));
     }
     requireArtifact(length === info.size && stamp(await handle.stat()) === stamp(info));
     const bytes = info.size <= MAX_METADATA ? Buffer.concat(parts) : null;
-    if (bytes) rejectSecretBytes(bytes);
+    if (bytes) {
+      rejectSecretBytes(bytes);
+      if (isZip(bytes, path)) storeArchive(bytes);
+    } else requireArtifact(!/\.zip$/i.test(path));
     return { bytes: length, sha256: hash.digest('hex'), mode: info.mode & 0o777, stamp: stamp(info), content: keep ? bytes : null };
   } finally { await handle.close(); }
 }
@@ -75,31 +44,43 @@ async function inspectFile(path, before, keep) {
 export async function artifactSnapshot(directory, { keep = true } = {}) {
   requireArtifact(await realpath(directory) === resolve(directory));
   const files = new Map(), directories = new Map(), aliases = new Set();
-  let total = 0, retained = 0, count = 0;
+  let total = 0, retained = 0, count = 0, ordinal = 0;
   async function walk(prefix, depth) {
     requireArtifact(depth <= 32 && ++count <= 50_000);
     const absolute = join(directory, prefix), before = await lstat(absolute);
     requireArtifact(before.isDirectory() && !before.isSymbolicLink());
     directories.set(prefix, stamp(before));
     for (const name of (await readdir(absolute)).sort()) {
-      const path = prefix ? `${prefix}/${name}` : name;
-      requireArtifact(safeRelative(path) && !aliases.has(path.toLowerCase())); aliases.add(path.toLowerCase());
-      rejectSecretName(path);
-      const info = await lstat(join(directory, path));
-      requireArtifact(!info.isSymbolicLink());
-      if (info.isDirectory()) await walk(path, depth + 1);
-      else {
-        requireArtifact(info.isFile() && info.nlink === 1 && ++count <= 50_000);
-        requireArtifact(info.size <= MAX_METADATA || /\/MacOS\/|\/algorand\/bin\/|^[^/]+\.dmg$/.test(path));
-        total += info.size; requireArtifact(total <= 6 * 1024 ** 3);
-        if (keep && info.size <= MAX_METADATA) { retained += info.size; requireArtifact(retained <= 256 * 1024 * 1024); }
-        files.set(path, await inspectFile(join(directory, path), info, keep));
+      const entry = ++ordinal;
+      try {
+        const path = prefix ? `${prefix}/${name}` : name;
+        requireArtifact(safeRelative(path) && !aliases.has(path.toLowerCase())); aliases.add(path.toLowerCase());
+        rejectSecretName(path);
+        const info = await lstat(join(directory, path));
+        requireArtifact(!info.isSymbolicLink());
+        if (info.isDirectory()) await walk(path, depth + 1);
+        else {
+          requireArtifact(info.isFile() && info.nlink === 1 && ++count <= 50_000);
+          requireArtifact(info.size <= MAX_METADATA || /\/MacOS\/|\/algorand\/bin\/|^[^/]+\.dmg$/.test(path));
+          total += info.size; requireArtifact(total <= 6 * 1024 ** 3);
+          if (keep && info.size <= MAX_METADATA) { retained += info.size; requireArtifact(retained <= 256 * 1024 * 1024); }
+          files.set(path, await inspectFile(join(directory, path), info, keep));
+        }
+      } catch (error) {
+        if (error instanceof PackageLeakError) error.entry ??= entry;
+        throw error;
       }
     }
     requireArtifact(stamp(await lstat(absolute)) === stamp(before));
   }
   await walk('', 0);
   return { files, directories };
+}
+
+// Used before an upload/compression boundary and after final output preparation.
+// keep=false changes retention only; every byte and supported archive is scanned.
+export async function assertNoPackagedLeaks(directory) {
+  await artifactSnapshot(resolve(directory), { keep: false });
 }
 
 export function snapshotIdentity(snapshot) {
@@ -147,6 +128,9 @@ const crc32 = bytes => {
   return (crc ^ 0xffffffff) >>> 0;
 };
 
+const isZip = (bytes, path) => /\.zip$/i.test(path) || bytes.length >= 4
+  && [0x04034b50, 0x06054b50, 0x08074b50].includes(bytes.readUInt32LE(0));
+
 function zipExtra(bytes, central) {
   // ditto emits one legacy Unix timestamp/UID field. Reject alternative name,
   // ZIP64 and opaque extension fields that another reader might interpret differently.
@@ -156,7 +140,8 @@ function zipExtra(bytes, central) {
 
 // Read only the small Store ZIP; never extract paths or invoke an archive tool.
 // Local and central headers must describe one unambiguous, contiguous archive.
-export function storeArchive(bytes) {
+export function storeArchive(bytes, budget = { bytes: 0, entries: 0 }, depth = 0) {
+  requireArtifact(depth <= 3);
   requireArtifact(bytes && bytes.length >= 22 && bytes.length <= MAX_METADATA);
   const end = bytes.length - 22;
   requireArtifact(bytes.readUInt32LE(end) === 0x06054b50 && bytes.readUInt16LE(end + 20) === 0
@@ -165,38 +150,48 @@ export function storeArchive(bytes) {
   requireArtifact(count > 0 && count <= 256 && bytes.readUInt16LE(end + 8) === count && start + size === end);
   const files = new Map(), aliases = new Set(); let cursor = start, local = 0, total = 0;
   for (let i = 0; i < count; i++) {
-    requireArtifact(cursor + 46 <= end && bytes.readUInt32LE(cursor) === 0x02014b50);
-    const flags = bytes.readUInt16LE(cursor + 8), method = bytes.readUInt16LE(cursor + 10);
-    const crc = bytes.readUInt32LE(cursor + 16), compressed = bytes.readUInt32LE(cursor + 20), length = bytes.readUInt32LE(cursor + 24);
-    const n = bytes.readUInt16LE(cursor + 28), extra = bytes.readUInt16LE(cursor + 30), comment = bytes.readUInt16LE(cursor + 32);
-    const offset = bytes.readUInt32LE(cursor + 42), mode = bytes.readUInt32LE(cursor + 38) >>> 16;
-    requireArtifact(cursor + 46 + n + extra + comment <= end && comment === 0 && bytes.readUInt16LE(cursor + 34) === 0
-      && !(flags & ~0x808) && [0, 8].includes(method) && [0, 0o100000, 0o040000].includes(mode & 0o170000));
-    zipExtra(bytes.subarray(cursor + 46 + n, cursor + 46 + n + extra), true);
-    const nameBytes = bytes.subarray(cursor + 46, cursor + 46 + n), name = new TextDecoder('utf-8', { fatal: true }).decode(nameBytes);
-    const directory = name.endsWith('/'), path = directory ? name.slice(0, -1) : name;
-    requireArtifact(safeRelative(path) && !aliases.has(path.toLowerCase())); aliases.add(path.toLowerCase()); rejectSecretName(path);
-    requireArtifact(offset === local && local + 30 <= start && bytes.readUInt32LE(local) === 0x04034b50
-      && bytes.readUInt16LE(local + 6) === flags && bytes.readUInt16LE(local + 8) === method);
-    const ln = bytes.readUInt16LE(local + 26), le = bytes.readUInt16LE(local + 28), data = local + 30 + ln + le;
-    requireArtifact(ln === n && bytes.subarray(local + 30, local + 30 + ln).equals(nameBytes) && data + compressed <= start);
-    zipExtra(bytes.subarray(local + 30 + ln, data), false);
-    if (!(flags & 8)) requireArtifact(bytes.readUInt32LE(local + 14) === crc
-      && bytes.readUInt32LE(local + 18) === compressed && bytes.readUInt32LE(local + 22) === length);
-    total += length; requireArtifact(total <= MAX_METADATA);
-    const packed = bytes.subarray(data, data + compressed);
-    const content = method === 0 ? packed : inflateRawSync(packed, { maxOutputLength: Math.max(1, length), info: true });
-    const unpacked = method === 0 ? content : content.buffer;
-    requireArtifact((method === 0 || content.engine.bytesWritten === compressed) && unpacked.length === length && crc32(unpacked) === crc);
-    local = data + compressed;
-    if (flags & 8) {
-      if (bytes.readUInt32LE(local) === 0x08074b50) local += 4;
-      requireArtifact(local + 12 <= start && bytes.readUInt32LE(local) === crc
-        && bytes.readUInt32LE(local + 4) === compressed && bytes.readUInt32LE(local + 8) === length); local += 12;
+    requireArtifact(++budget.entries <= 256);
+    try {
+      requireArtifact(cursor + 46 <= end && bytes.readUInt32LE(cursor) === 0x02014b50);
+      const flags = bytes.readUInt16LE(cursor + 8), method = bytes.readUInt16LE(cursor + 10);
+      const crc = bytes.readUInt32LE(cursor + 16), compressed = bytes.readUInt32LE(cursor + 20), length = bytes.readUInt32LE(cursor + 24);
+      const n = bytes.readUInt16LE(cursor + 28), extra = bytes.readUInt16LE(cursor + 30), comment = bytes.readUInt16LE(cursor + 32);
+      const offset = bytes.readUInt32LE(cursor + 42), mode = bytes.readUInt32LE(cursor + 38) >>> 16;
+      requireArtifact(cursor + 46 + n + extra + comment <= end && comment === 0 && bytes.readUInt16LE(cursor + 34) === 0
+        && !(flags & ~0x808) && [0, 8].includes(method) && [0, 0o100000, 0o040000].includes(mode & 0o170000));
+      zipExtra(bytes.subarray(cursor + 46 + n, cursor + 46 + n + extra), true);
+      const nameBytes = bytes.subarray(cursor + 46, cursor + 46 + n), name = new TextDecoder('utf-8', { fatal: true }).decode(nameBytes);
+      const directory = name.endsWith('/'), path = directory ? name.slice(0, -1) : name;
+      requireArtifact(safeRelative(path) && !aliases.has(path.toLowerCase())); aliases.add(path.toLowerCase()); rejectSecretName(path);
+      requireArtifact(offset === local && local + 30 <= start && bytes.readUInt32LE(local) === 0x04034b50
+        && bytes.readUInt16LE(local + 6) === flags && bytes.readUInt16LE(local + 8) === method);
+      const ln = bytes.readUInt16LE(local + 26), le = bytes.readUInt16LE(local + 28), data = local + 30 + ln + le;
+      requireArtifact(ln === n && bytes.subarray(local + 30, local + 30 + ln).equals(nameBytes) && data + compressed <= start);
+      zipExtra(bytes.subarray(local + 30 + ln, data), false);
+      if (!(flags & 8)) requireArtifact(bytes.readUInt32LE(local + 14) === crc
+        && bytes.readUInt32LE(local + 18) === compressed && bytes.readUInt32LE(local + 22) === length);
+      total += length; budget.bytes += length; requireArtifact(total <= MAX_METADATA && budget.bytes <= MAX_METADATA);
+      const packed = bytes.subarray(data, data + compressed);
+      const content = method === 0 ? packed : inflateRawSync(packed, { maxOutputLength: Math.max(1, length), info: true });
+      const unpacked = method === 0 ? content : content.buffer;
+      requireArtifact((method === 0 || content.engine.bytesWritten === compressed) && unpacked.length === length && crc32(unpacked) === crc);
+      local = data + compressed;
+      if (flags & 8) {
+        if (bytes.readUInt32LE(local) === 0x08074b50) local += 4;
+        requireArtifact(local + 12 <= start && bytes.readUInt32LE(local) === crc
+          && bytes.readUInt32LE(local + 4) === compressed && bytes.readUInt32LE(local + 8) === length); local += 12;
+      }
+      requireArtifact(!directory || !length);
+      if (!directory) {
+        rejectSecretBytes(unpacked);
+        if (isZip(unpacked, path)) storeArchive(unpacked, budget, depth + 1);
+        files.set(path, unpacked);
+      }
+      cursor += 46 + n + extra + comment;
+    } catch (error) {
+      if (error instanceof PackageLeakError) error.archiveEntries = [i + 1, ...(error.archiveEntries ?? [])];
+      throw error;
     }
-    requireArtifact(!directory || !length);
-    if (!directory) { rejectSecretBytes(unpacked); files.set(path, unpacked); }
-    cursor += 46 + n + extra + comment;
   }
   requireArtifact(cursor === end && local === start); return files;
 }

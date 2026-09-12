@@ -5,6 +5,7 @@ import { validateInstalledRelease, validateReleaseCandidate } from './config.mjs
 import { releaseArtifactContract, readReleaseFile } from './release-inputs.mjs';
 import { shippingGoBuildPlan } from './inventory.mjs';
 import { sha256, verifyRelease } from './release.mjs';
+import { leakDiagnostic } from './package-leaks.mjs';
 import { artifactJSON, artifactSnapshot, bundleInfo, requireArtifact as require, safeRelative,
   snapshotIdentity, storeArchive } from './artifact-files.mjs';
 
@@ -18,7 +19,7 @@ const checks = ['EXPECTED_POLICY', 'OUTPUT_FILES', 'CHANNEL_CONTRACT', 'INVENTOR
 const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const same = (a, b) => require(canonical(a) === canonical(b));
 const reportBase = () => ({ profile: 'pap-artifact-policy-verification/1', status: 'FAILED', releaseChannel: null,
-  sourceDigest: null, dependencyDigest: null, updaterEnabled: null, failure: null, releaseReady: false,
+  sourceDigest: null, dependencyDigest: null, updaterEnabled: null, failure: null, packageLeak: null, releaseReady: false,
   appleTrust: 'NOT_CHECKED', diskImageContents: 'NOT_INSPECTED',
   checks: checks.map(check => ({ check, status: 'NOT_RUN' })) });
 
@@ -287,8 +288,9 @@ export async function verifyDistribution(directory, policy, { now = Date.now() }
       === snapshotIdentity(await artifactSnapshot(resolve(directory), { keep: false }))));
     report.status = 'PASSED'; report.sourceDigest = policy.sourceDigest;
     report.dependencyDigest = provenance.dependencyDigest; report.updaterEnabled = policy.releaseChannel === 'production';
-  } catch {
+  } catch (error) {
     active.status = 'FAILED'; report.failure = `${active.check}_REJECTED`;
+    report.packageLeak = leakDiagnostic(error);
   }
   return report;
 }

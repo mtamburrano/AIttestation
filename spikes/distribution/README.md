@@ -193,24 +193,71 @@ The verifier checks these independent relationships:
   extended attributes, quarantine and ACL metadata. Archive inspection occurs in memory.
 - Extra channel files, stale staging, unsupported paths, links, hard links,
   special files, duplicate JSON/plist fields and ambiguous ZIP entries reject.
-  Known private-key/credential filenames, PEM and DER private keys, private JWKs,
-  token data and approval source JSON reject even under renamed files; compressed
-  Store ZIP contents receive the same checks. The complete directory is checked
-  again before success to catch changes during inspection.
+  The shared package-content gate rejects known private files and forbidden
+  material even under renamed files, including compressed Store ZIP entries.
+  The complete directory is checked again before success to catch changes
+  during inspection.
 
 `pap-artifact-policy-verification/1` reports contain only fixed check/failure
-codes, the validated channel and successful public digests. A failure clears
+codes, safe numeric leak locations, the validated channel and successful public digests. A failure clears
 digests/update status, marks later checks `NOT_RUN`, and never prints input paths,
 secret contents or raw errors. Inspection is bounded to 50,000 filesystem entries,
 32 directory levels, 1 GiB per file, 6 GiB total, 256 MiB retained small-file data,
-16 MiB per JSON/Store ZIP and 256 ZIP entries. The CLI has a two-minute deadline.
+16 MiB per JSON/ZIP, one million JSON values, and 256 entries/16 MiB expanded
+data across each ZIP tree, with at most three nested archives. The CLI has a
+two-minute deadline.
+
+### Packaged secret and evidence gate
+
+Both distribution building and artifact verification use the same local gate.
+The builder scans the prepared app/verifier/output tree, each signed app before
+its notarization ZIP is submitted, the copied disk-image payload before
+compression, and final output after private build-work cleanup. A rejection
+prevents that build step from succeeding. The artifact verifier performs the
+gate during `OUTPUT_FILES`, before channel, inventory and release checks pass.
+Neither scan imports bundled code or uses services, installed state or Keychain.
+
+The rules identify:
+
+- Private-key containers and credential/config directories or filenames;
+  populated private release-input fields and dependency-approval records.
+- Private PEM/OpenSSH/OpenPGP headers, bounded standalone DER private keys,
+  and private/symmetric JWK fields. A `.pem` suffix alone is allowed so public
+  keys and certificates can ship.
+- Concrete user-home secret paths, credential JSON and quoted source/config
+  literals, uppercase environment credential assignments, authorization header
+  literals and URLs containing credentials. Runtime variable references and
+  NUL-separated native formatting strings are not credential literals.
+- Explicit synthetic evidence sentinels: `ATTESTAMP_SYNTHETIC_EVIDENCE_V1:`
+  followed immediately by at least 16 ASCII letters, digits, underscores or
+  hyphens. Use a unique synthetic suffix in release fixtures. Public proof
+  metadata, digests, Store IDs, public JWKs, the empty release-config example,
+  notices and license text remain allowed; general words such as “evidence”
+  and “private key” are not matches.
+
+Text scanning covers every file chunk with a 16 KiB overlap, including large
+executables, ASCII/UTF-8 and either UTF-16 byte order/alignment. Bounded JSON
+inspection also decodes escaped field names and string values. ZIPs are
+recognized by suffix or leading signature, including renamed/nested archives;
+inspection stays in memory and rejects unsupported/encrypted/ambiguous ZIPs
+and expansion or nesting limits.
+
+On a leak, `packageLeak` contains a fixed `category`, an `entry` ordinal from
+the sorted depth-first directory traversal, and any nested `archiveEntries`
+ordinals in archive order, all starting at 1. The ordinal includes directories
+and is relative to the root scanned at that build step. It never contains a
+filename, matched value, excerpt, secret digest or raw exception. Other
+rejections leave `packageLeak` null. Builder CLI failures use the same safe
+diagnostic.
 
 A passing report is **not release approval**. It always reports
 `releaseReady: false`, `appleTrust: "NOT_CHECKED"` and
 `diskImageContents: "NOT_INSPECTED"`. Disk images are opaque hashed files here:
 their internal payload and its correspondence to the adjacent bundles require a
-separate inspection. Arbitrarily encoded secrets and filesystem extended
-attributes are outside this scanner. Apple signing/notarization, provisioning
+separate inspection. Scanning the builder's payload before compression does not
+establish that relationship for an independently supplied image. Arbitrarily
+encoded secrets, non-ZIP compressed payloads, unmarked evidence plaintext and
+filesystem extended attributes are outside this bounded scanner. Apple signing/notarization, provisioning
 trust/expiry, current independent security/license approval, Store publication
 and installed behavior remain separate release gates. Synthetic fixtures can
 pass the artifact policy without possessing Apple signatures.

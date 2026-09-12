@@ -3,6 +3,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { sign } from 'node:crypto';
+import { assertNoPackagedLeaks } from './artifact-files.mjs';
+import { leakDiagnostic } from './package-leaks.mjs';
 import { canonical } from '../vault/format.mjs';
 import { dependencyInventory, fileInventory, sourceInventory, validateDependencyApproval } from './inventory.mjs';
 import { RELEASE_PROFILE, sha256, validateRelease } from './release.mjs';
@@ -114,7 +116,7 @@ async function notarize(path, profile) {
   return { id: response.id, status: response.status };
 }
 
-export async function buildDistribution(output, config = null) {
+async function prepareDistribution(output, config = null) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('Apple-silicon macOS builder required');
   const releaseMetadata = config ? validateBuildConfig(config) : null;
   const releasePlan = config ? releaseArtifactContract({ ...config, ...releaseMetadata }) : null;
@@ -148,6 +150,7 @@ export async function buildDistribution(output, config = null) {
     await writeFile(join(output, 'Start Here.md'), `${releaseCandidateNotice}\n\n${startHere}`);
   }
   await createChromeWebStoreUpload(output);
+  await assertNoPackagedLeaks(output);
   if (!config) {
     await writeFile(join(output, 'build-provenance.json'), canonical({ profile: 'pap-build-provenance/1',
       releaseChannel: 'development', releaseClass: 'DEVELOPMENT', signature: 'AD_HOC_ONLY', notarized: false,
@@ -196,6 +199,7 @@ export async function buildDistribution(output, config = null) {
       if (isReleaseCandidate) run('/usr/bin/plutil', ['-insert', 'CFBundleDisplayName', '-string',
         bundle === app ? 'Attestamp Release Candidate' : 'Attestamp Verifier Release Candidate', join(bundle, 'Contents/Info.plist')]);
       await signBundle(bundle, config, work, bundle === app ? helper : null);
+      await assertNoPackagedLeaks(bundle);
       const zip = join(work, `${bundle === app ? 'app' : 'verifier'}.zip`);
       run('/usr/bin/ditto', ['-c', '-k', '--keepParent', '--sequesterRsrc', bundle, zip]);
       await notarize(zip, config.notaryProfile);
@@ -221,6 +225,7 @@ export async function buildDistribution(output, config = null) {
       await copyFile(join(output, file), join(payload, file));
     }
     const name = releasePlan.artifactName, dmg = join(output, name);
+    await assertNoPackagedLeaks(payload);
     run('/usr/bin/hdiutil', ['create', '-srcfolder', payload, '-volname', isReleaseCandidate ? 'Attestamp Release Candidate' : 'Attestamp', '-format', 'UDZO', dmg]);
     run('/usr/bin/codesign', ['--sign', config.signingIdentity, '--timestamp', dmg]);
     const notarization = await notarize(dmg, config.notaryProfile);
@@ -249,6 +254,13 @@ export async function buildDistribution(output, config = null) {
   } finally { await rm(work, { recursive: true, force: true }); }
 }
 
+export async function buildDistribution(output, config = null) {
+  const result = await prepareDistribution(output, config);
+  // Private build work has been removed before inspecting the complete output.
+  await assertNoPackagedLeaks(output);
+  return result;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [, , mode, first, second] = process.argv;
   if (!['--prepare', '--release', '--inventory'].includes(mode) || !first || (mode !== '--prepare' && !second)) {
@@ -260,5 +272,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(sha256(canonical(inventory)));
   } else Promise.resolve().then(async () => buildDistribution(resolve(mode === '--prepare' ? first : second), mode === '--release'
     ? await readReleaseConfig(resolve(first)) : null)).then(result => console.log(JSON.stringify(result)))
-    .catch(() => { process.stderr.write('DISTRIBUTION_BUILD_FAILED: check release prerequisites and the isolated build directory.\n'); process.exitCode = 1; });
+    .catch(error => {
+      const leak = leakDiagnostic(error);
+      process.stderr.write(leak ? `${JSON.stringify({ failure: 'PACKAGED_CONTENT_REJECTED', packageLeak: leak })}\n`
+        : 'DISTRIBUTION_BUILD_FAILED: check release prerequisites and the isolated build directory.\n');
+      process.exitCode = 1;
+    });
 }

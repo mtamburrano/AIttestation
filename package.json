@@ -15,7 +15,7 @@
     "build:distribution": "node spikes/distribution/build-macos.mjs",
     "preflight:distribution": "node spikes/distribution/preflight.mjs",
     "verify:distribution": "node spikes/distribution/verify-artifacts.mjs",
-    "test:distribution": "node --test test/distribution.test.mjs test/release-preflight.test.mjs test/artifact-policy.test.mjs",
+    "test:distribution": "node --test test/distribution.test.mjs test/release-preflight.test.mjs test/artifact-policy.test.mjs test/package-leaks.test.mjs",
     "test:distribution-browser": "node test/distribution-browser.mjs",
     "build:verifier": "node spikes/recipient/build-macos.mjs",
     "verify:evidence": "node spikes/recipient/verify.mjs",

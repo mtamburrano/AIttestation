@@ -132,7 +132,7 @@ test('known secret filenames and renamed PEM, DER, JWK, token and approval data 
   }
   const f = await fixture(t); await f.write('Chrome-Web-Store-upload.zip', zip([...f.storeEntries,
     ['hidden.txt', key.privateKey.export({ type: 'pkcs8', format: 'pem' })]], { compressed: true }));
-  rejected(await f.run(), 'STORE_PACKAGE');
+  rejected(await f.run(), 'OUTPUT_FILES');
 });
 
 test('redirected roots, files, directories, hard links, special files and leftover staging fail closed', async t => {
