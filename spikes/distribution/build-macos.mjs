@@ -1,14 +1,15 @@
-import { copyFile, cp, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
+import { sign } from 'node:crypto';
 import { canonical } from '../vault/format.mjs';
-import { RELEASE_CANDIDATE_PROFILE, RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from './config.mjs';
 import { dependencyInventory, fileInventory, sourceInventory, validateDependencyApproval } from './inventory.mjs';
-import { RELEASE_PROFILE, distributionError, sha256, validateRelease } from './release.mjs';
+import { RELEASE_PROFILE, sha256, validateRelease } from './release.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
-import { readOwned } from './files.mjs';
+import { assertCleanSource, helperProfileFromPlist, readReleaseApproval, readReleaseConfig, readReleaseFile,
+  readUpdateSigningKey, releaseArtifactContract, validateBuildConfig, validateHelperProfile, validateReleasePermissions } from './release-inputs.mjs';
+export { releaseArtifactContract, releaseBuildPlan, validateBuildConfig } from './release-inputs.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const extensionRoot = join(root, 'spikes/browser/chatgpt/extension');
@@ -61,50 +62,6 @@ export async function createChromeWebStoreUpload(output) {
   }
 }
 
-export function releaseBuildPlan(config) {
-  const releaseChannel = config?.releaseChannel === undefined ? RELEASE_CHANNELS.PRODUCTION : config.releaseChannel;
-  if (![RELEASE_CHANNELS.PRODUCTION, RELEASE_CHANNELS.CANDIDATE].includes(releaseChannel)) {
-    throw distributionError('INVALID_RELEASE_CHANNEL');
-  }
-  const candidate = releaseChannel === RELEASE_CHANNELS.CANDIDATE;
-  return { releaseChannel, releaseClass: candidate ? 'RELEASE_CANDIDATE' : 'PRODUCTION',
-    stableManifestCreated: !candidate, updaterEnabled: !candidate, installedProductionState: !candidate };
-}
-
-export function releaseArtifactContract(config) {
-  const plan = releaseBuildPlan(config);
-  if (typeof config?.version !== 'string' || !/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(config.version)
-      || !Number.isSafeInteger(config.sequence) || config.sequence < 1) {
-    throw distributionError('INVALID_RELEASE_ARTIFACT');
-  }
-  const candidate = plan.releaseClass === 'RELEASE_CANDIDATE';
-  return { ...plan,
-    artifactName: candidate
-      ? `Attestamp-Release-Candidate-${config.version}-${config.sequence}.dmg`
-      : `Private-Provenance-${config.version}-${config.sequence}.dmg`,
-    stableManifest: candidate ? null : 'stable.json',
-    bundledInstalledRelease: candidate ? null : 'installed-release.json',
-    updaterAvailable: !candidate,
-    promotion: candidate ? 'FRESH_PRODUCTION_BUILD_REQUIRED' : 'PRODUCTION_RELEASE',
-  };
-}
-
-export function validateBuildConfig(config) {
-  const { releaseChannel } = releaseBuildPlan(config);
-  const metadata = Object.fromEntries(['sequence', 'version', 'teamId', 'updateOrigin', 'updatePublicKey', 'storeListingVerified']
-    .map(name => [name, config[name]]));
-  const validated = releaseChannel === RELEASE_CHANNELS.CANDIDATE
-    ? validateReleaseCandidate({ profile: RELEASE_CANDIDATE_PROFILE, releaseChannel, ...metadata })
-    : validateInstalledRelease({ profile: 'pap-installed-release/1', ...metadata });
-  if (typeof config.signingIdentity !== 'string' || !/^Developer ID Application: [^\n\r]+$/.test(config.signingIdentity)
-      || typeof config.notaryProfile !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(config.notaryProfile)
-      || !['helperProvisioningProfile', 'updatePrivateKeyFile', 'dependencyApprovalFile', 'goExecutable', 'goModuleCache']
-        .every(name => typeof config[name] === 'string' && isAbsolute(config[name]))) {
-    throw Error('Release identities, provisioning, dependency approval and build tools must be explicitly configured');
-  }
-  return validated;
-}
-
 async function configureHelper(app, config, work) {
   const contents = join(app, 'Contents');
   const helperContents = join(contents, 'Helpers/Private Provenance Keychain.app/Contents');
@@ -113,19 +70,10 @@ async function configureHelper(app, config, work) {
   await writeFile(join(helperContents, 'Info.plist'), plist({ CFBundleIdentifier: 'ai.provenance.keychain-helper',
     CFBundleName: 'Attestamp Keychain', CFBundleDisplayName: 'Attestamp Keychain',
     CFBundleExecutable: 'provenance-keychain-helper', CFBundlePackageType: 'APPL', CFBundleVersion: String(config.sequence) }));
-  const decoded = join(work, 'helper-profile.plist');
-  await writeFile(decoded, run('/usr/bin/security', ['cms', '-D', '-i', config.helperProvisioningProfile]));
-  const entitlements = JSON.parse(run('/usr/bin/plutil', ['-extract', 'Entitlements', 'json', '-o', '-', decoded]));
-  const teams = JSON.parse(run('/usr/bin/plutil', ['-extract', 'TeamIdentifier', 'json', '-o', '-', decoded]));
-  const expires = run('/usr/bin/plutil', ['-extract', 'ExpirationDate', 'raw', '-o', '-', decoded]).trim();
-  const appId = `${config.teamId}.ai.provenance.keychain-helper`, group = `${config.teamId}.ai.provenance.evidence-vault`;
-  if (!teams.includes(config.teamId) || Date.parse(expires) <= Date.now() || !Number.isFinite(Date.parse(expires))
-      || entitlements['com.apple.application-identifier'] !== appId
-      || !entitlements['keychain-access-groups']?.some(value => value === group || value === `${config.teamId}.*`)
-      || run('/usr/bin/plutil', ['-extract', 'ProvisionsAllDevices', 'raw', '-o', '-', decoded]).trim() !== 'true') {
-    throw Error('A valid Developer ID provisioning profile for the fixed Keychain helper is required');
-  }
-  await copyFile(config.helperProvisioningProfile, join(helperContents, 'embedded.provisionprofile'));
+  const profileBytes = await readReleaseFile(config.helperProvisioningProfile, { limit: 1024 * 1024 });
+  const decoded = run('/usr/bin/security', ['cms', '-D'], { input: profileBytes });
+  const { appId, group } = validateHelperProfile(helperProfileFromPlist(decoded), config);
+  await writeFile(join(helperContents, 'embedded.provisionprofile'), profileBytes);
   const entitlementFile = join(work, 'keychain.entitlements');
   await writeFile(entitlementFile, plist({ 'com.apple.application-identifier': appId,
     'com.apple.developer.team-identifier': config.teamId, 'keychain-access-groups': [group] }));
@@ -170,20 +118,14 @@ export async function buildDistribution(output, config = null) {
   const releasePlan = config ? releaseArtifactContract({ ...config, ...releaseMetadata }) : null;
   const releaseChannel = releasePlan?.releaseChannel ?? null;
   const isReleaseCandidate = releasePlan?.releaseClass === 'RELEASE_CANDIDATE';
+  if (config) { await validateReleasePermissions(config); assertCleanSource(root); }
   const sources = await sourceInventory(root), dependencies = await dependencyInventory(root, { goExecutable: config?.goExecutable ?? null });
   const dependencyDigest = sha256(canonical(dependencies));
   let privateKey, approval;
   if (config) {
-    if (run('/usr/bin/git', ['status', '--porcelain'], { cwd: root }).trim()) throw Error('Signed releases require a clean source checkout');
-    approval = JSON.parse(await readFile(config.dependencyApprovalFile, 'utf8'));
+    approval = await readReleaseApproval(config);
     validateDependencyApproval(approval, dependencies);
-    if ((await lstat(config.updatePrivateKeyFile)).mode & 0o077) throw Error('Release signing key must be owner-only');
-    const secret = await readOwned(config.updatePrivateKeyFile, 4096);
-    if (!secret) throw Error('Release signing key missing');
-    try { privateKey = createPrivateKey(secret); } finally { secret.fill(0); }
-    if (privateKey.asymmetricKeyType !== 'ed25519' || createPublicKey(privateKey).export({ format: 'jwk' }).x !== config.updatePublicKey) {
-      throw Error('Release signing key does not match the pinned update public key');
-    }
+    privateKey = await readUpdateSigningKey(config);
   }
   // The development builder only creates a fresh output; it never registers a
   // native host, accesses an evidence store or installs into Applications.
@@ -313,7 +255,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const inventory = await dependencyInventory(root, { goExecutable: resolve(first) });
     await writeFile(resolve(second), canonical(inventory), { flag: 'wx', mode: 0o600 });
     console.log(sha256(canonical(inventory)));
-  } else buildDistribution(resolve(mode === '--prepare' ? first : second), mode === '--release'
-    ? JSON.parse(await readFile(resolve(first), 'utf8')) : null).then(result => console.log(JSON.stringify(result)))
+  } else Promise.resolve().then(async () => buildDistribution(resolve(mode === '--prepare' ? first : second), mode === '--release'
+    ? await readReleaseConfig(resolve(first)) : null)).then(result => console.log(JSON.stringify(result)))
     .catch(() => { process.stderr.write('DISTRIBUTION_BUILD_FAILED: check release prerequisites and the isolated build directory.\n'); process.exitCode = 1; });
 }

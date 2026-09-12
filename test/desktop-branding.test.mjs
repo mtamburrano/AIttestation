@@ -27,6 +27,13 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     }
   }
   await scan('spikes');
+  // Shared preflight validators moved out of the builder without changing its
+  // original identities. Keep comparing their combined tokens to the frozen baseline.
+  sources['spikes/distribution/build-macos.mjs'] = [...sources['spikes/distribution/build-macos.mjs'],
+    ...sources['spikes/distribution/release-inputs.mjs']].sort();
+  delete sources['spikes/distribution/release-inputs.mjs'];
+  assert.deepEqual(sources['spikes/distribution/preflight.mjs'], ['pap-release-preflight/1']);
+  delete sources['spikes/distribution/preflight.mjs'];
   assert.deepEqual(sources, baseline.sources, 'Technical identities require a separate reviewed migration');
   for (const [file, expected] of Object.entries(baseline.json)) {
     const actual = JSON.parse(await read(file));
@@ -98,9 +105,9 @@ test('remaining legacy desktop names are only documented technical compatibility
     'spikes/distribution/lifecycle.mjs': ["description: 'Private Provenance fixed-purpose ChatGPT bridge'"],
     'spikes/distribution/updater.mjs': ["'User-Agent': 'PrivateProvenance-Updater/1'"],
     'spikes/distribution/build-macos.mjs': [
-      '`Private-Provenance-${config.version}-${config.sequence}.dmg`',
       "join(contents, 'Helpers/Private Provenance Keychain.app/Contents')",
     ],
+    'spikes/distribution/release-inputs.mjs': ['`Private-Provenance-${config.version}-${config.sequence}.dmg`'],
     'spikes/distribution/release.mjs': ['`Private-Provenance-${release.version}-${release.sequence}.dmg`'],
   };
   for (const [file, retained] of Object.entries(exceptions)) {

@@ -54,6 +54,73 @@ private key is never copied into the bundle or provenance. Public output is
 prepared locally; publishing is a separate operator action. Even a successful
 signed build reports that installed validation is required.
 
+### Offline local release preflight
+
+Before either a candidate or production build, run the preflight from the clean
+source checkout with the exact Node executable selected for dependency approval:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin /absolute/approved-node/bin/node \
+  spikes/distribution/preflight.mjs /absolute/private/release-config.json
+```
+
+`npm run --silent preflight:distribution -- /absolute/private/release-config.json`
+is also available when the selected Node is already on PATH. The command reads
+only local build inputs and writes a single JSON report to stdout. To save it,
+redirect stdout to a **new file outside the checkout** using the shell's
+no-clobber option and `umask 077`. A report in the checkout would make the source
+dirty. Exit status 0 means all local checks passed; status 1 means rejection.
+
+The preflight shares the builder's channel/config, clean-source, exact dependency
+inventory/approval, update-key and helper-profile validators. It binds the actual
+running Node binary, embedded versions and LICENSE, the full selected extracted
+Go toolchain, shipping build plan and local Go inputs to current security/license
+approval. Git index flags that can conceal edits (`assume-unchanged` and
+`skip-worktree`) are rejected. It rechecks source and dependency digests before reporting success.
+Approval must be regenerated when these inputs change, including the build
+plan's explicit `GOTELEMETRY=off` setting.
+
+Both preflight and signed builds require owner-only (0600) config, approval and
+update-private-key files. The helper profile, executable Node/Go files, Node
+LICENSE and explicitly configured module-cache directory must have trusted
+ownership and no group/other write permission. Paths must be absolute and
+canonical, without symlinked ancestors; file inputs cannot be symlinks, hard links
+or special files. Ancestors must also have trusted ownership and safe permissions
+(root-owned sticky temporary directories are allowed). Config/approval reads are
+limited to 16 KiB, the signing key to 4 KiB and the helper profile to 1 MiB.
+
+On Apple-silicon macOS, every subprocess runs under `sandbox-exec` with network
+and filesystem writes denied; Mach service lookups and Apple Events are also
+denied to prevent delegated requests. `/dev/null` is the sole discard-device exception.
+The preflight fails closed if that sandbox is unavailable, including environments
+that prohibit nested sandboxes. Subprocess environments are allowlisted, Git
+fsmonitor/hooks are disabled, Go uses the offline build environment, subprocesses
+have a 15-second timeout, and the CLI has a two-minute deadline (a synchronous
+subprocess can take up to its own timeout to exit). It does not query Apple,
+Chrome, DNS, the update host, provider services or the operator's Keychain. It
+does not compile, sign a release, submit, publish, install or modify inputs.
+
+The `pap-release-preflight/1` report is under 2 KiB and contains only the validated
+channel, fixed check/status/failure codes, and successful source/dependency
+digests. It stops at the first rejected check and marks later checks `NOT_RUN`.
+It excludes paths, filenames, private keys, profile contents, reviewer names,
+signing/notary identities, credentials, evidence, vault/account identifiers,
+environment values and raw subprocess errors. Preserve a report alongside the
+exact reviewed inputs; it is a local snapshot, not release authorization.
+
+Helper inspection validates the embedded CMS signature and typed profile
+structure offline, including expiry, team, fixed helper app/group and all-device
+distribution. Certificate trust/revocation, signing-identity availability,
+notarization credentials, module-cache integrity/compilation, Store publication
+and installed behavior remain build/release gates. The signed builder retains
+its Apple profile decoding and signing checks. A synthetic self-signed profile
+can exercise local preflight without establishing Apple trust.
+
+`npm run test:distribution` covers the shared release contracts and preflight
+regressions using fresh temporary Git repositories, synthetic toolchains,
+generated test keys and CMS profiles. Tests do not use operator release configs,
+Apple credentials, an existing module cache or a browser/profile.
+
 ### Pre-publication release candidates
 
 The candidate disk image is named `Attestamp-Release-Candidate-VERSION-SEQUENCE.dmg`.

@@ -39,7 +39,7 @@ closed. The inventory also conservatively hashes the entire local Go module
 tree, including ignored files, embedded data and existing development binaries.
 It records the three shipping command packages, build flags and allowlisted
 environment (darwin/arm64, CGO enabled, local toolchain, workspaces disabled and
-offline modules). The builder uses that recorded plan with fresh build caches
+offline modules, with Go telemetry disabled). The builder uses that recorded plan with fresh build caches
 and GOPATH, rejects module replacements, and runs `go mod verify` against its
 explicit module cache before and after compilation. It rechecks the complete
 inventory before compilation, before signing and after app notarization.

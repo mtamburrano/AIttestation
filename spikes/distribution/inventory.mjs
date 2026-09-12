@@ -1,8 +1,8 @@
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { sha256 } from './release.mjs';
 import { canonical } from '../vault/format.mjs';
+import { localCommand, localGit } from './local.mjs';
 
 export async function fileInventory(directory, prefix = '') {
   if (!(await lstat(join(directory, prefix))).isDirectory()) throw Error('Inventory requires a directory without links');
@@ -33,7 +33,7 @@ export function shippingGoBuildPlan() {
     ],
     flags: ['-trimpath', '-mod=readonly', '-buildvcs=false'],
     environment: { PATH: '/usr/bin:/bin', GOENV: 'off', GOTOOLCHAIN: 'local', GOWORK: 'off', GOFLAGS: '',
-      GOPROXY: 'off', GOSUMDB: 'off', CGO_ENABLED: '1', GOOS: 'darwin', GOARCH: 'arm64', GOARM64: 'v8.0', GOEXPERIMENT: '' },
+      GOPROXY: 'off', GOSUMDB: 'off', GOTELEMETRY: 'off', CGO_ENABLED: '1', GOOS: 'darwin', GOARCH: 'arm64', GOARM64: 'v8.0', GOEXPERIMENT: '' },
     moduleIntegrity: 'go mod verify before and after compilation; replacements forbidden',
     caches: 'explicit module cache; fresh build cache and GOPATH per build',
   };
@@ -48,10 +48,9 @@ export function validateDependencyApproval(approval, inventory, now = Date.now()
   }
 }
 
-export async function sourceInventory(root) {
-  const paths = execFileSync('/usr/bin/git', ['ls-files', '-co', '--exclude-standard', '-z'], {
-    cwd: root, env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8',
-  }).split('\0').filter(path => path === 'package.json' || path.startsWith('spikes/') || path.startsWith('test/'));
+export async function sourceInventory(root, { command = localCommand } = {}) {
+  const paths = localGit(root, ['ls-files', '-co', '--exclude-standard', '-z'], command)
+    .split('\0').filter(path => path === 'package.json' || path.startsWith('spikes/') || path.startsWith('test/'));
   const files = [];
   for (const path of [...new Set(paths)].sort()) {
     const info = await lstat(join(root, path));
@@ -61,7 +60,7 @@ export async function sourceInventory(root) {
   return { sha256: sha256(canonical(files)), files };
 }
 
-export async function dependencyInventory(root, { goExecutable = null } = {}) {
+export async function dependencyInventory(root, { goExecutable = null, command = localCommand } = {}) {
   const packageJSON = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   if (Object.keys(packageJSON.dependencies ?? {}).length || Object.keys(packageJSON.optionalDependencies ?? {}).length) {
     throw Error('New JavaScript dependencies require distribution inventory support');
@@ -81,8 +80,8 @@ export async function dependencyInventory(root, { goExecutable = null } = {}) {
     if (await realpath(goExecutable) !== resolve(goExecutable) || !executableInfo.isFile() || executableInfo.nlink !== 1) {
       throw Error('Go executable must be a regular file without linked paths');
     }
-    const go = args => execFileSync(goExecutable, args, {
-      env: goBuild.environment, encoding: 'utf8',
+    const go = args => command(goExecutable, args, {
+      env: goBuild.environment, cwd: root,
     }).trim();
     const goRoot = go(['env', 'GOROOT']);
     if (resolve(goExecutable) !== join(goRoot, 'bin/go')) throw Error('Select the extracted GOROOT bin/go directly');
