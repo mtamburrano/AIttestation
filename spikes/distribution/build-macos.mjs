@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { canonical } from '../vault/format.mjs';
 import { RELEASE_CANDIDATE_PROFILE, RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from './config.mjs';
-import { dependencyInventory, fileInventory, sourceInventory } from './inventory.mjs';
+import { dependencyInventory, fileInventory, sourceInventory, validateDependencyApproval } from './inventory.mjs';
 import { RELEASE_PROFILE, distributionError, sha256, validateRelease } from './release.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { readOwned } from './files.mjs';
@@ -171,15 +171,11 @@ export async function buildDistribution(output, config = null) {
   const isReleaseCandidate = releasePlan?.releaseClass === 'RELEASE_CANDIDATE';
   const sources = await sourceInventory(root), dependencies = await dependencyInventory(root, { goExecutable: config?.goExecutable ?? null });
   const dependencyDigest = sha256(canonical(dependencies));
-  let privateKey;
+  let privateKey, approval;
   if (config) {
     if (run('/usr/bin/git', ['status', '--porcelain'], { cwd: root }).trim()) throw Error('Signed releases require a clean source checkout');
-    const approval = JSON.parse(await readFile(config.dependencyApprovalFile, 'utf8'));
-    if (approval.inventoryDigest !== dependencyDigest || approval.securityApproved !== true || approval.licensesApproved !== true
-        || typeof approval.reviewer !== 'string' || !approval.reviewer.trim()
-        || !Number.isFinite(Date.parse(approval.expiresAt)) || Date.parse(approval.expiresAt) <= Date.now()) {
-      throw Error('Current security and license approval must cover this exact dependency inventory');
-    }
+    approval = JSON.parse(await readFile(config.dependencyApprovalFile, 'utf8'));
+    validateDependencyApproval(approval, dependencies);
     if ((await lstat(config.updatePrivateKeyFile)).mode & 0o077) throw Error('Release signing key must be owner-only');
     const secret = await readOwned(config.updatePrivateKeyFile, 4096);
     if (!secret) throw Error('Release signing key missing');
@@ -218,15 +214,22 @@ export async function buildDistribution(output, config = null) {
   const work = join(output, '.release-work'); await mkdir(work);
   try {
     const helper = await configureHelper(app, config, work);
-    const goDirectory = join(root, 'spikes/anchor/algorand');
-    for (const [binary, command] of [['verify', 'verify'], ['fast-verify', 'fastverify'], ['fast-observe', 'fastobserve']]) {
+    const goBuild = dependencies.goBuild;
+    const goOptions = { cwd: join(root, goBuild.directory), env: { ...goBuild.environment,
+      GOMODCACHE: config.goModuleCache, GOCACHE: join(work, 'go-cache'), GOPATH: join(work, 'go-path') } };
+    const verifyBuildInputs = async () => {
+      const current = await dependencyInventory(root, { goExecutable: config.goExecutable });
+      if (sha256(canonical(current)) !== dependencyDigest) throw Error('Approved build inputs changed during packaging');
+      validateDependencyApproval(approval, current);
+      run(config.goExecutable, ['mod', 'verify'], goOptions);
+    };
+    await verifyBuildInputs();
+    for (const { binary, package: command } of goBuild.commands) {
       const target = join(app, 'Contents/Resources/spikes/anchor/algorand/bin', binary);
-      run(config.goExecutable, ['build', '-trimpath', '-mod=readonly', '-buildvcs=false', '-o', target, `./cmd/${command}`], {
-        cwd: goDirectory, env: { PATH: '/usr/bin:/bin', GOENV: 'off', GOTOOLCHAIN: 'local', GOPROXY: 'off', GOSUMDB: 'off',
-          GOMODCACHE: config.goModuleCache, GOCACHE: join(work, 'go-cache'), CGO_ENABLED: '1', GOOS: 'darwin', GOARCH: 'arm64' },
-      });
+      run(config.goExecutable, ['build', ...goBuild.flags, '-o', target, command], goOptions);
       if (binary === 'verify') await copyFile(target, join(recipient, 'Contents/Resources/spikes/anchor/algorand/bin/verify'));
     }
+    await verifyBuildInputs();
     const installedReleasePath = join(app, 'Contents/Resources/spikes/distribution/installed-release.json');
     const releaseCandidatePath = join(app, 'Contents/Resources/spikes/distribution/release-candidate.json');
     if (isReleaseCandidate) {
@@ -254,6 +257,7 @@ export async function buildDistribution(output, config = null) {
       run('/usr/sbin/spctl', ['--assess', '--type', 'execute', bundle]);
     }
     if ((await sourceInventory(root)).sha256 !== sources.sha256) throw Error('Build inputs changed during signing');
+    await verifyBuildInputs();
     const provenance = { profile: 'pap-build-provenance/1', releaseChannel, releaseClass: isReleaseCandidate ? 'RELEASE_CANDIDATE' : 'PRODUCTION',
       storeListingVerified: config.storeListingVerified, source: sources, dependencyDigest,
       node: process.version, go: run(config.goExecutable, ['version']).trim(),

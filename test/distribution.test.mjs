@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,7 +9,7 @@ import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { DesktopUpdater } from '../spikes/distribution/updater.mjs';
 import { RELEASE_PROFILE, sha256, verifyRelease } from '../spikes/distribution/release.mjs';
 import { createChromeWebStoreUpload, releaseArtifactContract, releaseBuildPlan, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
-import { dependencyInventory } from '../spikes/distribution/inventory.mjs';
+import { dependencyInventory, validateDependencyApproval } from '../spikes/distribution/inventory.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
 import { identity, verifyDisclosure } from '../spikes/vault/records.mjs';
@@ -206,15 +206,49 @@ test('release placeholders cannot produce a production configuration and invento
   assert.ok(Object.hasOwn(inventory.node.components, 'openssl')); assert.ok(Object.hasOwn(inventory.node.components, 'sqlite'));
 });
 
+async function syntheticGoToolchain(directory) {
+  const contents = {
+    'bin/go': '#!/bin/sh\ncase "$1 $2" in\n"version ") printf "go version test-only darwin/arm64\\n";;\n"env GOROOT") /usr/bin/dirname "$(/usr/bin/dirname "$0")";;\n*) exit 1;;\nesac\n',
+    LICENSE: 'synthetic Go license', PATENTS: 'synthetic Go patent grant',
+    VERSION: 'test-only', 'go.env': 'synthetic toolchain defaults',
+    'src/runtime/runtime.go': 'package runtime\n', 'pkg/include/textflag.h': 'synthetic assembler headers',
+    'lib/time/zoneinfo.zip': 'synthetic embedded time data',
+    ...Object.fromEntries(['compile', 'link', 'asm', 'cgo'].map(name => [`pkg/tool/darwin_arm64/${name}`, `synthetic ${name}`])),
+  };
+  for (const [path, content] of Object.entries(contents)) {
+    await mkdir(resolve(directory, path, '..'), { recursive: true });
+    await writeFile(join(directory, path), content, { mode: 0o700 });
+  }
+  return join(directory, 'bin/go');
+}
+
+function syntheticApproval(inventory) {
+  return { inventoryDigest: sha256(canonical(inventory)), reviewer: 'synthetic-test-only',
+    securityApproved: true, licensesApproved: true, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+}
+
+async function dependencyFixture(t) {
+  const directory = await temporary(t), root = join(directory, 'source'), goRoot = join(directory, 'go');
+  const moduleRoot = join(root, 'spikes/anchor/algorand');
+  await mkdir(join(moduleRoot, 'cmd/verify'), { recursive: true });
+  await mkdir(join(root, 'spikes/distribution'), { recursive: true });
+  for (const path of ['package.json', 'spikes/anchor/algorand/go.mod', 'spikes/anchor/algorand/go.sum',
+    'spikes/distribution/THIRD_PARTY_NOTICES.md']) {
+    await copyFile(join(import.meta.dirname, '..', path), join(root, path));
+  }
+  const source = join(moduleRoot, 'cmd/verify/main.go');
+  await writeFile(source, 'package main\nimport "fmt"\nfunc main() { fmt.Println("synthetic") }\n');
+  const goExecutable = await syntheticGoToolchain(goRoot);
+  return { directory, root, goRoot, goExecutable, moduleRoot, source,
+    inventory: () => dependencyInventory(root, { goExecutable }) };
+}
+
 test('runtime notice changes invalidate exact inventory approval even when binaries and module pins are unchanged', async t => {
   const root = await temporary(t), nodeDirectory = join(root, 'node'), goDirectory = join(root, 'go');
-  await mkdir(join(nodeDirectory, 'bin'), { recursive: true }); await mkdir(goDirectory);
-  const node = join(nodeDirectory, 'bin/node'), go = join(goDirectory, 'go');
+  await mkdir(join(nodeDirectory, 'bin'), { recursive: true });
+  const node = join(nodeDirectory, 'bin/node'), go = await syntheticGoToolchain(goDirectory);
   await copyFile(process.execPath, node);
   await copyFile(resolve(process.execPath, '../../LICENSE'), join(nodeDirectory, 'LICENSE'));
-  await writeFile(go, '#!/bin/sh\ncase "$1 $2" in\n"version ") printf "go version test-only darwin/arm64\\n";;\n"env GOROOT") /usr/bin/dirname "$0";;\n*) exit 1;;\nesac\n', { mode: 0o700 });
-  await writeFile(join(goDirectory, 'LICENSE'), 'synthetic Go license');
-  await writeFile(join(goDirectory, 'PATENTS'), 'synthetic Go patent grant');
   let sequence = 0;
   const inventory = async () => {
     const path = join(root, `inventory-${sequence++}.json`);
@@ -226,11 +260,14 @@ test('runtime notice changes invalidate exact inventory approval even when binar
     return { digest: sha256(bytes), value };
   };
   const baseline = await inventory();
+  const approval = syntheticApproval(baseline.value);
+  validateDependencyApproval(approval, baseline.value);
   for (const path of [join(nodeDirectory, 'LICENSE'), join(goDirectory, 'LICENSE'), join(goDirectory, 'PATENTS')]) {
     const original = await readFile(path);
     await writeFile(path, Buffer.concat([original, Buffer.from('\nchanged test notice')]));
     const changed = await inventory();
     assert.notEqual(changed.digest, baseline.digest);
+    assert.throws(() => validateDependencyApproval(approval, changed.value), /exact dependency inventory/);
     assert.equal(changed.value.node.sha256, baseline.value.node.sha256);
     assert.equal(changed.value.goToolchain.sha256, baseline.value.goToolchain.sha256);
     assert.deepEqual(changed.value.modules, baseline.value.modules);
@@ -238,7 +275,89 @@ test('runtime notice changes invalidate exact inventory approval even when binar
   }
   assert.equal((await inventory()).digest, baseline.digest);
   await rm(join(goDirectory, 'LICENSE'));
-  await assert.rejects(dependencyInventory(join(import.meta.dirname, '..'), { goExecutable: go }), { code: 'ENOENT' });
+  await assert.rejects(dependencyInventory(join(import.meta.dirname, '..'), { goExecutable: go }), /toolchain input missing/);
+});
+
+test('new Go imports and ignored source inputs invalidate approval without changing pins, notices or tools', async t => {
+  const f = await dependencyFixture(t);
+  await writeFile(join(f.root, '.gitignore'), 'ignored.go\n');
+  assert.equal(spawnSync('/usr/bin/git', ['init', '-q', f.root], { env: { PATH: '/usr/bin:/bin' } }).status, 0);
+  const baseline = await f.inventory(), approval = syntheticApproval(baseline);
+  validateDependencyApproval(approval, baseline);
+  const original = await readFile(f.source);
+  await writeFile(f.source, original.toString().replace('import "fmt"', 'import "fmt"\nimport _ "golang.org/x/crypto/ssh"'));
+  const changed = await f.inventory();
+  assert.notEqual(changed.goBuild.inputs.sha256, baseline.goBuild.inputs.sha256);
+  assert.deepEqual(changed.modules, baseline.modules);
+  assert.deepEqual(changed.goToolchain, baseline.goToolchain);
+  assert.deepEqual(changed.node, baseline.node);
+  assert.equal(changed.noticesDigest, baseline.noticesDigest);
+  assert.equal(changed.goModDigest, baseline.goModDigest);
+  assert.equal(changed.goSumDigest, baseline.goSumDigest);
+  assert.throws(() => validateDependencyApproval(approval, changed), /exact dependency inventory/);
+  await writeFile(f.source, original);
+  const ignored = join(f.moduleRoot, 'cmd/verify/ignored.go');
+  await writeFile(ignored, 'package main\nimport _ "golang.org/x/crypto/openpgp"\n');
+  assert.equal(spawnSync('/usr/bin/git', ['check-ignore', ignored], { cwd: f.root, env: { PATH: '/usr/bin:/bin' } }).status, 0);
+  const added = await f.inventory();
+  assert.ok(added.goBuild.inputs.files.some(file => file.path === 'cmd/verify/ignored.go'));
+  assert.throws(() => validateDependencyApproval(approval, added), /exact dependency inventory/);
+  await rm(ignored);
+  assert.deepEqual(await f.inventory(), baseline);
+  for (const mutate of [
+    inventory => { inventory.goBuild.commands.push({ binary: 'extra', package: './cmd/extra' }); },
+    inventory => { inventory.goBuild.flags.push('-tags=extra'); },
+    ...['GOOS', 'GOARCH', 'CGO_ENABLED', 'GOARM64', 'GOWORK', 'GOEXPERIMENT'].map(name =>
+      inventory => { inventory.goBuild.environment[name] = 'changed'; }),
+  ]) {
+    const changedPlan = structuredClone(baseline); mutate(changedPlan);
+    assert.throws(() => validateDependencyApproval(approval, changedPlan), /exact dependency inventory/);
+  }
+  await writeFile(join(f.moduleRoot, 'go.mod'), `${await readFile(join(f.moduleRoot, 'go.mod'), 'utf8')}\nreplace golang.org/x/crypto => /outside/unreviewed\n`);
+  await assert.rejects(f.inventory(), /module replacements/);
+});
+
+test('Go compiler, linker, standard library and other extracted inputs invalidate the prior approval', async t => {
+  const f = await dependencyFixture(t), baseline = await f.inventory(), approval = syntheticApproval(baseline);
+  for (const path of ['pkg/tool/darwin_arm64/compile', 'pkg/tool/darwin_arm64/link', 'pkg/tool/darwin_arm64/asm',
+    'pkg/tool/darwin_arm64/cgo', 'src/runtime/runtime.go', 'pkg/include/textflag.h', 'lib/time/zoneinfo.zip', 'go.env']) {
+    const absolute = join(f.goRoot, path), original = await readFile(absolute);
+    await writeFile(absolute, Buffer.concat([original, Buffer.from('\nchanged synthetic build input')]));
+    const changed = await f.inventory();
+    assert.equal(changed.goToolchain.sha256, baseline.goToolchain.sha256);
+    assert.deepEqual(changed.goBuild, baseline.goBuild);
+    assert.deepEqual(changed.modules, baseline.modules);
+    assert.notEqual(changed.goToolchain.inputs.sha256, baseline.goToolchain.inputs.sha256);
+    assert.throws(() => validateDependencyApproval(approval, changed), /exact dependency inventory/);
+    await writeFile(absolute, original);
+  }
+  assert.deepEqual(await f.inventory(), baseline);
+  await rm(join(f.goRoot, 'pkg/tool/darwin_arm64/compile'));
+  await assert.rejects(f.inventory(), /toolchain input missing/);
+});
+
+test('build input inventories reject linked roots, directories, files and special files', async t => {
+  const f = await dependencyFixture(t);
+  for (const path of [f.goExecutable, join(f.goRoot, 'pkg/tool'), join(f.goRoot, 'src/runtime/runtime.go'),
+    f.source, f.moduleRoot]) {
+    const saved = join(f.directory, 'saved-input');
+    await rename(path, saved); await symlink(saved, path);
+    await assert.rejects(f.inventory(), /link/);
+    await rm(path); await rename(saved, path);
+  }
+  const linkedRoot = join(f.directory, 'linked-go'); await symlink(f.goRoot, linkedRoot);
+  await assert.rejects(dependencyInventory(f.root, { goExecutable: join(linkedRoot, 'bin/go') }), /link/);
+  for (const path of [f.goExecutable, join(f.goRoot, 'pkg/tool/darwin_arm64/compile'), f.source]) {
+    const hardLink = join(f.directory, 'outside-hard-link'); await link(path, hardLink);
+    await assert.rejects(f.inventory(), /link/);
+    await rm(hardLink);
+  }
+  for (const directory of [f.goRoot, f.moduleRoot]) {
+    const fifo = join(directory, 'synthetic-fifo');
+    assert.equal(spawnSync('/usr/bin/mkfifo', [fifo], { env: { PATH: '/usr/bin:/bin' } }).status, 0);
+    await assert.rejects(f.inventory(), /special files/);
+    await rm(fifo);
+  }
 });
 
 test('release channel gating keeps production strict and makes candidates non-production', () => {

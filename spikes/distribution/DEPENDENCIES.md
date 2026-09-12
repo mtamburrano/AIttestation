@@ -3,8 +3,9 @@
 The packaging code adds no third-party JavaScript dependency. Node is a bundled
 runtime, so its embedded components remain dependencies. The generated inventory
 records the exact Node binary digest, runtime version, embedded versions and all
-direct/indirect Go pins with go.sum checksums. Updating any of them requires a new
-security/license approval for that exact inventory. The findings below support
+direct/indirect Go pins with go.sum checksums, the local Go input tree, shipping
+build settings and complete extracted Go toolchain. Updating any of them requires
+a new security/license approval for that exact inventory. The findings below support
 an operator's review; they do not replace independent release approval.
 
 | Component | Pin | Boundary / inspection |
@@ -19,7 +20,7 @@ an operator's review; they do not replace independent release approval.
 | go-querystring | v1.1.0 | SDK dependency; module BSD notice retained |
 | x/crypto | v0.52.0 | Crypto dependency; security update from v0.45.0; module BSD notice retained |
 | x/sys | v0.45.0 | Native/system interfaces; required by x/crypto v0.52.0; module BSD notice retained |
-| Go | Release compiler go1.27.1 darwin/arm64 | Runtime/compiler identity, root LICENSE and PATENTS are bound to the inventory; Go Authors and supplemental standard-library notices are retained |
+| Go | Release compiler go1.27.1 darwin/arm64 | Complete extracted GOROOT is inventoried, including compiler/linker, standard-library sources, headers, lib inputs, defaults, LICENSE and PATENTS; runtime notices are retained |
 | Swift, macOS system libraries | Recorded/checked by release build | Platform toolchains and system trust remain explicit assumptions; verify current notices/advisories at release |
 
 The builder verifies Mach-O executables depend only on macOS system dylibs, and
@@ -31,10 +32,22 @@ The x/crypto and x/sys pins retain the Go 1.25.1 language baseline; their upstre
 go.mod files require Go 1.25.0. Regenerate the inventory after updating go.mod,
 go.sum or notices. The inventory binds the selected module versions and checksums,
 both dependency-file digests, notices, the Node binary and its embedded versions,
-the copied Node LICENSE, and the explicitly selected Go executable plus its
-GOROOT LICENSE/PATENTS. Missing notice files reject inventory generation.
-An inventory or approval from the
-previous graph cannot cover this graph. The generated inventory is not an
+the copied Node LICENSE, and every regular file in the explicitly selected
+extracted GOROOT. The selected executable must be its direct `bin/go`; missing
+required compiler/notice/source/header/lib inputs, links and special files fail
+closed. The inventory also conservatively hashes the entire local Go module
+tree, including ignored files, embedded data and existing development binaries.
+It records the three shipping command packages, build flags and allowlisted
+environment (darwin/arm64, CGO enabled, local toolchain, workspaces disabled and
+offline modules). The builder uses that recorded plan with fresh build caches
+and GOPATH, rejects module replacements, and runs `go mod verify` against its
+explicit module cache before and after compilation. It rechecks the complete
+inventory before compilation, before signing and after app notarization.
+
+An import, source/build-input or toolchain change therefore requires renewed
+approval even when module pins and the Go driver remain unchanged. Inventory
+profile `pap-dependency-inventory/2` supersedes the prior driver-only inventory;
+its old digest cannot authorize this build. The generated inventory is not an
 approval, and a module advisory lookup does not cover the bundled runtimes.
 
 Falcon's [README.txt at the exact pinned commit](https://github.com/algorand/falcon/blob/02a2a64c44147775e6870b2d957f2cfda1437895/README.txt)
@@ -83,6 +96,8 @@ The offline `go list -deps` closure for `cmd/verify`, `cmd/fastverify` and
 module. This supports a package-absence finding, not a claim that the entire
 module is vulnerability-free. Preserve the nine selected pins; re-evaluate
 advisory applicability whenever imports, build flags or supported platforms change.
+The input-tree binding preserves this disposition only for the exact reviewed
+source, build plan and toolchain; it is not an automatic vulnerability assessment.
 Eight modules occur in the shipping package closure; the inventory also retains
 the declared avm-abi pin. `go list -m all` needs additional non-shipping module
 metadata that is not present in the designated offline release cache; it is not

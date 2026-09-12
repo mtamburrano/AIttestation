@@ -115,7 +115,9 @@ fresh build from a `releaseChannel: "production"` config with
 8. Supply an absolute Go executable and explicit pre-populated module cache.
    Generate the approval inventory with `npm run build:distribution -- --inventory
    /absolute/go /absolute/new-dependency-inventory.json`; this prints its digest
-   and includes the exact Go compiler identity. The prepare-only inventory has
+   and includes the complete extracted GOROOT plus the local Go input tree and
+   shipping build plan. Use the extracted toolchain's direct `bin/go` path;
+   symlinks and special files are rejected. The prepare-only inventory has
    no Go compiler entry and cannot serve as signed-build approval.
    Review that `dependency-inventory.json` against the component notices
    and relevant advisories, including Node's embedded OpenSSL/V8/SQLite and the
@@ -123,9 +125,18 @@ fresh build from a `releaseChannel: "production"` config with
    (SHA-256 of the exact canonical inventory), `reviewer`, `securityApproved: true`,
    `licensesApproved: true`, and an ISO `expiresAt`. This file is an operator
    release assertion, not an independently cryptographic audit. A changed Node
-   binary, Go executable, module pin, checksum file or bundled notice invalidates
-   it. The inventory also binds the copied Node LICENSE and the selected
-   GOROOT LICENSE/PATENTS. No release security/license approval is currently supplied. Falcon's
+   binary, Go source/import, build command/flag/environment, toolchain input,
+   module pin, checksum file or bundled notice invalidates it. Every regular
+   file under GOROOT is bound, including compiler/linker/asm/cgo, standard-library
+   sources, headers, lib data and defaults. The local Go tree deliberately also
+   includes ignored files and development binaries; regenerate approval after
+   rebuilding or changing them. Module replacements are forbidden and ambient
+   workspaces are disabled. Offline module-cache verification and inventory
+   rechecks before/after compilation and after app notarization reject changed
+   inputs before final build provenance and the disk image are produced. The inventory also binds the
+   copied Node LICENSE and GOROOT LICENSE/PATENTS. Previous inventory-profile
+   digests cannot authorize this build. No release security/license approval is
+   currently supplied. Falcon's
    module-wide MIT notice and deterministic-mode attribution are retained in
    `THIRD_PARTY_NOTICES.md`, alongside the supplemental V8 and Go runtime notices.
    The selected release baseline is Node v24.21.0 and Go 1.27.1; see
