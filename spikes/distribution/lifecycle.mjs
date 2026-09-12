@@ -8,6 +8,10 @@ import { distributionError } from './release.mjs';
 export const EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
 export const STORE_URL = `https://chromewebstore.google.com/detail/${EXTENSION_ID}`;
 const EVENTS = ['launch', 'integrationEnabled', 'storeOpened', 'paired', 'exportOffered', 'integrationRemoved', 'updateChecked', 'updateDownloaded'];
+const PRODUCTION_STATE_FILE = 'installation.json';
+const CANDIDATE_STATE_FILE = 'installation.release-candidate.json';
+const PRODUCTION_STATE_PROFILE = 'pap-installation/1';
+const CANDIDATE_STATE_PROFILE = 'pap-release-candidate-installation/1';
 
 export class InstallationLifecycle {
   #directory; #manifestDirectory; #executable; #sequence; #releaseChannel; #state; #exportOffered = false; #tail = Promise.resolve();
@@ -20,19 +24,26 @@ export class InstallationLifecycle {
     this.#executable = browserHost; this.#sequence = sequence; this.#releaseChannel = releaseChannel;
   }
   get manifestPath() { return join(this.#manifestDirectory, 'ai.provenance.consumer.json'); }
-  get #statePath() { return join(this.#directory, 'installation.json'); }
+  // Candidate runs must never advance the production rollback floor.
+  get #statePath() { return join(this.#directory, this.#releaseChannel === RELEASE_CHANNELS.CANDIDATE ? CANDIDATE_STATE_FILE : PRODUCTION_STATE_FILE); }
+  get #stateProfile() { return this.#releaseChannel === RELEASE_CHANNELS.CANDIDATE ? CANDIDATE_STATE_PROFILE : PRODUCTION_STATE_PROFILE; }
   #manifest() { return { name: 'ai.provenance.consumer', description: 'Private Provenance fixed-purpose ChatGPT bridge',
     path: this.#executable, type: 'stdio', allowed_origins: [`chrome-extension://${EXTENSION_ID}/`] }; }
   async init() {
     await ownedDirectory(this.#directory);
     const bytes = await readOwned(this.#statePath);
+    const candidate = this.#releaseChannel === RELEASE_CHANNELS.CANDIDATE;
     this.#state = bytes ? parseCanonical(bytes, 16 * 1024) : {
-      profile: 'pap-installation/1', installedSequence: this.#sequence, highestSeen: this.#sequence,
+      profile: this.#stateProfile, ...(candidate ? { releaseChannel: RELEASE_CHANNELS.CANDIDATE } : {}),
+      installedSequence: this.#sequence, highestSeen: this.#sequence,
       integrationPath: null, events: Object.fromEntries(EVENTS.map(name => [name, 0])),
     };
     const state = this.#state;
-    keys(state, ['profile', 'installedSequence', 'highestSeen', 'integrationPath', 'events']); keys(state.events, EVENTS);
-    if (state.profile !== 'pap-installation/1' || !Number.isSafeInteger(state.installedSequence)
+    keys(state, candidate
+      ? ['profile', 'releaseChannel', 'installedSequence', 'highestSeen', 'integrationPath', 'events']
+      : ['profile', 'installedSequence', 'highestSeen', 'integrationPath', 'events']); keys(state.events, EVENTS);
+    if (state.profile !== this.#stateProfile || (candidate && state.releaseChannel !== RELEASE_CHANNELS.CANDIDATE)
+        || !Number.isSafeInteger(state.installedSequence)
         || state.installedSequence < 1 || !Number.isSafeInteger(state.highestSeen) || state.highestSeen < state.installedSequence
         || (state.integrationPath !== null && (typeof state.integrationPath !== 'string' || !isAbsolute(state.integrationPath)))
         || Object.values(state.events).some(value => !Number.isSafeInteger(value) || value < 0 || value > 1_000_000)) {

@@ -60,7 +60,9 @@ Use `releaseChannel: "release-candidate"` with `storeListingVerified: false` to
 create a Developer ID signed and notarized reviewer artifact before the Web Store
 listing can be published. The candidate UI, provenance, filename and install
 guide identify it as non-production; its updater is disabled and it cannot supply
-the production `installed-release.json` state. There is no in-place promotion:
+the production `installed-release.json` state. Its lifecycle history and rollback
+floor are stored separately from production, so reviewer restarts and integration
+checks cannot advance production state. There is no in-place promotion:
 after the listing is published and the installed boundary is validated, create a
 fresh build from a `releaseChannel: "production"` config with
 `storeListingVerified: true`.

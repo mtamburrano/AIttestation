@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { DesktopUpdater } from '../spikes/distribution/updater.mjs';
 import { RELEASE_PROFILE, sha256, verifyRelease } from '../spikes/distribution/release.mjs';
-import { createChromeWebStoreUpload, releaseBuildPlan, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
+import { createChromeWebStoreUpload, releaseArtifactContract, releaseBuildPlan, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
 import { dependencyInventory } from '../spikes/distribution/inventory.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
@@ -215,6 +215,12 @@ test('release channel gating keeps production strict and makes candidates non-pr
     goExecutable: '/usr/bin/go', goModuleCache: '/tmp/test-go-cache',
   };
   const candidate = validateBuildConfig({ ...common, releaseChannel: RELEASE_CHANNELS.CANDIDATE, storeListingVerified: false });
+  assert.deepEqual(releaseArtifactContract({ ...common, releaseChannel: RELEASE_CHANNELS.CANDIDATE, storeListingVerified: false }), {
+    releaseChannel: RELEASE_CHANNELS.CANDIDATE, releaseClass: 'RELEASE_CANDIDATE',
+    stableManifestCreated: false, updaterEnabled: false, installedProductionState: false,
+    artifactName: 'Private-Provenance-Release-Candidate-1.2.0-2.dmg', stableManifest: null,
+    bundledInstalledRelease: null, updaterAvailable: false, promotion: 'FRESH_PRODUCTION_BUILD_REQUIRED',
+  });
   assert.deepEqual(releaseBuildPlan({ releaseChannel: RELEASE_CHANNELS.CANDIDATE }), {
     releaseChannel: RELEASE_CHANNELS.CANDIDATE, releaseClass: 'RELEASE_CANDIDATE',
     stableManifestCreated: false, updaterEnabled: false, installedProductionState: false,
@@ -234,16 +240,29 @@ test('release channel gating keeps production strict and makes candidates non-pr
   assert.equal(validateInstalledRelease(production).storeListingVerified, true);
 });
 
-test('release-candidate installation state is explicit and never looks production-ready', async t => {
+test('release-candidate lifecycle state is isolated from the production rollback floor', async t => {
   const root = await temporary(t);
-  const lifecycle = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
+  const candidate = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
     chromeSupportDirectory: join(root, 'chrome-test-only'), browserHost: join(root, 'Test.app/Contents/MacOS/host'),
-    sequence: 2, releaseChannel: RELEASE_CHANNELS.CANDIDATE }).init();
-  const status = await lifecycle.status();
+    sequence: 12, releaseChannel: RELEASE_CHANNELS.CANDIDATE }).init();
+  await candidate.enable();
+  const status = await candidate.status();
   assert.equal(status.releaseChannel, RELEASE_CHANNELS.CANDIDATE);
   assert.equal(status.releaseClass, 'RELEASE_CANDIDATE');
-  assert.equal(lifecycle.diagnostics().releaseClass, 'RELEASE_CANDIDATE');
-  assert.equal(lifecycle.diagnostics().releaseChannel, RELEASE_CHANNELS.CANDIDATE);
+  assert.equal(candidate.diagnostics().releaseClass, 'RELEASE_CANDIDATE');
+  assert.equal(candidate.diagnostics().releaseChannel, RELEASE_CHANNELS.CANDIDATE);
+  const restartedCandidate = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
+    chromeSupportDirectory: join(root, 'chrome-test-only'), browserHost: join(root, 'Test.app/Contents/MacOS/host'),
+    sequence: 12, releaseChannel: RELEASE_CHANNELS.CANDIDATE }).init();
+  assert.equal(restartedCandidate.highestSeen, 12);
+  assert.equal((await restartedCandidate.status()).integration, 'ENABLED');
+  const production = await installation(root, 2).init();
+  assert.equal(production.highestSeen, 2);
+  await assert.rejects(installation(root, 1).init(), /APPLICATION_ROLLBACK/);
+  assert.equal(JSON.parse(await readFile(join(root, 'support/installation.release-candidate.json'))).profile,
+    'pap-release-candidate-installation/1');
+  assert.equal(JSON.parse(await readFile(join(root, 'support/installation.release-candidate.json'))).highestSeen, 12);
+  assert.equal(JSON.parse(await readFile(join(root, 'support/installation.json'))).highestSeen, 2);
 });
 
 test('release-candidate UI and diagnostics expose the non-production boundary', async () => {

@@ -71,6 +71,24 @@ export function releaseBuildPlan(config) {
     stableManifestCreated: !candidate, updaterEnabled: !candidate, installedProductionState: !candidate };
 }
 
+export function releaseArtifactContract(config) {
+  const plan = releaseBuildPlan(config);
+  if (typeof config?.version !== 'string' || !/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(config.version)
+      || !Number.isSafeInteger(config.sequence) || config.sequence < 1) {
+    throw distributionError('INVALID_RELEASE_ARTIFACT');
+  }
+  const candidate = plan.releaseClass === 'RELEASE_CANDIDATE';
+  return { ...plan,
+    artifactName: candidate
+      ? `Private-Provenance-Release-Candidate-${config.version}-${config.sequence}.dmg`
+      : `Private-Provenance-${config.version}-${config.sequence}.dmg`,
+    stableManifest: candidate ? null : 'stable.json',
+    bundledInstalledRelease: candidate ? null : 'installed-release.json',
+    updaterAvailable: !candidate,
+    promotion: candidate ? 'FRESH_PRODUCTION_BUILD_REQUIRED' : 'PRODUCTION_RELEASE',
+  };
+}
+
 export function validateBuildConfig(config) {
   const { releaseChannel } = releaseBuildPlan(config);
   const metadata = Object.fromEntries(['sequence', 'version', 'teamId', 'updateOrigin', 'updatePublicKey', 'storeListingVerified']
@@ -147,10 +165,10 @@ async function notarize(path, profile) {
 
 export async function buildDistribution(output, config = null) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('Apple-silicon macOS builder required');
-  const releasePlan = config ? releaseBuildPlan(config) : null;
+  const releaseMetadata = config ? validateBuildConfig(config) : null;
+  const releasePlan = config ? releaseArtifactContract({ ...config, ...releaseMetadata }) : null;
   const releaseChannel = releasePlan?.releaseChannel ?? null;
   const isReleaseCandidate = releasePlan?.releaseClass === 'RELEASE_CANDIDATE';
-  const releaseMetadata = config ? validateBuildConfig(config) : null;
   const sources = await sourceInventory(root), dependencies = await dependencyInventory(root, { goExecutable: config?.goExecutable ?? null });
   const dependencyDigest = sha256(canonical(dependencies));
   let privateKey;
@@ -252,10 +270,7 @@ export async function buildDistribution(output, config = null) {
       ...(isReleaseCandidate ? ['release-candidate.json'] : [])]) {
       await copyFile(join(output, file), join(payload, file));
     }
-    const name = isReleaseCandidate
-      ? `Private-Provenance-Release-Candidate-${config.version}-${config.sequence}.dmg`
-      : `Private-Provenance-${config.version}-${config.sequence}.dmg`;
-    const dmg = join(output, name);
+    const name = releasePlan.artifactName, dmg = join(output, name);
     run('/usr/bin/hdiutil', ['create', '-srcfolder', payload, '-volname', 'Private Provenance', '-format', 'UDZO', dmg]);
     run('/usr/bin/codesign', ['--sign', config.signingIdentity, '--timestamp', dmg]);
     const notarization = await notarize(dmg, config.notaryProfile);
@@ -278,9 +293,9 @@ export async function buildDistribution(output, config = null) {
       signature: sign(null, Buffer.from(canonical(release)), privateKey).toString('base64url') }));
     await writeFile(join(output, 'notarization.json'), canonical(notarization));
     await writeFile(join(output, 'build-measurement.json'), canonical({ platform: 'darwin', arch: 'arm64',
-      signature: 'DEVELOPER_ID', notarized: true, nativeHostManifestInstalled: false, installedValidation: 'REQUIRED' }));
-    return { output, releaseReady: false, signed: true, notarized: true, releaseChannel,
-      stableManifestCreated: true, installedValidation: 'REQUIRED' };
+      ...releasePlan, signature: 'DEVELOPER_ID', notarized: true, nativeHostManifestInstalled: false, installedValidation: 'REQUIRED' }));
+    return { output, releaseReady: false, signed: true, notarized: true, ...releasePlan,
+      installedValidation: 'REQUIRED' };
   } finally { await rm(work, { recursive: true, force: true }); }
 }
 
