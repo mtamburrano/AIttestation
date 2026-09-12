@@ -11,8 +11,9 @@ Do not promote a development build based on passing synthetic fixtures.
 ## Build inputs and outputs
 
 `npm run build:distribution -- --prepare NEW_OUTPUT_DIRECTORY` creates a fresh
-ad-hoc application, standalone verifier, uploadable extension ZIP, exact dependency
-inventory and source-hashed build provenance. It does not install anything, touch
+ad-hoc application, standalone verifier, uploadable **Attestamp for ChatGPT**
+extension ZIP, exact dependency inventory and source-hashed build provenance. It
+does not install anything, touch
 Keychain items, open a browser, publish to a store or contact notarization services.
 Its provenance explicitly says `AD_HOC_ONLY`, `notarized: false`, and that the
 development native tools were not rebuilt by this packaging step. Build the pinned
@@ -65,8 +66,9 @@ validation is required.
    configuration. The profile name is reserved; credentials have not been
    validated. Submission sends only the built public artifacts to Apple.
 4. Create the Chrome Web Store developer account and upload
-   `Chrome-Web-Store-upload.zip` as a draft. The upload package intentionally has
-   no `key`, so the Web Store can assign the listing identity. The assigned draft
+   `Chrome-Web-Store-upload.zip` as a draft. The package is the consumer-facing
+   **Attestamp for ChatGPT** extension and intentionally has no `key`, so the Web
+   Store can assign the listing identity. The assigned draft
    Item ID is `medilhopfckldjgdnchfkpmfmfnkadca`, and its public key is pinned in
    the keyed development manifest. The package must retain only `nativeMessaging`
    and `https://chatgpt.com/*`, with the declared icon assets; a successful upload

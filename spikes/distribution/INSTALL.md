@@ -14,7 +14,7 @@ draft item identity.
    Keychain; no wallet, seed phrase, terminal or MCP configuration is needed.
 3. Choose **Enable Chrome connection** in the local app page. This registers only
    this app's native connection for your macOS user. Choose **Open Chrome Web
-   Store**, then add the published extension and accept its displayed permissions.
+   Store**, then add **Attestamp for ChatGPT** and accept its displayed permissions.
    Access is limited to chatgpt.com and native messaging. Incognito is unavailable.
 4. Open one empty, active ChatGPT tab. Refresh the paired tab in the app and
    enroll it. Compose protected text in the local app. Provider-page drafts,

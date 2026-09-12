@@ -320,6 +320,12 @@ test('collector queries both configured operators concurrently and maps only bou
 test('extension manifest is limited to the supported ChatGPT surface and exposes no attachment or ambient data permission', async () => {
   const root = new URL('../spikes/browser/chatgpt/extension/', import.meta.url);
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
+  assert.equal(manifest.name, 'Attestamp for ChatGPT');
+  assert.equal(manifest.short_name, 'Attestamp');
+  assert.equal(manifest.version, '1.2.0');
+  assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
+  assert.match(manifest.description, /Attestamp desktop app/);
+  assert.match(manifest.description, /one supported ChatGPT tab/);
   assert.deepEqual(manifest.permissions.slice().sort(), ['nativeMessaging']);
   assert.equal(manifest.incognito, 'not_allowed');
   assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*']);
@@ -327,7 +333,7 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const publicKey = Buffer.from(manifest.key, 'base64');
   const keyHash = createHash('sha256').update(publicKey).digest().subarray(0, 16);
   const derivedId = [...keyHash].map(byte => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 15))).join('');
-  assert.equal(derivedId, extensionId);
+  assert.equal(derivedId, extensionId, 'consumer metadata updates must preserve the assigned Store ID');
   const content = await readFile(new URL('content-script.js', root), 'utf8');
   assert.match(content, /#prompt-textarea/); assert.match(content, /send-button/);
   assert.doesNotMatch(content, /clipboard|downloads|history|bookmarks|file:\/\//i);

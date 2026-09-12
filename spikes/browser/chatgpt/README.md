@@ -63,6 +63,10 @@ build. The service database and sponsor executable are never bundled in the app.
 
 ## Least-authority Chrome adapter
 
+The consumer-facing Manifest V3 package is named **Attestamp for ChatGPT** and
+uses **Attestamp** as its short name. It pairs with the Attestamp desktop app
+for the one supported ChatGPT path described below.
+
 The Manifest V3 extension has only `nativeMessaging` and the single
 `https://chatgpt.com/*` host permission. Its public manifest key pins the assigned
 Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
