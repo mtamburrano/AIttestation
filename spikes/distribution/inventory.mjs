@@ -1,5 +1,5 @@
 import { lstat, readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { sha256 } from './release.mjs';
 import { canonical } from '../vault/format.mjs';
@@ -40,10 +40,20 @@ export async function dependencyInventory(root, { goExecutable = null } = {}) {
     if (!sum) throw Error('Dependency checksum missing');
     return { name, version, checksum: sum };
   }).sort((a, b) => a.name.localeCompare(b.name));
+  let goToolchain = null;
+  if (goExecutable) {
+    const go = args => execFileSync(goExecutable, args, {
+      env: { PATH: '/usr/bin:/bin', GOENV: 'off', GOTOOLCHAIN: 'local' }, encoding: 'utf8',
+    }).trim();
+    const goRoot = go(['env', 'GOROOT']);
+    goToolchain = { sha256: sha256(await readFile(goExecutable)), version: go(['version']),
+      licenseSha256: sha256(await readFile(join(goRoot, 'LICENSE'))),
+      patentsSha256: sha256(await readFile(join(goRoot, 'PATENTS'))) };
+  }
   return { profile: 'pap-dependency-inventory/1', javascriptPackages: [],
-    node: { version: process.version, sha256: sha256(await readFile(process.execPath)), components: { ...process.versions } },
-    goToolchain: goExecutable ? { sha256: sha256(await readFile(goExecutable)),
-      version: execFileSync(goExecutable, ['version'], { env: { PATH: '/usr/bin:/bin', GOENV: 'off', GOTOOLCHAIN: 'local' }, encoding: 'utf8' }).trim() } : null,
+    node: { version: process.version, sha256: sha256(await readFile(process.execPath)), components: { ...process.versions },
+      licenseSha256: sha256(await readFile(resolve(process.execPath, '../../LICENSE'))) },
+    goToolchain,
     noticesDigest: sha256(await readFile(join(root, 'spikes/distribution/THIRD_PARTY_NOTICES.md'))),
     goModDigest: sha256(goMod), goSumDigest: sha256(goSum), modules,
     reviewScope: 'Exact pins and runtime components; independent security and license approval required before release.' };

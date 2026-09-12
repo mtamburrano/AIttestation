@@ -124,12 +124,15 @@ fresh build from a `releaseChannel: "production"` config with
    `licensesApproved: true`, and an ISO `expiresAt`. This file is an operator
    release assertion, not an independently cryptographic audit. A changed Node
    binary, Go executable, module pin, checksum file or bundled notice invalidates
-   it. No release security/license approval is currently supplied. Falcon's
+   it. The inventory also binds the copied Node LICENSE and the selected
+   GOROOT LICENSE/PATENTS. No release security/license approval is currently supplied. Falcon's
    module-wide MIT notice and deterministic-mode attribution are retained in
-   `THIRD_PARTY_NOTICES.md`. The inspected Node v22.23.1 and Go 1.25.1 tools still
-   require patched, supported replacements as described in `DEPENDENCIES.md`.
-   Regenerate the inventory with the selected release tools and complete their
-   security/license review before asserting approval.
+   `THIRD_PARTY_NOTICES.md`, alongside the supplemental V8 and Go runtime notices.
+   The selected release baseline is Node v24.21.0 and Go 1.27.1; see
+   `DEPENDENCIES.md` for current advisory findings, including x/crypto packages
+   that are absent from the shipping tools. Invoke the selected Node binary and
+   absolute Go executable explicitly, regenerate the inventory, and complete
+   independent security/license review before asserting approval.
 9. Complete the signed installed checks below in **Private Provenance Test**,
    using a specifically designated ChatGPT test account and synthetic text only.
    No live test has been run, and no existing conversations may be inspected.

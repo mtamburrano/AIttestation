@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
@@ -204,6 +204,41 @@ test('release placeholders cannot produce a production configuration and invento
   assert.equal(inventory.modules.length, 9); assert.deepEqual(inventory.javascriptPackages, []);
   assert.ok(inventory.modules.every(module => module.checksum.startsWith('h1:')));
   assert.ok(Object.hasOwn(inventory.node.components, 'openssl')); assert.ok(Object.hasOwn(inventory.node.components, 'sqlite'));
+});
+
+test('runtime notice changes invalidate exact inventory approval even when binaries and module pins are unchanged', async t => {
+  const root = await temporary(t), nodeDirectory = join(root, 'node'), goDirectory = join(root, 'go');
+  await mkdir(join(nodeDirectory, 'bin'), { recursive: true }); await mkdir(goDirectory);
+  const node = join(nodeDirectory, 'bin/node'), go = join(goDirectory, 'go');
+  await copyFile(process.execPath, node);
+  await copyFile(resolve(process.execPath, '../../LICENSE'), join(nodeDirectory, 'LICENSE'));
+  await writeFile(go, '#!/bin/sh\ncase "$1 $2" in\n"version ") printf "go version test-only darwin/arm64\\n";;\n"env GOROOT") /usr/bin/dirname "$0";;\n*) exit 1;;\nesac\n', { mode: 0o700 });
+  await writeFile(join(goDirectory, 'LICENSE'), 'synthetic Go license');
+  await writeFile(join(goDirectory, 'PATENTS'), 'synthetic Go patent grant');
+  let sequence = 0;
+  const inventory = async () => {
+    const path = join(root, `inventory-${sequence++}.json`);
+    const result = spawnSync(node, [join(import.meta.dirname, '../spikes/distribution/build-macos.mjs'), '--inventory', go, path],
+      { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 10000 });
+    assert.equal(result.status, 0, result.stderr);
+    const bytes = await readFile(path), value = JSON.parse(bytes);
+    assert.equal(result.stdout.trim(), sha256(bytes));
+    return { digest: sha256(bytes), value };
+  };
+  const baseline = await inventory();
+  for (const path of [join(nodeDirectory, 'LICENSE'), join(goDirectory, 'LICENSE'), join(goDirectory, 'PATENTS')]) {
+    const original = await readFile(path);
+    await writeFile(path, Buffer.concat([original, Buffer.from('\nchanged test notice')]));
+    const changed = await inventory();
+    assert.notEqual(changed.digest, baseline.digest);
+    assert.equal(changed.value.node.sha256, baseline.value.node.sha256);
+    assert.equal(changed.value.goToolchain.sha256, baseline.value.goToolchain.sha256);
+    assert.deepEqual(changed.value.modules, baseline.value.modules);
+    await writeFile(path, original);
+  }
+  assert.equal((await inventory()).digest, baseline.digest);
+  await rm(join(goDirectory, 'LICENSE'));
+  await assert.rejects(dependencyInventory(join(import.meta.dirname, '..'), { goExecutable: go }), { code: 'ENOENT' });
 });
 
 test('release channel gating keeps production strict and makes candidates non-production', () => {

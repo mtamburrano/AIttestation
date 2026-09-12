@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createConnection } from 'node:net';
 import { startChromeProtectionRuntime } from '../spikes/browser/chatgpt/bridge-runtime.mjs';
@@ -21,6 +21,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.equal(build.error, undefined);
   assert.equal(build.status, 0, build.stderr);
   const provenance = JSON.parse(readFileSync(join(output, 'build-provenance.json')));
+  const dependencies = JSON.parse(readFileSync(join(output, 'dependency-inventory.json')));
   assert.equal(provenance.releaseChannel, 'development'); assert.equal(provenance.releaseClass, 'DEVELOPMENT');
   assert.equal(provenance.signature, 'AD_HOC_ONLY'); assert.equal(provenance.notarized, false);
   assert.equal(provenance.storeListing, 'NOT_PROVISIONED'); assert.equal(provenance.sourceRebuiltNativeTools, false);
@@ -54,7 +55,10 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const recipient = join(output, 'Recipient/Private Provenance Verifier.app');
   const recipientResources = join(recipient, 'Contents/Resources/spikes');
   for (const bundle of [app, recipient]) {
-    assert.equal(existsSync(join(bundle, 'Contents/Resources/THIRD_PARTY_NOTICES.md')), true);
+    const notices = readFileSync(join(bundle, 'Contents/Resources/THIRD_PARTY_NOTICES.md'));
+    assert.equal(createHash('sha256').update(notices).digest('hex'), dependencies.noticesDigest);
+    assert.equal(createHash('sha256').update(readFileSync(join(bundle, 'Contents/Resources/Node-LICENSE.txt'))).digest('hex'),
+      dependencies.node.licenseSha256);
     assert.equal(spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], { env: {}, encoding: 'utf8' }).status, 0);
   }
   assert.equal(existsSync(join(recipientResources, 'vault/vault.mjs')), false, 'recipient carries no vault storage/key APIs');
