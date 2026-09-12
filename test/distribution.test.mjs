@@ -8,13 +8,14 @@ import { spawnSync } from 'node:child_process';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { DesktopUpdater } from '../spikes/distribution/updater.mjs';
 import { RELEASE_PROFILE, sha256, verifyRelease } from '../spikes/distribution/release.mjs';
-import { createChromeWebStoreUpload, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
+import { createChromeWebStoreUpload, releaseBuildPlan, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
 import { dependencyInventory } from '../spikes/distribution/inventory.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
 import { identity, verifyDisclosure } from '../spikes/vault/records.mjs';
 import { ChatGPTChromeAdapter, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT, CHATGPT_RELEASE_PROTOCOL } from '../spikes/browser/chatgpt/adapter.mjs';
 import { startProductComposer } from '../spikes/browser/chatgpt/product-server.mjs';
+import { RELEASE_CANDIDATE_PROFILE, RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from '../spikes/distribution/config.mjs';
 
 async function temporary(t) {
   const root = await realpath(await mkdtemp('/private/tmp/provenance-distribution-test-'));
@@ -203,6 +204,55 @@ test('release placeholders cannot produce a production configuration and invento
   assert.equal(inventory.modules.length, 9); assert.deepEqual(inventory.javascriptPackages, []);
   assert.ok(inventory.modules.every(module => module.checksum.startsWith('h1:')));
   assert.ok(Object.hasOwn(inventory.node.components, 'openssl')); assert.ok(Object.hasOwn(inventory.node.components, 'sqlite'));
+});
+
+test('release channel gating keeps production strict and makes candidates non-production', () => {
+  const key = generateKeyPairSync('ed25519'), common = {
+    sequence: 2, version: '1.2.0', teamId: 'TESTTEAM01', updateOrigin: 'https://updates.example',
+    updatePublicKey: key.publicKey.export({ format: 'jwk' }).x, signingIdentity: 'Developer ID Application: Test',
+    notaryProfile: 'private-provenance-notary', helperProvisioningProfile: '/tmp/test-helper.provisionprofile',
+    updatePrivateKeyFile: '/tmp/test-update-key', dependencyApprovalFile: '/tmp/test-approval.json',
+    goExecutable: '/usr/bin/go', goModuleCache: '/tmp/test-go-cache',
+  };
+  const candidate = validateBuildConfig({ ...common, releaseChannel: RELEASE_CHANNELS.CANDIDATE, storeListingVerified: false });
+  assert.deepEqual(releaseBuildPlan({ releaseChannel: RELEASE_CHANNELS.CANDIDATE }), {
+    releaseChannel: RELEASE_CHANNELS.CANDIDATE, releaseClass: 'RELEASE_CANDIDATE',
+    stableManifestCreated: false, updaterEnabled: false, installedProductionState: false,
+  });
+  assert.equal(candidate.profile, RELEASE_CANDIDATE_PROFILE);
+  assert.equal(candidate.releaseChannel, RELEASE_CHANNELS.CANDIDATE);
+  assert.equal(candidate.storeListingVerified, false);
+  assert.throws(() => validateInstalledRelease(candidate), /Unknown\/missing fields|INVALID/);
+  assert.throws(() => validateReleaseCandidate({ ...candidate, storeListingVerified: true }), /INVALID_RELEASE_CANDIDATE/);
+  assert.throws(() => validateBuildConfig({ ...common, releaseChannel: RELEASE_CHANNELS.PRODUCTION, storeListingVerified: false }), /RELEASE_PROVISIONING_REQUIRED/);
+  const production = validateBuildConfig({ ...common, releaseChannel: RELEASE_CHANNELS.PRODUCTION, storeListingVerified: true });
+  assert.deepEqual(releaseBuildPlan({ releaseChannel: RELEASE_CHANNELS.PRODUCTION }), {
+    releaseChannel: RELEASE_CHANNELS.PRODUCTION, releaseClass: 'PRODUCTION',
+    stableManifestCreated: true, updaterEnabled: true, installedProductionState: true,
+  });
+  assert.equal(production.profile, 'pap-installed-release/1');
+  assert.equal(validateInstalledRelease(production).storeListingVerified, true);
+});
+
+test('release-candidate installation state is explicit and never looks production-ready', async t => {
+  const root = await temporary(t);
+  const lifecycle = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
+    chromeSupportDirectory: join(root, 'chrome-test-only'), browserHost: join(root, 'Test.app/Contents/MacOS/host'),
+    sequence: 2, releaseChannel: RELEASE_CHANNELS.CANDIDATE }).init();
+  const status = await lifecycle.status();
+  assert.equal(status.releaseChannel, RELEASE_CHANNELS.CANDIDATE);
+  assert.equal(status.releaseClass, 'RELEASE_CANDIDATE');
+  assert.equal(lifecycle.diagnostics().releaseClass, 'RELEASE_CANDIDATE');
+  assert.equal(lifecycle.diagnostics().releaseChannel, RELEASE_CHANNELS.CANDIDATE);
+});
+
+test('release-candidate UI and diagnostics expose the non-production boundary', async () => {
+  const app = await readFile(new URL('../spikes/browser/chatgpt/product-app.js', import.meta.url), 'utf8');
+  const page = await readFile(new URL('../spikes/browser/chatgpt/product.html', import.meta.url), 'utf8');
+  assert.match(page, /id="release-channel"/);
+  assert.match(app, /releaseChannel === 'release-candidate'/);
+  assert.match(app, /stable updates are disabled/);
+  assert.match(app, /releaseChannel === 'production'/);
 });
 
 test('installation actions require the paired composer and support output cannot reflect request data', async t => {

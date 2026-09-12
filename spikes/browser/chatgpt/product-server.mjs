@@ -60,7 +60,7 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
         const operation = operations[request.url];
         if (!operation) throw Error('Unsupported installation operation');
         if (!runtime.maintenance) {
-          if (operation === 'status') return reply(response, 200, { integration: 'NOT_CONFIGURED', storeURL: null });
+          if (operation === 'status') return reply(response, 200, { integration: 'NOT_CONFIGURED', storeURL: null, releaseChannel: null, releaseClass: 'DEVELOPMENT' });
           throw Error('Signed distribution is not configured in this build');
         }
         try { return reply(response, 200, await runtime.maintenance[operation](data)); }

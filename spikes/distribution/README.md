@@ -1,8 +1,9 @@
 # macOS distribution and adapter maintenance
 
-The distribution implementation is local and testable, but production signing,
-notarization, Chrome Web Store publication and the installed Chrome/provider
-boundary have not been validated. `installed-release.json` is deliberately `null`.
+The distribution implementation is local and testable. A signed/notarized
+release-candidate path is available for review, while Chrome Web Store
+publication and the installed Chrome/provider boundary have not been validated.
+`installed-release.json` is deliberately `null` in the repository.
 The keyed development manifest matches the assigned Chrome Web Store draft item
 `medilhopfckldjgdnchfkpmfmfnkadca`; publication and installed validation remain
 required.
@@ -21,15 +22,20 @@ Go tools first using the existing Algorand build command. Local fixture builds
 are not evidence of a clean-machine consumer install.
 
 For a signed build, copy `release-config.example.json` outside the repository and
-provision every input described below. Run:
+provision every input described below. Set `releaseChannel` explicitly to
+`production` or `release-candidate`, then run:
 
 ```sh
 npm run build:distribution -- --release /absolute/private/release-config.json /absolute/new/output
 ```
 
-The builder refuses missing identities, an unconfirmed store listing, a dirty
-source checkout, a mismatched release signing key, or missing/currently expired
-dependency approval. It rebuilds the three shipped Go tools from the recorded
+The production builder refuses missing identities, an unconfirmed store listing,
+a dirty source checkout, a mismatched release signing key, or missing/currently
+expired dependency approval. A `release-candidate` build may keep
+`storeListingVerified: false` for pre-publication reviewer validation, but it
+still requires every signing, notarization, update-root and dependency-approval
+input below. It produces a clearly labeled signed/notarized candidate with no
+stable manifest or installed production-release state. It rebuilds the three shipped Go tools from the recorded
 source with explicit offline module/cache settings. It creates a nested Keychain
 helper bundle with a checked Developer ID provisioning profile, signs executables
 inside out with hardened runtime, preserves the bridge's pinned identifiers, then
@@ -38,13 +44,26 @@ entitlement; it receives no Keychain groups. The helper alone receives the fixed
 Keychain group. No disabled library validation, debugging entitlement or broad
 filesystem/browser permission is added.
 
-`stable.json` authenticates the disk image's exact size/hash, sequence, schema
-reader bounds, platform, expiry and hashes of the dependency inventory and build
-provenance. It is signed with a separate Ed25519 release key. App bundles carry
-the pinned public key and update origin. The private key is never copied into
-the bundle or provenance. Public output is prepared locally; publishing is a
-separate operator action. Even a successful signed build reports that installed
-validation is required.
+Production `stable.json` authenticates the disk image's exact size/hash, sequence,
+schema reader bounds, platform, expiry and hashes of the dependency inventory and
+build provenance. It is signed with a separate Ed25519 release key. Candidate
+builds instead emit `release-candidate.json`, retain a null
+`installed-release.json`, and never create `stable.json` or an update-ready
+production state. App bundles carry the pinned public key and update origin. The
+private key is never copied into the bundle or provenance. Public output is
+prepared locally; publishing is a separate operator action. Even a successful
+signed build reports that installed validation is required.
+
+### Pre-publication release candidates
+
+Use `releaseChannel: "release-candidate"` with `storeListingVerified: false` to
+create a Developer ID signed and notarized reviewer artifact before the Web Store
+listing can be published. The candidate UI, provenance, filename and install
+guide identify it as non-production; its updater is disabled and it cannot supply
+the production `installed-release.json` state. There is no in-place promotion:
+after the listing is published and the installed boundary is validated, create a
+fresh build from a `releaseChannel: "production"` config with
+`storeListingVerified: true`.
 
 ## Provisioning still required
 
@@ -81,7 +100,8 @@ validation is required.
    package, and do not leave a stale identity in any pinned check.
 6. Complete the listing, privacy disclosures, permission justification and store
    review. Set `storeListingVerified` true only after the listing is published and
-   installation succeeds with the reviewed identity; draft creation or upload
+   installation succeeds with the reviewed identity, then perform a fresh
+   `releaseChannel: "production"` build. A candidate, draft creation or upload
    success alone must never set it.
 7. Provision an HTTPS update origin you control. Reserve `/desktop/stable.json`
    and `/desktop/Private-Provenance-VERSION-SEQUENCE.dmg`; redirects, credentials,

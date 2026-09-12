@@ -2,6 +2,7 @@ import { unlink } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { canonical, keys, parseCanonical } from '../vault/format.mjs';
 import { atomicWrite, ownedDirectory, readOwned, syncDirectory } from './files.mjs';
+import { RELEASE_CHANNELS } from './config.mjs';
 import { distributionError } from './release.mjs';
 
 export const EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
@@ -9,13 +10,14 @@ export const STORE_URL = `https://chromewebstore.google.com/detail/${EXTENSION_I
 const EVENTS = ['launch', 'integrationEnabled', 'storeOpened', 'paired', 'exportOffered', 'integrationRemoved', 'updateChecked', 'updateDownloaded'];
 
 export class InstallationLifecycle {
-  #directory; #manifestDirectory; #executable; #sequence; #state; #exportOffered = false; #tail = Promise.resolve();
-  constructor({ supportDirectory, chromeSupportDirectory, browserHost, sequence }) {
+  #directory; #manifestDirectory; #executable; #sequence; #releaseChannel; #state; #exportOffered = false; #tail = Promise.resolve();
+  constructor({ supportDirectory, chromeSupportDirectory, browserHost, sequence, releaseChannel = RELEASE_CHANNELS.PRODUCTION }) {
     if (![supportDirectory, chromeSupportDirectory, browserHost].every(isAbsolute)
-        || !Number.isSafeInteger(sequence) || sequence < 1) throw distributionError('INVALID_INSTALL_CONFIGURATION');
+        || !Number.isSafeInteger(sequence) || sequence < 1
+        || !Object.values(RELEASE_CHANNELS).includes(releaseChannel)) throw distributionError('INVALID_INSTALL_CONFIGURATION');
     this.#directory = supportDirectory;
     this.#manifestDirectory = join(chromeSupportDirectory, 'NativeMessagingHosts');
-    this.#executable = browserHost; this.#sequence = sequence;
+    this.#executable = browserHost; this.#sequence = sequence; this.#releaseChannel = releaseChannel;
   }
   get manifestPath() { return join(this.#manifestDirectory, 'ai.provenance.consumer.json'); }
   get #statePath() { return join(this.#directory, 'installation.json'); }
@@ -61,11 +63,16 @@ export class InstallationLifecycle {
     });
   }
   async status() {
-    if (!await ownedDirectory(this.#manifestDirectory, { create: false })) return { integration: 'DISABLED', storeURL: STORE_URL };
+    if (!await ownedDirectory(this.#manifestDirectory, { create: false })) {
+      return { integration: 'DISABLED', storeURL: STORE_URL, releaseChannel: this.#releaseChannel,
+        releaseClass: this.#releaseChannel === RELEASE_CHANNELS.CANDIDATE ? 'RELEASE_CANDIDATE' : 'PRODUCTION' };
+    }
     const bytes = await readOwned(this.manifestPath);
     let installed = false;
     if (bytes) { try { installed = canonical(JSON.parse(bytes)) === canonical(this.#manifest()); } catch {} }
-    return { integration: installed ? 'ENABLED' : bytes ? 'CONFLICT' : 'DISABLED', storeURL: STORE_URL };
+    return { integration: installed ? 'ENABLED' : bytes ? 'CONFLICT' : 'DISABLED', storeURL: STORE_URL,
+      releaseChannel: this.#releaseChannel,
+      releaseClass: this.#releaseChannel === RELEASE_CHANNELS.CANDIDATE ? 'RELEASE_CANDIDATE' : 'PRODUCTION' };
   }
   enable() {
     return this.#serial(async () => {
@@ -106,6 +113,8 @@ export class InstallationLifecycle {
   }
   diagnostics({ paired = false, update = 'NOT_CHECKED' } = {}) {
     return { profile: 'pap-support/1', appSequence: this.#sequence, platform: 'darwin-arm64',
+      releaseChannel: this.#releaseChannel,
+      releaseClass: this.#releaseChannel === RELEASE_CHANNELS.CANDIDATE ? 'RELEASE_CANDIDATE' : 'PRODUCTION',
       pairing: paired === true ? 'PAIRED' : 'UNPAIRED',
       update: ['NOT_CHECKED', 'CURRENT', 'AVAILABLE', 'DOWNLOADED', 'UNAVAILABLE', 'REJECTED'].includes(update) ? update : 'REJECTED',
       events: { ...this.#state.events },

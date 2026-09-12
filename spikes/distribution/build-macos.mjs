@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { canonical } from '../vault/format.mjs';
-import { validateInstalledRelease } from './config.mjs';
+import { RELEASE_CANDIDATE_PROFILE, RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from './config.mjs';
 import { dependencyInventory, fileInventory, sourceInventory } from './inventory.mjs';
-import { RELEASE_PROFILE, sha256, validateRelease } from './release.mjs';
+import { RELEASE_PROFILE, distributionError, sha256, validateRelease } from './release.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { readOwned } from './files.mjs';
 
@@ -19,6 +19,9 @@ const run = (command, args, extra = {}) => execFileSync(command, args, {
 const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>${Object.entries(values).map(([key, value]) =>
   `<key>${key}</key>${value === true ? '<true/>' : Array.isArray(value)
     ? `<array>${value.map(item => `<string>${item}</string>`).join('')}</array>` : `<string>${value}</string>`}`).join('')}</dict></plist>`;
+const releaseCandidateNotice = `# RELEASE CANDIDATE — PRE-PUBLICATION REVIEW ONLY
+
+This signed and notarized build is for designated reviewer validation before the Chrome Web Store listing is published. It is not a production release, has no stable update channel, and must not be promoted in place. Produce a fresh production build after the listing and installed validation are complete.`;
 
 export function prepareChromeWebStoreManifest(manifest) {
   const uploadManifest = structuredClone(manifest);
@@ -58,16 +61,30 @@ export async function createChromeWebStoreUpload(output) {
   }
 }
 
+export function releaseBuildPlan(config) {
+  const releaseChannel = config?.releaseChannel === undefined ? RELEASE_CHANNELS.PRODUCTION : config.releaseChannel;
+  if (![RELEASE_CHANNELS.PRODUCTION, RELEASE_CHANNELS.CANDIDATE].includes(releaseChannel)) {
+    throw distributionError('INVALID_RELEASE_CHANNEL');
+  }
+  const candidate = releaseChannel === RELEASE_CHANNELS.CANDIDATE;
+  return { releaseChannel, releaseClass: candidate ? 'RELEASE_CANDIDATE' : 'PRODUCTION',
+    stableManifestCreated: !candidate, updaterEnabled: !candidate, installedProductionState: !candidate };
+}
+
 export function validateBuildConfig(config) {
-  const installed = validateInstalledRelease({ profile: 'pap-installed-release/1',
-    ...Object.fromEntries(['sequence', 'version', 'teamId', 'updateOrigin', 'updatePublicKey', 'storeListingVerified'].map(name => [name, config[name]])) });
+  const { releaseChannel } = releaseBuildPlan(config);
+  const metadata = Object.fromEntries(['sequence', 'version', 'teamId', 'updateOrigin', 'updatePublicKey', 'storeListingVerified']
+    .map(name => [name, config[name]]));
+  const validated = releaseChannel === RELEASE_CHANNELS.CANDIDATE
+    ? validateReleaseCandidate({ profile: RELEASE_CANDIDATE_PROFILE, releaseChannel, ...metadata })
+    : validateInstalledRelease({ profile: 'pap-installed-release/1', ...metadata });
   if (typeof config.signingIdentity !== 'string' || !/^Developer ID Application: [^\n\r]+$/.test(config.signingIdentity)
       || typeof config.notaryProfile !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(config.notaryProfile)
       || !['helperProvisioningProfile', 'updatePrivateKeyFile', 'dependencyApprovalFile', 'goExecutable', 'goModuleCache']
         .every(name => typeof config[name] === 'string' && isAbsolute(config[name]))) {
     throw Error('Release identities, provisioning, dependency approval and build tools must be explicitly configured');
   }
-  return installed;
+  return validated;
 }
 
 async function configureHelper(app, config, work) {
@@ -130,7 +147,10 @@ async function notarize(path, profile) {
 
 export async function buildDistribution(output, config = null) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('Apple-silicon macOS builder required');
-  const installed = config ? validateBuildConfig(config) : null;
+  const releasePlan = config ? releaseBuildPlan(config) : null;
+  const releaseChannel = releasePlan?.releaseChannel ?? null;
+  const isReleaseCandidate = releasePlan?.releaseClass === 'RELEASE_CANDIDATE';
+  const releaseMetadata = config ? validateBuildConfig(config) : null;
   const sources = await sourceInventory(root), dependencies = await dependencyInventory(root, { goExecutable: config?.goExecutable ?? null });
   const dependencyDigest = sha256(canonical(dependencies));
   let privateKey;
@@ -161,11 +181,18 @@ export async function buildDistribution(output, config = null) {
     // inspectable ad-hoc build or proceeding to distribution signing.
     run('/usr/bin/codesign', ['--force', '--sign', '-', bundle]);
   }
-  await copyFile(join(root, 'spikes/distribution/INSTALL.md'), join(output, 'Install and remove.md'));
+  const installGuide = await readFile(join(root, 'spikes/distribution/INSTALL.md'), 'utf8');
+  await writeFile(join(output, 'Install and remove.md'), isReleaseCandidate
+    ? `${releaseCandidateNotice}\n\n${installGuide}` : installGuide);
+  if (isReleaseCandidate) {
+    const startHere = await readFile(join(output, 'Start Here.md'), 'utf8');
+    await writeFile(join(output, 'Start Here.md'), `${releaseCandidateNotice}\n\n${startHere}`);
+  }
   await createChromeWebStoreUpload(output);
   if (!config) {
     await writeFile(join(output, 'build-provenance.json'), canonical({ profile: 'pap-build-provenance/1',
-      signature: 'AD_HOC_ONLY', notarized: false, storeListing: 'NOT_PROVISIONED', source: sources,
+      releaseChannel: 'development', releaseClass: 'DEVELOPMENT', signature: 'AD_HOC_ONLY', notarized: false,
+      storeListing: 'NOT_PROVISIONED', source: sources,
       dependencyDigest, sourceRebuiltNativeTools: false,
       manualMeasurements: { osPermissionSteps: null, storePermissionSteps: null, installedPairingMs: null } }));
     return { output, releaseReady: false };
@@ -182,11 +209,25 @@ export async function buildDistribution(output, config = null) {
       });
       if (binary === 'verify') await copyFile(target, join(recipient, 'Contents/Resources/spikes/anchor/algorand/bin/verify'));
     }
-    await writeFile(join(app, 'Contents/Resources/spikes/distribution/installed-release.json'), canonical(installed));
+    const installedReleasePath = join(app, 'Contents/Resources/spikes/distribution/installed-release.json');
+    const releaseCandidatePath = join(app, 'Contents/Resources/spikes/distribution/release-candidate.json');
+    if (isReleaseCandidate) {
+      // A candidate is runnable for reviewer checks but is never an installed
+      // production release and never receives the stable update channel.
+      await writeFile(installedReleasePath, canonical(null));
+      await writeFile(releaseCandidatePath, canonical(releaseMetadata));
+      await writeFile(join(output, 'release-candidate.json'), canonical(releaseMetadata));
+    } else {
+      await rm(releaseCandidatePath, { force: true });
+      await rm(join(output, 'release-candidate.json'), { force: true });
+      await writeFile(installedReleasePath, canonical(releaseMetadata));
+    }
     for (const bundle of [app, recipient]) {
       for (const [key, value] of [['CFBundleVersion', String(config.sequence)], ['CFBundleShortVersionString', config.version]]) {
         run('/usr/bin/plutil', ['-replace', key, '-string', value, join(bundle, 'Contents/Info.plist')]);
       }
+      if (isReleaseCandidate) run('/usr/bin/plutil', ['-insert', 'CFBundleDisplayName', '-string',
+        'Private Provenance Release Candidate', join(bundle, 'Contents/Info.plist')]);
       await signBundle(bundle, config, work, bundle === app ? helper : null);
       const zip = join(work, `${bundle === app ? 'app' : 'verifier'}.zip`);
       run('/usr/bin/ditto', ['-c', '-k', '--keepParent', '--sequesterRsrc', bundle, zip]);
@@ -195,7 +236,8 @@ export async function buildDistribution(output, config = null) {
       run('/usr/sbin/spctl', ['--assess', '--type', 'execute', bundle]);
     }
     if ((await sourceInventory(root)).sha256 !== sources.sha256) throw Error('Build inputs changed during signing');
-    const provenance = { profile: 'pap-build-provenance/1', source: sources, dependencyDigest,
+    const provenance = { profile: 'pap-build-provenance/1', releaseChannel, releaseClass: isReleaseCandidate ? 'RELEASE_CANDIDATE' : 'PRODUCTION',
+      storeListingVerified: config.storeListingVerified, source: sources, dependencyDigest,
       node: process.version, go: run(config.goExecutable, ['version']).trim(),
       swift: run('/usr/bin/xcrun', ['swiftc', '--version']).trim(), signature: 'DEVELOPER_ID', teamId: config.teamId,
       notarized: true, sourceRebuiltNativeTools: true,
@@ -206,14 +248,27 @@ export async function buildDistribution(output, config = null) {
     for (const [source, name] of [[app, 'Private Provenance.app'], [recipient, 'Private Provenance Verifier.app']]) {
       await cp(source, join(payload, name), { recursive: true });
     }
-    for (const file of ['Install and remove.md', 'build-provenance.json', 'dependency-inventory.json']) {
+    for (const file of ['Install and remove.md', 'build-provenance.json', 'dependency-inventory.json',
+      ...(isReleaseCandidate ? ['release-candidate.json'] : [])]) {
       await copyFile(join(output, file), join(payload, file));
     }
-    const name = `Private-Provenance-${config.version}-${config.sequence}.dmg`, dmg = join(output, name);
+    const name = isReleaseCandidate
+      ? `Private-Provenance-Release-Candidate-${config.version}-${config.sequence}.dmg`
+      : `Private-Provenance-${config.version}-${config.sequence}.dmg`;
+    const dmg = join(output, name);
     run('/usr/bin/hdiutil', ['create', '-srcfolder', payload, '-volname', 'Private Provenance', '-format', 'UDZO', dmg]);
     run('/usr/bin/codesign', ['--sign', config.signingIdentity, '--timestamp', dmg]);
     const notarization = await notarize(dmg, config.notaryProfile);
     run('/usr/bin/xcrun', ['stapler', 'staple', dmg]); run('/usr/bin/xcrun', ['stapler', 'validate', dmg]);
+    if (isReleaseCandidate) {
+      const bytes = await readFile(dmg);
+      await writeFile(join(output, 'notarization.json'), canonical(notarization));
+      await writeFile(join(output, 'build-measurement.json'), canonical({ platform: 'darwin', arch: 'arm64',
+        ...releasePlan, storeListingVerified: false, signature: 'DEVELOPER_ID', notarized: true,
+        installedValidation: 'CANDIDATE_NOT_PRODUCTION',
+        artifact: { name, bytes: bytes.length, sha256: sha256(bytes) } }));
+      return { output, releaseReady: false, signed: true, notarized: true, ...releasePlan };
+    }
     const bytes = await readFile(dmg), published = new Date();
     const release = validateRelease({ profile: RELEASE_PROFILE, sequence: config.sequence, version: config.version,
       platform: 'darwin-arm64', publishedAt: published.toISOString(), expiresAt: new Date(+published + 30 * 86400_000).toISOString(),
@@ -224,7 +279,8 @@ export async function buildDistribution(output, config = null) {
     await writeFile(join(output, 'notarization.json'), canonical(notarization));
     await writeFile(join(output, 'build-measurement.json'), canonical({ platform: 'darwin', arch: 'arm64',
       signature: 'DEVELOPER_ID', notarized: true, nativeHostManifestInstalled: false, installedValidation: 'REQUIRED' }));
-    return { output, releaseReady: false, signed: true, installedValidation: 'REQUIRED' };
+    return { output, releaseReady: false, signed: true, notarized: true, releaseChannel,
+      stableManifestCreated: true, installedValidation: 'REQUIRED' };
   } finally { await rm(work, { recursive: true, force: true }); }
 }
 

@@ -2,7 +2,7 @@ const secret = location.hash.slice(1); history.replaceState(null, '', '/');
 const $ = id => document.getElementById(id);
 let detected = null, scope = null, selected = null, editRevision = 0, busy = false;
 let previewId = null;
-let installationConfigured = false, updateAvailable = false;
+let installationConfigured = false, releaseChannel = null, updateAvailable = false;
 
 async function api(path, data = {}) {
   const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${secret}` }, body: JSON.stringify(data) });
@@ -21,14 +21,22 @@ function controls() {
   for (const id of ['connect-account', 'account-status', 'disconnect-account']) $(id).disabled = busy;
   for (const id of ['refresh-history', 'preview-export', 'redact']) $(id).disabled = busy;
   $('save-export').disabled = busy || previewId === null;
-  for (const id of ['enable-integration', 'open-store', 'check-update', 'offer-export', 'save-diagnostics', 'remove-integration']) {
+  for (const id of ['enable-integration', 'open-store', 'offer-export', 'save-diagnostics', 'remove-integration']) {
     $(id).disabled = busy || !installationConfigured;
   }
-  $('download-update').disabled = busy || !updateAvailable;
+  const updatesConfigured = installationConfigured && releaseChannel === 'production';
+  $('check-update').disabled = busy || !updatesConfigured;
+  $('download-update').disabled = busy || !updatesConfigured || !updateAvailable;
 }
 
 async function installationStatus() {
-  const result = await api('/installation/status'); installationConfigured = result.integration !== 'NOT_CONFIGURED';
+  const result = await api('/installation/status');
+  installationConfigured = result.integration !== 'NOT_CONFIGURED'; releaseChannel = result.releaseChannel ?? null;
+  $('release-channel').textContent = releaseChannel === 'release-candidate'
+    ? 'RELEASE CANDIDATE — signed and notarized for pre-publication review only. This is not a production release; stable updates are disabled.'
+    : releaseChannel === 'production'
+      ? 'PRODUCTION RELEASE — signed distribution for the verified Chrome Web Store listing.'
+      : 'DEVELOPMENT BUILD — no signed distribution is configured.';
   $('installation-state').textContent = {
     NOT_CONFIGURED: 'Consumer signing and Chrome Web Store distribution are not configured in this development build.',
     ENABLED: 'Local Chrome connection enabled. Add the store extension, then pair one supported tab.',

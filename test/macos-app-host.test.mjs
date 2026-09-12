@@ -21,6 +21,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.equal(build.error, undefined);
   assert.equal(build.status, 0, build.stderr);
   const provenance = JSON.parse(readFileSync(join(output, 'build-provenance.json')));
+  assert.equal(provenance.releaseChannel, 'development'); assert.equal(provenance.releaseClass, 'DEVELOPMENT');
   assert.equal(provenance.signature, 'AD_HOC_ONLY'); assert.equal(provenance.notarized, false);
   assert.equal(provenance.storeListing, 'NOT_PROVISIONED'); assert.equal(provenance.sourceRebuiltNativeTools, false);
   assert.ok(provenance.source.files.some(file => file.path === 'spikes/distribution/updater.mjs'));

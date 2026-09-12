@@ -62,8 +62,11 @@ The [distribution implementation](spikes/distribution/README.md) prepares macOS
 packages with build provenance and dependency inventory, signed-update checks,
 guided Chrome connection/removal, migration regression fixtures and private support
 diagnostics. Production Developer ID/Keychain provisioning, notarization credentials,
-Web Store publication and installed validation remain required. Development builds
-are explicitly ad-hoc; the existing extension ID is not evidence of a store listing.
+Web Store publication and installed validation remain required. A signed
+`release-candidate` build is available for pre-publication review, but it is
+explicitly non-production and cannot create a stable update or production
+installed-release state. Development builds are explicitly ad-hoc; the existing
+extension ID is not evidence of a store listing.
 
 The [first scoped browser path](spikes/browser/chatgpt/README.md) adds a text-only
 256 KiB trusted composer, a least-authority Chrome/ChatGPT extension contract, all

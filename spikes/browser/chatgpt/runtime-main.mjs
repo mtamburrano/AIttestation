@@ -12,7 +12,7 @@ import { ManagedAnchoringClient } from '../../managed/client.mjs';
 import { MANAGED_NETWORK, MANAGED_GENESIS } from '../../managed/protocol.mjs';
 import { InstallationLifecycle, STORE_URL } from '../../distribution/lifecycle.mjs';
 import { DesktopUpdater } from '../../distribution/updater.mjs';
-import { validateInstalledRelease } from '../../distribution/config.mjs';
+import { RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from '../../distribution/config.mjs';
 
 const defaultSupportDirectory = join(homedir(), 'Library', 'Application Support', 'Private Provenance');
 
@@ -22,13 +22,22 @@ export async function startPackagedChatGPT({
   installation = undefined,
 } = {}) {
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
-  let installedRelease = null;
+  let installedRelease = null, releaseCandidate = null;
   if (installation === undefined) {
-    installedRelease = JSON.parse(await readFile(new URL('../../distribution/installed-release.json', import.meta.url), 'utf8'));
+    const installedPayload = JSON.parse(await readFile(new URL('../../distribution/installed-release.json', import.meta.url), 'utf8'));
+    const candidateURL = new URL('../../distribution/release-candidate.json', import.meta.url);
+    if (installedPayload !== null && existsSync(candidateURL)) throw Error('Ambiguous packaged release metadata');
+    installedRelease = installedPayload === null ? null : validateInstalledRelease(installedPayload);
+    releaseCandidate = installedPayload === null && existsSync(candidateURL)
+      ? validateReleaseCandidate(JSON.parse(await readFile(candidateURL, 'utf8'))) : null;
     installation = installedRelease ? await new InstallationLifecycle({
       supportDirectory, chromeSupportDirectory: join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome'),
       browserHost: join(dirname(process.execPath), 'provenance-browser-host'),
-      sequence: validateInstalledRelease(installedRelease).sequence,
+      sequence: installedRelease.sequence, releaseChannel: RELEASE_CHANNELS.PRODUCTION,
+    }).init() : releaseCandidate ? await new InstallationLifecycle({
+      supportDirectory, chromeSupportDirectory: join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome'),
+      browserHost: join(dirname(process.execPath), 'provenance-browser-host'),
+      sequence: releaseCandidate.sequence, releaseChannel: RELEASE_CHANNELS.CANDIDATE,
     }).init() : null;
   }
   const trust = fastTrust ?? parseCanonical(await readFile(new URL('fast-trust.json', import.meta.url)), 16 * 1024);

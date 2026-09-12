@@ -1,10 +1,10 @@
 # Install, connect and remove
 
-These instructions apply to a Developer ID signed, Apple-notarized release with
-a published Chrome Web Store listing. A development build is not a consumer
-installer. The current repository has no provisioned production signing identity
-or published/verified Web Store listing; its keyed manifest matches the assigned
-draft item identity.
+These instructions apply to a Developer ID signed, Apple-notarized release or
+release candidate. A release candidate is for pre-publication review only and is
+not a production installer. A development build is not a consumer installer.
+The current repository has no published/verified Web Store listing; its keyed
+manifest matches the assigned draft item identity.
 
 1. On an Apple-silicon Mac running a supported, security-patched macOS version,
    open the downloaded Private Provenance disk image. Copy both apps to your
