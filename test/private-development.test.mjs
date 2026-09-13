@@ -21,7 +21,7 @@ import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { releaseBuildPlan } from '../spikes/distribution/release-inputs.mjs';
 import { copyApplicationResource } from '../spikes/distribution/package-resources.mjs';
 import { verifyFastConfirmation } from '../spikes/anchor/algorand/fast-confirm.mjs';
-import { startupFailure, readStartupFailure } from '../spikes/development/startup.mjs';
+import { developmentCommandFailure, startupFailure, readStartupFailure } from '../spikes/development/startup.mjs';
 
 async function isolated(t) {
   const root = await realpath(await mkdtemp('/private/tmp/attestamp-private-test-'));
@@ -33,6 +33,8 @@ test('private startup diagnostics expose fixed failure labels without echoing ru
   const locked = startupFailure(Error('macOS Keychain is locked'));
   assert.equal(locked, 'PRIVATE_DEVELOPMENT_START_FAILED:KEYCHAIN_LOCKED');
   assert.equal(readStartupFailure(`an unrelated runtime warning\n${locked}\n`), locked);
+  assert.equal(developmentCommandFailure(Error(locked)), locked);
+  assert.equal(developmentCommandFailure(Error('DEDICATED_MACOS_TEST_USER_REQUIRED')), 'DEDICATED_MACOS_TEST_USER_REQUIRED');
   const sensitive = '/private/test/secret-file?token=synthetic-secret';
   assert.equal(startupFailure(Object.assign(Error(sensitive), { code: sensitive })),
     'PRIVATE_DEVELOPMENT_START_FAILED:UNKNOWN');
@@ -40,6 +42,11 @@ test('private startup diagnostics expose fixed failure labels without echoing ru
     `${'x'.repeat(4096)}\n${locked}`]) {
     assert.equal(readStartupFailure(output), 'PRIVATE_APP_START_NOT_CONFIRMED');
   }
+  for (const output of [sensitive, `${locked}:${sensitive}`, `${locked}\n${sensitive}`,
+    `${sensitive}\n${locked}`, 'PRIVATE_DEVELOPMENT_START_FAILED:UNRECOGNIZED']) {
+    assert.equal(developmentCommandFailure(Error(output)), 'PRIVATE_DEVELOPMENT_COMMAND_FAILED');
+  }
+  assert.equal(developmentCommandFailure(null), 'PRIVATE_DEVELOPMENT_COMMAND_FAILED');
 });
 
 test('private preparation requires the exact profile-authorized signing certificate', {

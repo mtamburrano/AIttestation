@@ -13,6 +13,35 @@ import { portableBundle } from '../spikes/recipient/portable.mjs';
 import { sourceInventory } from '../spikes/distribution/inventory.mjs';
 import { verifyDistribution } from '../spikes/distribution/verify-artifacts.mjs';
 
+test('native peer identity serialization satisfies the strict JavaScript wire contract', { skip: process.platform !== 'darwin' }, t => {
+  const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-codec-test-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = readFileSync(new URL('../spikes/browser/chatgpt/native/macos-peer-validator.swift', import.meta.url), 'utf8');
+  const entrypoint = source.lastIndexOf('\ndo {'); assert.ok(entrypoint > 0);
+  const declarations = source.indexOf('\nprivate func validateSignedApplication'); assert.ok(declarations > 0);
+  const fixture = join(root, 'main.swift'), executable = join(root, 'isolated-codec-fixture');
+  // Compile the real output boundary with fixture identity input. This temporary
+  // codec executable has no platform authority; the signed-host test below still
+  // exercises rejection through the unmodified native authentication code.
+  writeFileSync(fixture, `${source.slice(0, declarations)}
+private func validatedIdentity() throws -> [String: Any] {
+  return ["profile": "pap-native-peer-validation/1",
+    "browser": ["product": "Google Chrome", "channel": "stable", "major": 153],
+    "platform": ["product": "macOS", "arch": "arm64", "version": "15.7.9"]]
+}
+${source.slice(entrypoint)}`);
+  const compiled = spawnSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(root, 'swift-cache'),
+    fixture, '-o', executable], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 60000 });
+  assert.equal(compiled.status, 0, compiled.stderr);
+  const result = spawnSync(executable, [], { env: {}, timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr?.toString());
+  assert.deepEqual(parseCanonical(result.stdout, 4096), {
+    profile: 'pap-native-peer-validation/1',
+    browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+    platform: { product: 'macOS', arch: 'arm64', version: '15.7.9' },
+  });
+});
+
 test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain authority', { skip: process.platform !== 'darwin' }, async t => {
   const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-boundary-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -93,7 +122,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   writeFileSync(guard, `import net from 'node:net';import tls from 'node:tls';import http from 'node:http';import https from 'node:https';import {syncBuiltinESMExports} from 'node:module';const deny=()=>{throw Error('NETWORK_FORBIDDEN')};net.connect=net.createConnection=tls.connect=http.request=http.get=https.request=https.get=deny;globalThis.fetch=deny;syncBuiltinESMExports();`);
   const cleanVerification = spawnSync(join(recipient, 'Contents/MacOS/node'), ['--import', guard,
     join(recipientResources, 'recipient/verify.mjs'), exportFile, trustFile], { cwd: root, env: {}, encoding: 'utf8', timeout: 30000 });
-  assert.equal(cleanVerification.status, 0, cleanVerification.stderr);
+  assert.equal(cleanVerification.status, 0, cleanVerification.stderr || cleanVerification.stdout);
   assert.equal(JSON.parse(cleanVerification.stdout).records[0].anchor, 'CONSENSUS_VERIFIED');
   assert.equal(JSON.parse(cleanVerification.stdout).records[0].timestamp, 'BLOCK_HASH_BOUND');
   const rejectedBrowserParent = spawnSync(browserHost,

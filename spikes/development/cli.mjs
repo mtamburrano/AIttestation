@@ -4,7 +4,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { checkPlatform } from './chrome.mjs';
-import { readStartupFailure } from './startup.mjs';
+import { developmentCommandFailure, readStartupFailure } from './startup.mjs';
 import { DEVELOPMENT_PROFILE, exists, initializeAccount, ownerDirectory,
   privateJSON, validateAccount, writeNewJSON } from './environment.mjs';
 
@@ -149,7 +149,7 @@ export async function command(args) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   command(process.argv.slice(2)).then(result => console.log(JSON.stringify(result))).catch(error => {
-    console.error(/^[A-Z_0-9]+$/.test(error.message) ? error.message : 'PRIVATE_DEVELOPMENT_COMMAND_FAILED');
+    console.error(developmentCommandFailure(error));
     process.exitCode = 1;
   });
 }

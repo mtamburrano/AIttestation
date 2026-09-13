@@ -124,7 +124,8 @@ private func validatedIdentity() throws -> [String: Any] {
 
 do {
   guard CommandLine.arguments.count == 1 else { throw ValidationFailure.rejected }
-  let output = try JSONSerialization.data(withJSONObject: validatedIdentity(), options: [.sortedKeys])
+  // The JavaScript boundary accepts canonical JSON, including unescaped slashes.
+  let output = try JSONSerialization.data(withJSONObject: validatedIdentity(), options: [.sortedKeys, .withoutEscapingSlashes])
   FileHandle.standardOutput.write(output)
   exit(EXIT_SUCCESS)
 } catch {

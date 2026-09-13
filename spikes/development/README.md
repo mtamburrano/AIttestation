@@ -194,6 +194,12 @@ cannot authorize protected release. No public backend or DNS is required.
 
 ## Start, test, restart, stop
 
+Quit the isolated Chrome application completely in the test account before each
+start or restart; closing its windows alone may leave it running. During the
+installed check, the running browser temporarily held a second hard link to its
+executable, which the development copy guard rejects. Quitting restored the single
+link. Keep that guard enabled and let the private launcher start Chrome.
+
 In the test user, using only a designated test ChatGPT account and synthetic text:
 
 ```sh
@@ -218,12 +224,20 @@ load the output's `extension` directory unpacked. Verify its unchanged ID is
 sign into the designated test account. Enter protected text only in the local
 composer. Its banner identifies private development; no Store connection is needed.
 
-While a designated ChatGPT account is unavailable, local startup, rejection while
-unpaired, stop/restart and an empty-vault backup/restore can be checked in the test
-user. Leave provider tabs closed and sponsorship unconfigured. These checks do
-not establish installed pairing, successful sends in any mode, receipt export or
-live TestNet confirmation. A GUI login must remain active; Fast User Switching
-back to the signing account is fine, but logging out ends that test session.
+While a designated ChatGPT account is unavailable, check local startup, load the
+unpacked extension to test native pairing, and verify rejection without an enrolled
+provider scope, stop/restart and backup/restore in the test user. Keep browser tabs
+at `chatgpt.com` closed and sponsorship unconfigured. Native pairing needs no
+provider tab or login. These checks do not establish successful sends, provider
+markup compatibility, receipt export or live TestNet confirmation. A vault with no
+content receipts still contains its empty release journal.
+
+Keep the test user active at the Mac during startup,
+restart, backup and restore, with its Keychain unlocked. The installed check
+returned `KEYCHAIN_LOCKED` while that login was in the background and started
+successfully after switching to it. A logged-in background session alone did not
+suffice. Preserve the helper's `WhenUnlockedThisDeviceOnly` protection; unlock
+locally instead of changing Keychain permissions or accessibility.
 
 An older private build without explicit browser selection is rejected with
 `PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT`; prepare an updated signed build.

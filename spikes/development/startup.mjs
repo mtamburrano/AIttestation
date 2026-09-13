@@ -24,3 +24,10 @@ export function readStartupFailure(output) {
   }
   return 'PRIVATE_APP_START_NOT_CONFIRMED';
 }
+
+export function developmentCommandFailure(error) {
+  const message = error?.message;
+  if (typeof message === 'string' && (/^[A-Z_0-9]+$/.test(message)
+      || readStartupFailure(message) === message)) return message;
+  return 'PRIVATE_DEVELOPMENT_COMMAND_FAILED';
+}
