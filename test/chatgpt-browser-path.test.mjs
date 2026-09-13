@@ -462,6 +462,31 @@ test('native bridge frames bounded messages and correlates only the exact releas
     attemptId: 'attempt-two', digest: 'b'.repeat(64), payload: { text: 'never sent', attachments: [] } }), 'FAILED_BEFORE_EGRESS');
 });
 
+test('packaged trust bytes start and reopen an isolated unpaired composer without network activity', async t => {
+  const root = await realpath(await mkdtemp('/private/tmp/provenance-packaged-trust-test-'));
+  const keyStore = new MemoryKeyStore();
+  let runtime;
+  t.after(async () => { await runtime?.close(); await rm(root, { recursive: true, force: true }); });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    runtime = await startPackagedChatGPT({ supportDirectory: root, keyStore,
+      managed: null, installation: null, openBrowser: false,
+      collectFast: async () => assert.fail('Unpaired startup must not contact an anchor source'),
+      attestPeer: async () => assert.fail('This check has no native browser peer'),
+    });
+    const url = new URL(runtime.composerURL);
+    assert.equal(url.hostname, '127.0.0.1');
+    const response = await fetch(new URL('/status', url), { method: 'POST', redirect: 'error',
+      signal: AbortSignal.timeout(5000), headers: { Origin: url.origin,
+        Authorization: `Bearer ${url.hash.slice(1)}`, 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(response.status, 200);
+    const state = await response.json();
+    assert.equal(state.browser, null);
+    assert.equal(state.protection.eligibility, 'UNENROLLED');
+    assert.deepEqual(state.protection.versions, []);
+    await runtime.close(); runtime = null;
+  }
+});
+
 test('packaged composer and isolated native framing drive the real bridge, adapter, and Sealed session', async t => {
   const root = await realpath(await mkdtemp('/private/tmp/provenance-native-e2e-'));
   const input = new PassThrough(), output = new PassThrough();

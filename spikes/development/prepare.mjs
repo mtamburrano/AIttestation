@@ -53,12 +53,33 @@ export function validateDevelopmentConfig(config) {
   return config;
 }
 
+export function validateDevelopmentSigner(decodedProfile, identity) {
+  if (!decodedProfile.length || Buffer.byteLength(decodedProfile) > 1024 * 1024
+      || !/^[A-F0-9]{40}$/.test(identity)) throw Error('INVALID_PRIVATE_HELPER_CERTIFICATES');
+  const extract = (key, type) => run('/usr/bin/plutil',
+    ['-extract', key, 'raw', '-expect', type, '-o', '-', '--', '-'], { input: decodedProfile }).trim();
+  const count = Number(extract('DeveloperCertificates', 'array'));
+  if (!Number.isSafeInteger(count) || count < 1 || count > 32) throw Error('INVALID_PRIVATE_HELPER_CERTIFICATES');
+  let matches = false;
+  for (let i = 0; i < count; i++) {
+    const encoded = extract(`DeveloperCertificates.${i}`, 'data');
+    try {
+      const certificate = new X509Certificate(Buffer.from(encoded, 'base64'));
+      if (certificate.fingerprint.replaceAll(':', '') === identity) matches = true;
+    } catch { throw Error('INVALID_PRIVATE_HELPER_CERTIFICATES'); }
+  }
+  // A profile authorizes particular certificates, not every key in its team.
+  // Detect a mismatch before creating output or requesting any signing access.
+  if (!matches) throw Error('PRIVATE_HELPER_SIGNING_CERTIFICATE_MISMATCH');
+}
+
 export async function prepareDevelopment(configPath, output) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('APPLE_SILICON_MAC_REQUIRED');
   const config = validateDevelopmentConfig(await privateJSON(configPath));
   const profileBytes = await readReleaseFile(config.helperProvisioningProfile, { limit: 1024 * 1024 });
   const decoded = run('/usr/bin/security', ['cms', '-D'], { input: profileBytes });
   const { appId, group } = validateHelperProfile(helperProfileFromPlist(decoded), config);
+  validateDevelopmentSigner(decoded, config.signingIdentity);
   const certificate = config.sponsor ? await readReleaseFile(config.sponsor.certificateFile, { limit: 8192 }) : null;
   if (certificate) {
     const cert = new X509Certificate(certificate);
@@ -88,7 +109,7 @@ export async function prepareDevelopment(configPath, output) {
       '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
       join(root, 'spikes/vault/native/macos-app-host.swift'), '-o', join(contents, 'MacOS/provenance-app-host')]);
     const dev = join(contents, 'Resources/spikes/development'); await mkdir(dev);
-    for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs']) {
+    for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs', 'startup.mjs']) {
       await copyFile(join(root, 'spikes/development', name), join(dev, name));
     }
     await writeNewJSON(join(dev, 'private-development.json'), { profile: DEVELOPMENT_PROFILE,

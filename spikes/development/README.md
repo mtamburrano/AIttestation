@@ -59,6 +59,14 @@ In the signing account, place a 0600 JSON config outside the checkout:
 Use the existing Developer ID identity's 40-character hash and the matching
 all-devices helper profile. The profile must authorize
 `TEAM.ai.provenance.keychain-helper` and `TEAM.ai.provenance.evidence-vault`.
+Its `DeveloperCertificates` must also contain the exact certificate identified by
+`signingIdentity`; matching the team alone is insufficient. Preparation checks
+this before creating output or requesting signing access and reports
+`PRIVATE_HELPER_SIGNING_CERTIFICATE_MISMATCH` if the pair differs. Keep the original
+profile and use a matching existing profile/identity pair. If neither is available,
+the signing account owner must resolve that prerequisite before rebuilding.
+Apple documents this [certificate mismatch](https://developer.apple.com/forums/thread/791996)
+even when ordinary signature verification succeeds.
 `security find-identity -v -p codesigning` reads available identity metadata.
 The builder validates the profile and signs the nested helper with its Keychain
 entitlements; Node receives only the existing JIT entitlement. Signing uses no
@@ -78,6 +86,13 @@ decision. See [Apple's explanation](https://developer.apple.com/forums/thread/71
 The builder does not change Keychain permissions. A signing step has a ten-minute
 deadline; `PRIVATE_PREPARE_SIGNING_TIMED_OUT` leaves an incomplete output. After
 resolving the prompt, rerun preparation with a new output directory.
+
+The private launcher reports fixed startup labels such as
+`PRIVATE_DEVELOPMENT_START_FAILED:KEYCHAIN_LOCKED` or
+`PRIVATE_DEVELOPMENT_START_FAILED:KEYCHAIN_OPERATION_FAILED`. These labels exclude
+raw errors, paths, tokens and Keychain values. An operation failure can also mean
+macOS rejected the helper before it ran; check the profile/certificate pair before
+changing Keychain permissions.
 
 Each output must be new, canonical and outside repositories. The builder records
 the current source digest, so ordinary local changes need no release approval or

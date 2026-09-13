@@ -4,9 +4,9 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink, copyFile, c
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 import { assertPlatform, initializeAccount, testAccount, validateAccount, newDirectory } from '../spikes/development/environment.mjs';
-import { validateDevelopmentConfig } from '../spikes/development/prepare.mjs';
+import { validateDevelopmentConfig, validateDevelopmentSigner } from '../spikes/development/prepare.mjs';
 import { registerNativeHost, removeNativeHost, command } from '../spikes/development/cli.mjs';
 import { chromeApplicationFiles, checkPlatform } from '../spikes/development/chrome.mjs';
 import { algorandAddress, initializeSponsor, serveSponsor } from '../spikes/development/sponsor.mjs';
@@ -21,12 +21,42 @@ import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { releaseBuildPlan } from '../spikes/distribution/release-inputs.mjs';
 import { copyApplicationResource } from '../spikes/distribution/package-resources.mjs';
 import { verifyFastConfirmation } from '../spikes/anchor/algorand/fast-confirm.mjs';
+import { startupFailure, readStartupFailure } from '../spikes/development/startup.mjs';
 
 async function isolated(t) {
   const root = await realpath(await mkdtemp('/private/tmp/attestamp-private-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
+
+test('private startup diagnostics expose fixed failure labels without echoing runtime data', () => {
+  const locked = startupFailure(Error('macOS Keychain is locked'));
+  assert.equal(locked, 'PRIVATE_DEVELOPMENT_START_FAILED:KEYCHAIN_LOCKED');
+  assert.equal(readStartupFailure(`an unrelated runtime warning\n${locked}\n`), locked);
+  const sensitive = '/private/test/secret-file?token=synthetic-secret';
+  assert.equal(startupFailure(Object.assign(Error(sensitive), { code: sensitive })),
+    'PRIVATE_DEVELOPMENT_START_FAILED:UNKNOWN');
+  for (const output of [sensitive, `${locked}:${sensitive}`, `PRIVATE_DEVELOPMENT_START_FAILED:${sensitive}`,
+    `${'x'.repeat(4096)}\n${locked}`]) {
+    assert.equal(readStartupFailure(output), 'PRIVATE_APP_START_NOT_CONFIRMED');
+  }
+});
+
+test('private preparation requires the exact profile-authorized signing certificate', {
+  skip: process.platform !== 'darwin',
+}, async t => {
+  const root = await isolated(t), certFile = join(root, 'synthetic-signing-cert.pem');
+  const generated = spawnSync('/usr/bin/openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+    '-subj', '/CN=private-development-certificate-fixture', '-keyout', join(root, 'synthetic-signing-key.pem'), '-out', certFile],
+  { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 15000 });
+  assert.equal(generated.status, 0, generated.stderr);
+  const certificate = new X509Certificate(await readFile(certFile));
+  const identity = certificate.fingerprint.replaceAll(':', '');
+  const profile = `<plist version="1.0"><dict><key>DeveloperCertificates</key><array><data>${certificate.raw.toString('base64')}</data></array></dict></plist>`;
+  assert.doesNotThrow(() => validateDevelopmentSigner(profile, identity));
+  assert.throws(() => validateDevelopmentSigner(profile, '0'.repeat(40)), /SIGNING_CERTIFICATE_MISMATCH/);
+  assert.throws(() => validateDevelopmentSigner(profile.replace(/<data>.*<\/data>/, ''), identity), /INVALID_PRIVATE_HELPER_CERTIFICATES/);
+});
 
 test('private development rejects ordinary accounts, unsupported Chrome and production promotion', async () => {
   assert.throws(() => testAccount({ username: 'owner', uid: 501, homedir: '/Users/owner' }), /TEST_USER/);

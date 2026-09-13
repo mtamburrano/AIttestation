@@ -4,6 +4,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { checkPlatform } from './chrome.mjs';
+import { readStartupFailure } from './startup.mjs';
 import { DEVELOPMENT_PROFILE, exists, initializeAccount, ownerDirectory,
   privateJSON, validateAccount, writeNewJSON } from './environment.mjs';
 
@@ -93,9 +94,12 @@ export async function startDevelopment(output, mode, chromeApplication) {
   try {
     await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: 'live-chatgpt-testnet', chromeApplication });
     const child = spawn(join(app, 'Contents/MacOS/provenance-app-host'), [], {
-      env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore', detached: true,
+      env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'ignore', 'pipe'], detached: true,
     });
-    let exited = false; child.once('exit', () => { exited = true; }); child.once('error', () => { exited = true; });
+    let exited = false, diagnostics = '';
+    child.stderr.on('data', bytes => { diagnostics += bytes.toString('utf8').slice(0, 4096 - diagnostics.length); });
+    child.stderr.unref();
+    child.once('close', () => { exited = true; }); child.once('error', () => { exited = true; });
     child.unref();
     for (let i = 0; i < 150; i++) {
       if (await exists(join(paths.control, 'runtime.json'))) return { started: true, pairing: 'OPEN_CHROME_EXTENSIONS_AND_LOAD_UNPACKED',
@@ -103,7 +107,7 @@ export async function startDevelopment(output, mode, chromeApplication) {
       if (exited) break;
       await delay(100);
     }
-    throw Error('PRIVATE_APP_START_NOT_CONFIRMED');
+    throw Error(readStartupFailure(diagnostics));
   } catch (error) {
     // Keep a possibly running app's registration until an explicit stop drains it.
     throw error;

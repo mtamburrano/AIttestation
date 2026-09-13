@@ -8,6 +8,7 @@ import { DEVELOPMENT_PROFILE, validateAccount, privateJSON, writeNewJSON } from 
 import { checkPlatform } from './chrome.mjs';
 import { localTLSRequest } from './tls.mjs';
 import { backupDevelopment, restoreDevelopment } from './recovery.mjs';
+import { startupFailure } from './startup.mjs';
 
 let runtime, statePath;
 try {
@@ -49,7 +50,7 @@ try {
     await runtime.close(); await unlink(statePath).catch(() => {}); process.exit(code);
   };
   process.once('SIGINT', () => stop(0)); process.once('SIGTERM', () => stop(0));
-} catch {
+} catch (error) {
   await runtime?.close();
-  process.stderr.write('PRIVATE_DEVELOPMENT_START_FAILED\n'); process.exitCode = 1;
+  process.stderr.write(`${startupFailure(error)}\n`); process.exitCode = 1;
 }
