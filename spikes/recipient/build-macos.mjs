@@ -2,6 +2,7 @@ import { mkdir, copyFile, writeFile, rm, cp } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { recipientSourceResources } from '../distribution/package-resources.mjs';
 
 export function assertPortableExecutable(executable) {
   const libraries = execFileSync('/usr/bin/otool', ['-L', executable], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
@@ -22,10 +23,9 @@ export async function buildRecipient(output) {
   await mkdir(macos, { recursive: true }); await mkdir(resources);
   await copyFile(process.execPath, join(macos, 'node'));
   await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node-LICENSE.txt'));
-  for (const file of ['vault/format.mjs', 'vault/records.mjs', 'anchor/verifier.mjs', 'anchor/merkle.mjs', 'anchor/algorand/bin/verify',
-    ...['portable.mjs', 'verify.mjs', 'server.mjs', 'main.mjs', 'recipient.html', 'recipient.js', 'recipient.css'].map(name => `recipient/${name}`)]) {
-    const destination = join(resources, 'spikes', file); await mkdir(resolve(destination, '..'), { recursive: true });
-    await copyFile(join(root, 'spikes', file), destination);
+  for (const file of [...recipientSourceResources, 'spikes/anchor/algorand/bin/verify']) {
+    const destination = join(resources, file); await mkdir(resolve(destination, '..'), { recursive: true });
+    await copyFile(join(root, file), destination);
   }
   const cache = join(output, '.swift-module-cache'); await mkdir(cache);
   try {

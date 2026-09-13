@@ -1,8 +1,9 @@
 import { mkdir, cp, copyFile, writeFile, stat, rm } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { buildRecipient, assertPortableExecutable } from '../../recipient/build-macos.mjs';
+import { applicationResourceDirectories, copyApplicationResource, managedResourceFiles } from '../../distribution/package-resources.mjs';
 
 if (process.platform !== 'darwin' || process.argv.length !== 3) {
   throw Error('Usage on macOS: node spikes/browser/chatgpt/build-macos.mjs NEW_OUTPUT_DIRECTORY');
@@ -28,16 +29,15 @@ try {
   { env: { PATH: '/usr/bin:/bin' }, stdio: 'pipe' });
 } finally { await rm(moduleCache, { recursive: true, force: true }); }
 await copyFile(resolve(process.execPath, '../../LICENSE'), join(resources, 'Node-LICENSE.txt'));
-for (const name of ['release', 'vault', 'anchor', 'browser', 'demonstrator', 'recipient', 'distribution']) {
+for (const name of applicationResourceDirectories) {
   await cp(join(root, 'spikes', name), join(resources, 'spikes', name), {
     recursive: true,
-    filter: source => !source.includes('/testdata') && !source.endsWith('/bin/live')
-      && !source.endsWith('/bin/sponsor') && !source.endsWith('/cmd/sponsor') && !source.endsWith('/.DS_Store'),
+    filter: source => copyApplicationResource(relative(root, source)),
   });
 }
 await mkdir(join(resources, 'spikes/managed'));
-for (const name of ['client.mjs', 'protocol.mjs']) {
-  await copyFile(join(root, 'spikes/managed', name), join(resources, 'spikes/managed', name));
+for (const path of managedResourceFiles) {
+  await copyFile(join(root, path), join(resources, path));
 }
 await writeFile(join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>provenance-app-host</string><key>CFBundleIdentifier</key><string>ai.provenance.consumer.host</string><key>CFBundleName</key><string>Attestamp</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>15.7</string><key>LSUIElement</key><true/></dict></plist>`);
 for (const [executable, identifier] of [

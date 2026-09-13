@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
 import { LEAK_OVERLAP, PackageLeakError, rejectSecretBytes, rejectSecretChunk, rejectSecretName } from './package-leaks.mjs';
+import { parseUniqueJSON } from './unique-json.mjs';
 export { rejectSecretBytes, rejectSecretName } from './package-leaks.mjs';
 
 const MAX_METADATA = 16 * 1024 * 1024;
@@ -91,19 +92,7 @@ export function snapshotIdentity(snapshot) {
 export function artifactJSON(bytes) {
   requireArtifact(bytes && bytes.length <= MAX_METADATA);
   const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  // Reject duplicate member names even in the builder's pretty-printed JSON.
-  // JSON string tokens followed by ':' are the only possible member names.
-  const stack = [];
-  for (const token of text.matchAll(/"(?:[^"\\]|\\.)*"\s*:?|[{}\[\]]/g)) {
-    const value = token[0];
-    if (value === '{' || value === '[') { requireArtifact(stack.length < 32); stack.push(value === '{' ? new Set() : null); }
-    else if (value === '}' || value === ']') stack.pop();
-    else if (value.endsWith(':')) {
-      const key = JSON.parse(value.slice(0, -1).trim()), names = stack.at(-1);
-      requireArtifact(names instanceof Set && !names.has(key)); names.add(key);
-    }
-  }
-  return JSON.parse(text);
+  return parseUniqueJSON(text);
 }
 
 // The builders emit flat XML Info.plist dictionaries. Reject unsupported XML,

@@ -91,6 +91,61 @@ test('inventories reject omitted, extra, duplicate, changed and internally stale
   ]) { const f = await fixture(t); await change(f); rejected(await f.run(), 'INVENTORY_LINKAGE'); }
 });
 
+test('missing app and recipient imports or assets reject even after inventories and production signatures are refreshed', async t => {
+  for (const channel of ['development', 'release-candidate', 'production']) {
+    const f = await fixture(t, channel), policy = structuredClone(f.policy);
+    assert.equal((await f.run()).status, 'PASSED');
+    for (const path of [
+      `${resources}/spikes/browser/chatgpt/bridge-runtime.mjs`, `${resources}/spikes/browser/chatgpt/composer.html`,
+      `${resources}/spikes/managed/client.mjs`, `${extension}/content-script.js`,
+      `${verifier}/Contents/Resources/spikes/recipient/server.mjs`, `${verifier}/Contents/Resources/spikes/recipient/recipient.css`,
+      `${verifier}/Contents/Resources/spikes/vault/records.mjs`,
+    ]) {
+      const bytes = await readFile(join(f.output, path));
+      await rm(join(f.output, path)); await f.seal();
+      assert.deepEqual(f.policy, policy);
+      rejected(await f.run(), 'INVENTORY_LINKAGE');
+      await f.write(path, bytes);
+    }
+    await f.seal(); assert.equal((await f.run()).status, 'PASSED');
+  }
+});
+
+test('reviewed copy exclusions stay absent and cannot be added to either bundle with a refreshed inventory', async t => {
+  const f = await fixture(t), bytes = 'Synthetic non-shipping source';
+  const excluded = ['spikes/browser/chatgpt/testdata/fixture.json', 'spikes/browser/chatgpt/.DS_Store',
+    'spikes/managed/server.mjs', 'test/fixture.mjs', 'package.json'];
+  for (const path of excluded) f.source.files.push({ path, sha256: sha256(bytes) });
+  f.source.files.sort((a, b) => a.path < b.path ? -1 : 1);
+  f.policy.sourceDigest = f.source.sha256 = sha256(canonical(f.source.files));
+  await f.seal(); assert.equal((await f.run()).status, 'PASSED');
+  const policy = structuredClone(f.policy);
+  for (const [base, path] of [[resources, 'spikes/managed/server.mjs'],
+    [`${verifier}/Contents/Resources`, 'spikes/browser/chatgpt/adapter.mjs']]) {
+    await f.write(`${base}/${path}`, path === 'spikes/managed/server.mjs' ? bytes
+      : await readFile(join(f.output, resources, path)));
+    await f.seal(); assert.deepEqual(f.policy, policy); rejected(await f.run(), 'INVENTORY_LINKAGE');
+    await rm(join(f.output, base, path));
+    // Remove only the empty directories created for this excluded test resource.
+    if (base !== resources) await rm(join(f.output, base, 'spikes/browser'), { recursive: true });
+  }
+});
+
+test('escaped duplicate JSON cannot hide credentials or evidence in any prepared release channel', async t => {
+  const marker = 'PRIVATE-DUPLICATE-TEST-DATA';
+  const payloads = [String.raw`{"api_\u006bey":"${marker}","api_key":null}`,
+    String.raw`{"evidence":"\u0041TTESTAMP_SYNTHETIC_EVIDENCE_V1:${marker}","evidence":null}`];
+  for (const channel of ['development', 'release-candidate', 'production']) {
+    const f = await fixture(t, channel); assert.equal((await f.run()).status, 'PASSED');
+    for (const payload of payloads) {
+      await f.write('Start Here.md', payload); await f.seal();
+      const report = await f.run(); rejected(report, 'OUTPUT_FILES');
+      assert.equal(report.packageLeak.category, 'AMBIGUOUS_JSON');
+      assert.doesNotMatch(JSON.stringify(report), /PRIVATE-DUPLICATE|ATTESTAMP_SYNTHETIC|Start Here/);
+    }
+  }
+});
+
 test('bundle identities, version, helper placement and candidate Finder labels are checked after rehashing', async t => {
   for (const [path, old, replacement] of [
     [`${app}/Contents/Info.plist`, 'ai.provenance.consumer.host', 'ai.provenance.wrong.host'],

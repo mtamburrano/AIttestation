@@ -6,6 +6,7 @@ import { releaseArtifactContract, readReleaseFile } from './release-inputs.mjs';
 import { shippingGoBuildPlan } from './inventory.mjs';
 import { sha256, verifyRelease } from './release.mjs';
 import { leakDiagnostic } from './package-leaks.mjs';
+import { copyApplicationResource, generatedSourceResources, recipientSourceResources } from './package-resources.mjs';
 import { artifactJSON, artifactSnapshot, bundleInfo, requireArtifact as require, safeRelative,
   snapshotIdentity, storeArchive } from './artifact-files.mjs';
 
@@ -112,12 +113,19 @@ function validateProvenance(provenance, inventory, snapshot, policy, signed) {
     const resources = `${bundle}/Contents/Resources/`;
     require(snapshot.files.get(`${resources}Node-LICENSE.txt`)?.sha256 === inventory.node.licenseSha256
       && snapshot.files.get(`${resources}THIRD_PARTY_NOTICES.md`)?.sha256 === inventory.noticesDigest);
+    const recipient = bundle === VERIFIER;
+    const generated = new Set(generatedSourceResources(recipient, policy.releaseChannel));
+    const copied = new Set(recipient ? recipientSourceResources
+      : [...source.keys()].filter(path => copyApplicationResource(path) && !generated.has(path)));
+    // An inventory of present files cannot prove completeness. Derive the exact
+    // required resources from authenticated source and the trusted copy contract.
+    for (const path of copied) require(source.has(path)
+      && snapshot.files.get(`${resources}${path}`)?.sha256 === source.get(path).sha256);
+    for (const path of generated) require(snapshot.files.has(`${resources}${path}`));
     for (const [path, item] of snapshot.files) {
       if (!path.startsWith(`${resources}spikes/`)) continue;
       const original = path.slice(resources.length);
-      if (path === `${DISTRIBUTION}/installed-release.json` || path === `${DISTRIBUTION}/release-candidate.json`
-          || /^spikes\/anchor\/algorand\/bin\/(?:verify|fast-verify|fast-observe)$/.test(original)) continue;
-      require(source.get(original)?.sha256 === item.sha256);
+      require(generated.has(original) || copied.has(original) && source.get(original)?.sha256 === item.sha256);
     }
   }
   // Updater policy is meaningful only with the runtime/config code bound to the

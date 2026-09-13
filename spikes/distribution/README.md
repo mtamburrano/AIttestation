@@ -180,7 +180,14 @@ The verifier checks these independent relationships:
   inherit either release channel. Production requires the installed production
   contract and a current Ed25519-signed stable manifest under the expected root.
 - The source inventory matches the expected source digest; dependency inventory,
-  complete bundle inventories, copied source and notices agree. Runtime/updater
+  complete bundle inventories, copied source and notices agree. The trusted
+  checkout's `package-resources.mjs` defines the app's copied source trees and
+  managed-client files, the recipient's fixed runtime/assets, and the intentional
+  testdata, Finder-metadata and sponsor/live-tool exclusions. Every required copy
+  must exist with its reviewed source hash; excluded or extra source resources
+  reject even if the producer refreshes its inventories and signs them again.
+  Generated native executables and channel markers have separate presence,
+  identity and channel checks. Runtime/updater
   source is tied to that same reviewed digest, so a null marker alone cannot
   establish disabled updates. Production also authenticates the provenance and
   dependency digests and the exact disk-image hash/size; RC checks its measured

@@ -1,4 +1,5 @@
 import { createPrivateKey } from 'node:crypto';
+import { JSONStructureError, parseUniqueJSON } from './unique-json.mjs';
 
 // Categories and numeric locations are the entire public diagnostic. Even a
 // relative filename can contain evidence or credentials supplied by an attacker.
@@ -95,6 +96,10 @@ export function rejectSecretBytes(bytes) {
   if (bytes[0] === 0 && [9, 10, 13, 32, 91, 123].includes(bytes[1]) && bytes.length % 2 === 0) text = Buffer.from(bytes).swap16().toString('utf16le');
   if (!/^\s*[\[{]/.test(text)) return;
   let value;
-  try { value = JSON.parse(text); } catch { return; }
+  try { value = parseUniqueJSON(text.replace(/^\uFEFF/, '')); }
+  catch (error) {
+    if (error instanceof JSONStructureError) reject(error.code);
+    return;
+  }
   inspectJSON(value);
 }
