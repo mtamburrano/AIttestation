@@ -3,6 +3,12 @@
 Disposable technical slices for private, portable evidence of human + AI work.
 These experiments are not a production protection product.
 
+The [private development guide](spikes/development/README.md) provides a separate
+prepare/start/stop route for the signed Mac app, unpacked Chrome extension and a
+local TLS TestNet sponsor. It requires a dedicated macOS test user and the pinned
+Chrome version. See the [readiness record](spikes/development/READINESS.md) for
+the installed checks still outstanding; offline fixtures do not establish them.
+
 ## Integrated local demonstrator
 
 The [consumer demonstrator](spikes/demonstrator/README.md) combines encrypted

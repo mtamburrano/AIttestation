@@ -4,6 +4,9 @@
   "type": "module",
   "engines": { "node": ">=22.13" },
   "scripts": {
+    "dev": "node spikes/development/cli.mjs",
+    "dev:sponsor": "node spikes/development/sponsor.mjs",
+    "test:private-dev": "node --test test/private-development.test.mjs",
     "test": "node --test test/*.test.mjs",
     "test:chatgpt": "node --test test/chatgpt-browser-path.test.mjs",
     "test:browser": "node test/browser.mjs",

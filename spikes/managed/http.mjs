@@ -1,8 +1,11 @@
 import { createServer } from 'node:http';
+import { createServer as createTLSServer } from 'node:https';
 import { canonical, parseCanonical } from '../vault/format.mjs';
 import { FALLBACK } from './protocol.mjs';
 
-export async function startManagedServer(service, { port = 0 } = {}) {
+export async function startManagedServer(service, { port = 0, tls = null } = {}) {
+  if (tls !== null && (Object.keys(tls).sort().join(',') !== 'cert,key'
+      || !Buffer.isBuffer(tls.cert) || !Buffer.isBuffer(tls.key))) throw Error('Explicit TLS key and certificate required');
   let active = 0;
   const pending = new Set();
   const reply = (response, status, body) => {
@@ -10,7 +13,8 @@ export async function startManagedServer(service, { port = 0 } = {}) {
       'X-Content-Type-Options': 'nosniff', 'Connection': 'close' });
     response.end(canonical(body));
   };
-  const server = createServer({ maxHeaderSize: 2048, requestTimeout: 10000, headersTimeout: 5000 }, (request, response) => {
+  const server = (tls ? createTLSServer : createServer)({ ...tls,
+    maxHeaderSize: 2048, requestTimeout: 10000, headersTimeout: 5000 }, (request, response) => {
     const operation = (async () => {
       if (active >= 16) { reply(response, 503, { error: 'SERVICE_UNAVAILABLE' }); return; }
       active++;
@@ -47,7 +51,7 @@ export async function startManagedServer(service, { port = 0 } = {}) {
   await new Promise((resolve, reject) => {
     server.once('error', reject); server.listen(port, '127.0.0.1', resolve);
   });
-  return { origin: `http://127.0.0.1:${server.address().port}`,
+  return { origin: `${tls ? 'https' : 'http'}://127.0.0.1:${server.address().port}`,
     async close() {
       await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
       await Promise.allSettled([...pending]);

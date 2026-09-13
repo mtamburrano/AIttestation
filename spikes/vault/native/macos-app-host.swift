@@ -151,6 +151,12 @@ private func spawnFixedRuntime(nodeURL: URL, scriptURL: URL, instanceLock: Int32
 do {
   signal(SIGPIPE, SIG_IGN)
   try validateSignedBundle()
+#if PRIVATE_DEVELOPMENT
+  // Development keeps the production Keychain group and bridge identities, so
+  // its authority must be confined to a separate OS account before any storage.
+  guard let record = getpwuid(getuid()), let name = record.pointee.pw_name,
+        String(cString: name) == "attestamp-test", getuid() >= 501 else { throw HostFailure.spawn }
+#endif
 #if PRODUCT_RELEASE
   let instanceLock = try lockApplicationInstance()
   defer { close(instanceLock) }
@@ -162,7 +168,9 @@ do {
 #else
   let helperURL = contents.appendingPathComponent("MacOS/provenance-keychain-helper")
 #endif
-#if PRODUCT_CHATGPT
+#if PRIVATE_DEVELOPMENT
+  let scriptURL = contents.appendingPathComponent("Resources/spikes/development/runtime.mjs")
+#elseif PRODUCT_CHATGPT
   let scriptURL = contents.appendingPathComponent("Resources/spikes/browser/chatgpt/runtime-main.mjs")
 #else
   let scriptURL = contents.appendingPathComponent("Resources/spikes/demonstrator/main.mjs")

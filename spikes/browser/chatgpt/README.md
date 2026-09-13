@@ -119,6 +119,12 @@ through an unsigned configuration update.
 
 ## macOS package boundary
 
+For private iteration, use the [dedicated test-user workflow](../../development/README.md).
+It retains Developer ID/Keychain provisioning and native peer authentication while
+avoiding per-build notarization, a published Store listing and a public backend.
+Its separate entrypoint and local TLS certificate are excluded from distribution
+packages; the installed checks and current limitations are recorded there.
+
 The [distribution builder and support runbook](../../distribution/README.md) adds
 consented registration/removal, export opportunity, signed update verification,
 rollback/schema gates, dependency inventory and build provenance. Consumer controls

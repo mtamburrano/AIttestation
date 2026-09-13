@@ -41,6 +41,19 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     'pap-installed-release/1', 'pap-release-candidate/1',
   ]);
   delete sources['spikes/distribution/verify-artifacts.mjs'];
+  // The separate private launcher reuses frozen identities. Check its additions
+  // explicitly while keeping every original source entry in the baseline intact.
+  const privateSources = {
+    'spikes/development/cli.mjs': ['ai.provenance.consumer', 'ai.provenance.consumer.json',
+      'ai.provenance.consumer.json', 'medilhopfckldjgdnchfkpmfmfnkadca'],
+    'spikes/development/environment.mjs': ['pap-private-development/1'],
+    'spikes/development/prepare.mjs': ['ai.provenance.consumer.bridge-peer-validator',
+      'ai.provenance.consumer.browser-host', 'ai.provenance.consumer.runtime',
+      'ai.provenance.keychain-helper', 'ai.provenance.verifier.runtime'],
+  };
+  for (const [file, expected] of Object.entries(privateSources)) {
+    assert.deepEqual(sources[file], expected); delete sources[file];
+  }
   assert.deepEqual(sources, baseline.sources, 'Technical identities require a separate reviewed migration');
   for (const [file, expected] of Object.entries(baseline.json)) {
     const actual = JSON.parse(await read(file));

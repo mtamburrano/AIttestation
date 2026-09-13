@@ -20,7 +20,7 @@ try {
   const binary = process.env.PROVENANCE_TEST_CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   chrome = spawn(binary, ['--headless=new', `--user-data-dir=${join(root, 'profile')}`, '--remote-debugging-port=0',
     '--no-first-run', '--disable-background-networking', '--disable-component-update', '--disable-sync',
-    '--disable-default-apps', '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank'], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
+    '--disable-default-apps', '--use-mock-keychain', '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank'], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
   let launchError; chrome.on('error', e => { launchError = e; });
   let port;
   for (let i = 0; i < 100; i++) {
