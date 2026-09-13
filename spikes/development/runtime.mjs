@@ -1,11 +1,10 @@
 import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
 import { MacOSKeychainStore } from '../vault/key-lifecycle.mjs';
 import { ManagedAnchoringClient } from '../managed/client.mjs';
 import { startPackagedChatGPT } from '../browser/chatgpt/runtime-main.mjs';
 import { DEVELOPMENT_PROFILE, validateAccount, privateJSON, writeNewJSON } from './environment.mjs';
-import { checkPlatform } from './chrome.mjs';
+import { checkPlatform, launchDevelopmentChrome } from './chrome.mjs';
 import { localTLSRequest } from './tls.mjs';
 import { backupDevelopment, restoreDevelopment } from './recovery.mjs';
 import { startupFailure } from './startup.mjs';
@@ -39,13 +38,10 @@ try {
     request: localTLSRequest(await readFile(new URL('sponsor-certificate.pem', import.meta.url)), config.sponsorOrigin),
   });
   runtime = await startPackagedChatGPT({ supportDirectory: paths.support, keyStore, managed, installation: null });
+  await launchDevelopmentChrome(chrome, paths, runtime.composerURL);
   statePath = join(paths.control, 'runtime.json');
   await writeNewJSON(statePath, { profile: DEVELOPMENT_PROFILE, composerURL: runtime.composerURL });
   process.once('beforeExit', () => unlink(statePath).catch(() => {}));
-  const browser = spawn(chrome.executable, [`--user-data-dir=${paths.chrome}`, '--no-first-run', '--disable-sync',
-    '--disable-background-networking', '--disable-component-update', '--disable-updater-scheduler', runtime.composerURL],
-  { env: { HOME: paths.home, PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
-  browser.on('error', () => stop(1)); browser.unref();
   const stop = async code => {
     await runtime.close(); await unlink(statePath).catch(() => {}); process.exit(code);
   };

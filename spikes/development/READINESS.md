@@ -6,6 +6,27 @@ enrolled provider scope also pass.
 Integrated acceptance remains incomplete; these checks are content-free engineering
 evidence, not owner acceptance or publication approval.
 
+The owner subsequently reported enabling App Management for Attestamp during these
+checks. macOS logs identify the isolated Chrome process attempting a hard link to
+its own executable, with Attestamp recorded as the responsible application. That
+operation matches [Chromium's signed-app clone maintenance](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.37/chrome/browser/mac/code_sign_clone_manager.mm).
+The development runtime now opens the validated Chrome copy through LaunchServices
+instead of spawning its executable directly. The owner disabled the grant, and
+macOS recorded the Attestamp permission as denied. Subsequent logs attribute the
+browser to Chrome itself. No additional entitlement or permission was added.
+
+With the grant disabled, signed startup, native pairing, all three modes' rejection
+without a provider scope, restart, re-pairing and cleanup pass. Both live browsers
+passed strict Google identity/team validation and used the isolated profile and
+update-suppression flags. Their executable hashes matched the original Chrome.
+The extra diagnostic initially rejected an alternate kernel-reported executable
+path. A follow-up established that it was another hard link to the same file. The
+test inspector now checks owner, regular-file type, device/inode identity and the
+known executable digest, alongside the unchanged live Google signature check.
+Production ancestry checks and the development guard against preexisting hard
+links remain unchanged. Prior failure reports were retained; the final check
+closed only the verified test Chrome and removed owned native registration.
+
 Local inspection on 2026-09-13–14 found Apple-silicon macOS 15.7.9, Node 22.23.1,
 the existing native Go tools and Chrome 153.0.8010.37. The dedicated standard
 `attestamp-test` user has an initialized login Keychain. The owner supplied an
@@ -58,7 +79,7 @@ emit only fixed failure labels. The terminal CLI now preserves those labels
 instead of replacing colon-separated startup codes with a generic error; unknown
 labels, private data and extra lines remain filtered.
 
-All 177 automated regression tests pass with no skips. The suite covers isolated
+All 178 automated regression tests pass with no skips. The suite covers isolated
 account/registration lifecycle, rejected
 browser copies and identities, local TLS sponsorship, three protection modes,
 failures, persistence, recovery and portable verification. These fixtures do not

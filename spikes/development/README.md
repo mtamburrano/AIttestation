@@ -153,6 +153,17 @@ The vault and Keychain namespace belong to the separate OS account; no productio
 account is read or modified. The browser is launched with that explicit user-data
 directory, without inherited Node/TLS/proxy options or a debug port.
 
+Chrome opens through LaunchServices using the validated application path, so
+macOS can attribute Chrome's own activity to Chrome. The earlier direct executable
+launch attributed Chrome's signed-app clone maintenance to Attestamp and caused an
+[App Management](https://support.apple.com/en-mide/guide/mac-help/mchl211c911f/mac)
+notification. Updating or deleting other apps is not an
+Attestamp test prerequisite. Keep Attestamp disabled in **System Settings → Privacy
+& Security → App Management**; stop and investigate if this notification returns.
+This permission is separate from signing-key access and the test user's login
+Keychain. Installed startup, native pairing, restart and cleanup checks pass with
+App Management disabled; see the readiness record for their scope.
+
 ## Local sponsorship, with real TestNet confirmation
 
 The developer sponsor can run in either local account. Create its new resource

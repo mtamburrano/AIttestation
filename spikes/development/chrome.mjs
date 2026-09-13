@@ -1,6 +1,6 @@
 import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, join, resolve, sep } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { codeSignatureCheckArguments } from '../distribution/local.mjs';
 import { assertPlatform, testAccount } from './environment.mjs';
 
@@ -38,4 +38,19 @@ export async function checkPlatform(application, paths = testAccount()) {
       'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"'));
   } catch { throw Error('CHROME_SIGNATURE_REJECTED'); }
   return chrome;
+}
+
+export function launchDevelopmentChrome(chrome, paths, composerURL, execute = execFile) {
+  // Use LaunchServices so Chrome can receive its own permission attribution. Directly
+  // spawning its executable attributes Chrome's app-clone maintenance to Attestamp.
+  // Keep the already-validated app path explicit; a bundle-ID lookup is ambiguous.
+  return new Promise((resolve, reject) => {
+    execute('/usr/bin/open', ['-n', '-a', chrome.application, '--args', `--user-data-dir=${paths.chrome}`,
+      '--no-first-run', '--disable-sync', '--disable-background-networking', '--disable-component-update',
+      '--disable-updater-scheduler', composerURL],
+    { env: { HOME: paths.home, PATH: '/usr/bin:/bin' }, timeout: 15000, maxBuffer: 4096 }, error => {
+      if (error) reject(Object.assign(Error('CHROME_LAUNCH_FAILED'), { code: 'CHROME_LAUNCH_FAILED' }));
+      else resolve();
+    });
+  });
 }

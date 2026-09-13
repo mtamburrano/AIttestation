@@ -8,7 +8,7 @@ import { createHash, randomBytes, X509Certificate } from 'node:crypto';
 import { assertPlatform, initializeAccount, testAccount, validateAccount, newDirectory } from '../spikes/development/environment.mjs';
 import { validateDevelopmentConfig, validateDevelopmentSigner } from '../spikes/development/prepare.mjs';
 import { registerNativeHost, removeNativeHost, command } from '../spikes/development/cli.mjs';
-import { chromeApplicationFiles, checkPlatform } from '../spikes/development/chrome.mjs';
+import { chromeApplicationFiles, checkPlatform, launchDevelopmentChrome } from '../spikes/development/chrome.mjs';
 import { algorandAddress, initializeSponsor, serveSponsor } from '../spikes/development/sponsor.mjs';
 import { localTLSRequest } from '../spikes/development/tls.mjs';
 import { ManagedSponsorship } from '../spikes/managed/service.mjs';
@@ -110,6 +110,34 @@ test('private Chrome selection requires an explicit separate owned copy and reje
   await rm(shared);
   await rm(executable); await symlink(infoPlist, executable);
   await assert.rejects(chromeApplicationFiles(application, paths), /UNSAFE_PRIVATE_CHROME_COPY/);
+});
+
+test('private browser launch keeps the selected app and isolated state across LaunchServices', async () => {
+  const chrome = { application: '/private/synthetic test/Google Chrome.app' };
+  const paths = { home: '/private/synthetic test', chrome: '/private/synthetic test/browser data' };
+  const composerURL = 'http://127.0.0.1:12345/#synthetic-token';
+  await launchDevelopmentChrome(chrome, paths, composerURL, (command, args, options, callback) => {
+    assert.equal(command, '/usr/bin/open');
+    assert.equal(args[args.indexOf('-a') + 1], chrome.application);
+    assert.ok(args.includes('-n')); assert.ok(!args.includes('-b'));
+    const browserArgs = args.slice(args.indexOf('--args') + 1);
+    assert.ok(browserArgs.includes(`--user-data-dir=${paths.chrome}`));
+    assert.ok(browserArgs.includes('--disable-updater-scheduler'));
+    assert.ok(browserArgs.includes('--disable-component-update'));
+    assert.equal(browserArgs.at(-1), composerURL);
+    assert.deepEqual(options.env, { HOME: paths.home, PATH: '/usr/bin:/bin' });
+    assert.equal(options.shell, undefined);
+    callback(null);
+  });
+  for (const failure of [{ code: 1 }, { code: 'ENOENT' }, { killed: true, signal: 'SIGTERM' }]) {
+    await assert.rejects(launchDevelopmentChrome(chrome, paths, composerURL, (command, args, options, callback) => {
+      callback(Object.assign(Error(`launch failed: ${composerURL}`), failure));
+    }), error => {
+      assert.equal(error.message, 'CHROME_LAUNCH_FAILED');
+      assert.equal(startupFailure(error), 'PRIVATE_DEVELOPMENT_START_FAILED:CHROME_LAUNCH_FAILED');
+      return true;
+    });
+  }
 });
 
 test('relocating a browser never substitutes an ad hoc signature for Google identity', {

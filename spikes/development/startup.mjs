@@ -9,7 +9,7 @@ const keychainReasons = new Map([
   ['App-bound Keychain operation failed', 'KEYCHAIN_OPERATION_FAILED'],
 ]);
 const codes = new Set(['UNKNOWN', 'LOCKED', 'UNRECOVERABLE', 'INVALID', 'UNSUPPORTED_PATH',
-  'ENOENT', 'EACCES', 'EPERM', 'ENOSPC', ...keychainReasons.values()]);
+  'ENOENT', 'EACCES', 'EPERM', 'ENOSPC', 'CHROME_LAUNCH_FAILED', ...keychainReasons.values()]);
 
 // Startup errors can carry private paths or broker data. Only fixed diagnostic
 // labels cross the signed runtime's stderr boundary into the development CLI.
