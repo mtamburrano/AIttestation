@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { distributionError, httpsOrigin, verifyRelease } from './release.mjs';
 import { ownedDirectory, syncDirectory } from './files.mjs';
+import { codeSignatureCheckArguments } from './local.mjs';
 
 const execute = promisify(execFile);
 
@@ -45,8 +46,8 @@ export async function verifyAppleInstaller(path, teamId) {
   if (!/^[A-Z0-9]{10}$/.test(teamId)) throw distributionError('INVALID_SIGNING_TEAM');
   const options = { env: { PATH: '/usr/bin:/bin' }, timeout: 30_000, maxBuffer: 64 * 1024 };
   try {
-    await execute('/usr/bin/codesign', ['--verify', '--strict', '-R',
-      `anchor apple generic and certificate leaf[subject.OU] = "${teamId}"`, path], options);
+    await execute('/usr/bin/codesign', codeSignatureCheckArguments(path,
+      `anchor apple generic and certificate leaf[subject.OU] = "${teamId}"`), options);
     await execute('/usr/bin/xcrun', ['stapler', 'validate', path], options);
     await execute('/usr/sbin/spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', path], options);
   } catch { throw distributionError('UPDATE_APPLE_SIGNATURE_REJECTED'); }

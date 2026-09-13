@@ -10,6 +10,7 @@ import { DesktopUpdater } from '../spikes/distribution/updater.mjs';
 import { RELEASE_PROFILE, sha256, verifyRelease } from '../spikes/distribution/release.mjs';
 import { createChromeWebStoreUpload, releaseArtifactContract, releaseBuildPlan, validateBuildConfig } from '../spikes/distribution/build-macos.mjs';
 import { dependencyInventory, validateDependencyApproval } from '../spikes/distribution/inventory.mjs';
+import { codeSignatureCheckArguments } from '../spikes/distribution/local.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
 import { identity, verifyDisclosure } from '../spikes/vault/records.mjs';
@@ -23,6 +24,22 @@ async function temporary(t) {
 }
 const installation = (root, sequence = 2) => new InstallationLifecycle({ supportDirectory: join(root, 'support'),
   chromeSupportDirectory: join(root, 'chrome-test-only'), browserHost: join(root, 'Test.app/Contents/MacOS/provenance-browser-host'), sequence });
+
+test('macOS signature checks accept inline identity requirements and reject wrong identities and tampering',
+  { skip: process.platform !== 'darwin' }, async t => {
+    const root = await temporary(t), executable = join(root, 'signature-fixture');
+    await copyFile('/usr/bin/true', executable);
+    const options = { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 15000 };
+    const signed = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'signature-fixture', executable], options);
+    assert.equal(signed.status, 0, signed.stderr);
+    const check = requirement => spawnSync('/usr/bin/codesign', codeSignatureCheckArguments(executable, requirement), options);
+    const accepted = check('identifier "signature-fixture"');
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.notEqual(check('identifier "different-fixture"').status, 0);
+    assert.notEqual(check('anchor apple generic and certificate leaf[subject.OU] = "TESTTEAM01"').status, 0);
+    const bytes = await readFile(executable); bytes[1024] ^= 1; await writeFile(executable, bytes);
+    assert.notEqual(check('identifier "signature-fixture"').status, 0);
+  });
 
 function releaseFixture(overrides = {}) {
   const key = generateKeyPairSync('ed25519'), bytes = Buffer.from('synthetic signed disk image bytes');

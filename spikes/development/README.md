@@ -69,6 +69,16 @@ production configuration.
 npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build
 ```
 
+macOS may display Keychain prompts for `codesign` to use the existing Developer ID
+key. Complete those prompts in the signing account. **Allow** grants one use, so
+the separately signed executables can each prompt again. **Always Allow** grants
+`codesign` continuing access to that particular signing key, including future
+builds; choosing that persistent permission is the signing account owner's
+decision. See [Apple's explanation](https://developer.apple.com/forums/thread/712005).
+The builder does not change Keychain permissions. A signing step has a ten-minute
+deadline; `PRIVATE_PREPARE_SIGNING_TIMED_OUT` leaves an incomplete output. After
+resolving the prompt, rerun preparation with a new output directory.
+
 Each output must be new, canonical and outside repositories. The builder records
 the current source digest, so ordinary local changes need no release approval or
 clean-checkout gate. It never registers a host, starts Chrome or opens an evidence

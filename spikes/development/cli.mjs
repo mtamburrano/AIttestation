@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { codeSignatureCheckArguments } from '../distribution/local.mjs';
 import { CHROME, DEVELOPMENT_PROFILE, assertPlatform, exists, initializeAccount, ownerDirectory,
   privateJSON, testAccount, validateAccount, writeNewJSON } from './environment.mjs';
 
@@ -15,8 +16,8 @@ export function checkPlatform() {
     osVersion: run('/usr/bin/sw_vers', ['-productVersion']).trim(),
     chromeVersion: run('/usr/libexec/PlistBuddy', ['-c', 'Print CFBundleShortVersionString',
       '/Applications/Google Chrome.app/Contents/Info.plist']).trim() });
-  run('/usr/bin/codesign', ['--verify', '--strict', '-R',
-    'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"', CHROME]);
+  run('/usr/bin/codesign', codeSignatureCheckArguments(CHROME,
+    'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"'));
 }
 
 export async function registerNativeHost(paths, browserHost) {

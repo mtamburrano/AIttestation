@@ -7,15 +7,28 @@ import { fileInventory, sourceInventory } from '../distribution/inventory.mjs';
 import { sha256 } from '../distribution/release.mjs';
 import { canonical } from '../vault/format.mjs';
 import { helperProfileFromPlist, readReleaseFile, validateHelperProfile } from '../distribution/release-inputs.mjs';
+import { codeSignatureCheckArguments } from '../distribution/local.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { assertNoPackagedLeaks } from '../distribution/artifact-files.mjs';
 import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, writeNewJSON } from './environment.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const run = (command, args, options = {}) => execFileSync(command, args, {
-  env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', timeout: 120000,
-  maxBuffer: 4 * 1024 * 1024, ...options,
-});
+const run = (command, args, options = {}) => {
+  try {
+    // Developer ID signing can wait for an interactive Keychain prompt.
+    const timeout = command === '/usr/bin/codesign' && args.includes('--sign') ? 600000 : 120000;
+    return execFileSync(command, args, {
+      env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', timeout,
+      maxBuffer: 4 * 1024 * 1024, ...options,
+    });
+  } catch (cause) {
+    const step = command === '/usr/bin/codesign' ? (args.includes('--verify') ? 'SIGNATURE_CHECK' : 'SIGNING')
+      : command === '/usr/bin/security' ? 'PROFILE' : command === '/usr/bin/xcrun' ? 'COMPILATION'
+      : command === process.execPath ? 'PACKAGING' : 'METADATA';
+    // Keep command arguments and subprocess output out of the CLI error.
+    throw Error(`PRIVATE_PREPARE_${step}_${cause.code === 'ETIMEDOUT' ? 'TIMED_OUT' : 'FAILED'}`, { cause });
+  }
+};
 const xml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>${Object.entries(values)
   .map(([key, value]) => `<key>${xml(key)}</key>${value === true ? '<true/>' : Array.isArray(value)
@@ -90,6 +103,7 @@ export async function prepareDevelopment(configPath, output) {
       ...(entitlements ? ['--entitlements', entitlements] : []), path]);
     for (const bundle of [app, join(packageDirectory, 'Recipient/Attestamp Verifier.app')]) {
       await assertNoPackagedLeaks(bundle);
+      process.stderr.write(`Signing ${bundle === app ? 'Attestamp' : 'Attestamp Verifier'}; approve macOS Keychain prompts if shown.\n`);
       for (const file of await fileInventory(bundle)) {
         if (!/Contents\/(MacOS\/|Resources\/spikes\/anchor\/algorand\/bin\/)/.test(file.path) || file.path.includes('/Helpers/')) continue;
         const path = join(bundle, file.path), name = file.path.split('/').at(-1);
@@ -101,8 +115,8 @@ export async function prepareDevelopment(configPath, output) {
       }
       if (bundle === app) sign(helper, null, join(work, 'keychain.plist'));
       sign(bundle);
-      run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '-R',
-        `anchor apple generic and certificate leaf[subject.OU] = "${config.teamId}"`, bundle]);
+      run('/usr/bin/codesign', codeSignatureCheckArguments(bundle,
+        `anchor apple generic and certificate leaf[subject.OU] = "${config.teamId}"`, { deep: true }));
     }
     await cp(join(root, 'spikes/browser/chatgpt/extension'), join(output, 'extension'), { recursive: true });
     await copyFile(join(root, 'spikes/development/README.md'), join(output, 'Start Here.md'));

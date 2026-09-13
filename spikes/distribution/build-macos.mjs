@@ -9,6 +9,7 @@ import { canonical } from '../vault/format.mjs';
 import { dependencyInventory, fileInventory, sourceInventory, validateDependencyApproval } from './inventory.mjs';
 import { RELEASE_PROFILE, sha256, validateRelease } from './release.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
+import { codeSignatureCheckArguments } from './local.mjs';
 import { assertCleanSource, helperProfileFromPlist, readReleaseApproval, readReleaseConfig, readReleaseFile,
   readUpdateSigningKey, releaseArtifactContract, validateBuildConfig, validateHelperProfile, validateReleasePermissions } from './release-inputs.mjs';
 export { releaseArtifactContract, releaseBuildPlan, validateBuildConfig } from './release-inputs.mjs';
@@ -105,8 +106,8 @@ async function signBundle(app, config, work, helper = null) {
     signPath(path, ids[name], name === 'node' ? nodeEntitlements : null);
   }
   if (helper) signPath(helper.app, null, helper.entitlements);
-  signPath(app); run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '-R',
-    `anchor apple generic and certificate leaf[subject.OU] = "${config.teamId}"`, app]);
+  signPath(app); run('/usr/bin/codesign', codeSignatureCheckArguments(app,
+    `anchor apple generic and certificate leaf[subject.OU] = "${config.teamId}"`, { deep: true }));
 }
 
 async function notarize(path, profile) {

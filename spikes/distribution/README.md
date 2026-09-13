@@ -329,17 +329,19 @@ provider/adapter contracts also remain unchanged. The regression fixture in
 from visible branding. Local packaging and browser tests use temporary resources;
 they do not satisfy signing, store publication or installed-provider release gates.
 
-## Provisioning still required
+## Public distribution provisioning
 
-1. Enroll the distributing organization in Apple Developer Program. In its
-   Certificates, Identifiers & Profiles area, issue/import a **Developer ID
-   Application** certificate with its private key on the release Mac. Record its
-   displayed identity and ten-character Team ID. Verify it appears as valid in
-   `security find-identity -v -p codesigning`. Neither currently exists here.
-2. Register `ai.provenance.keychain-helper` for that team and configure its
-   Keychain sharing entitlement for `TEAMID.ai.provenance.evidence-vault`. Create
-   a **Developer ID** provisioning profile authorizing that exact helper app ID
-   and group, and download it outside VCS. The builder checks the team, app ID,
+1. Reuse the organization's existing **Developer ID Application** certificate and
+   private key on the release Mac. Record its displayed identity and ten-character
+   Team ID, and verify it appears as valid in `security find-identity -v -p codesigning`.
+   If no suitable identity exists, enroll in Apple Developer Program and issue/import
+   one through Certificates, Identifiers & Profiles.
+2. Reuse an unexpired **Developer ID** provisioning profile authorizing
+   `TEAMID.ai.provenance.keychain-helper` and `TEAMID.ai.provenance.evidence-vault`.
+   Matching existing credentials were validated for
+   [private preparation](../development/READINESS.md). Only create a profile if no
+   suitable one exists: register the helper app ID, configure its Keychain sharing
+   entitlement and download the profile outside VCS. The builder checks the team, app ID,
    group, expiration and all-device distribution before embedding it in the
    helper bundle. If the App Identifier Prefix differs from the Team ID, stop:
    the current fixed group policy needs a separately reviewed configuration change.

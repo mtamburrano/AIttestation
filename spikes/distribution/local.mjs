@@ -11,6 +11,11 @@ export function localCommand(command, args, options = {}) {
     encoding: 'utf8', stdio: 'pipe', timeout: 15_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024 });
 }
 
+export function codeSignatureCheckArguments(path, requirement, { deep = false } = {}) {
+  // Without the leading '=', codesign treats the requirement as a filename.
+  return ['--verify', ...(deep ? ['--deep'] : []), '--strict', '-R', `=${requirement}`, path];
+}
+
 export function readOnlyCommand(command, args, options = {}) {
   // Denial applies to descendants too; an unavailable sandbox is a hard failure.
   return localCommand('/usr/bin/sandbox-exec', ['-p', READ_ONLY_SANDBOX, command, ...args], options);
