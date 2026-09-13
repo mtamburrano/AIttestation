@@ -107,6 +107,86 @@ test('decoded JSON escapes and UTF-16 cannot conceal known material', () => {
   }
 });
 
+const duplicateJSON = [
+  String.raw`{"api_\u006bey":"${marker}","api_key":null}`,
+  String.raw`{"api_\u006bey":"${marker}","api_\u006bey":""}`,
+  String.raw`{"evidence":"\u0041TTESTAMP_SYNTHETIC_EVIDENCE_V1:${marker}","evidence":null}`,
+  String.raw`{"nested":{"api_\u006bey":"${marker}"},"nested":null}`,
+];
+function jsonEncodings(text) {
+  const utf8 = Buffer.from(text), le = Buffer.from(text, 'utf16le'), be = Buffer.from(le).swap16();
+  return [utf8, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), utf8]), le, be,
+    Buffer.concat([Buffer.from([0xff, 0xfe]), le]), Buffer.concat([Buffer.from([0xfe, 0xff]), be])];
+}
+
+test('decoded duplicate JSON members reject directly and inside nested ZIPs across supported encodings', async t => {
+  const directory = await isolated(t), path = join(directory, `${marker}.dat`);
+  for (const payload of duplicateJSON) {
+    for (const text of [payload, `{"items":[{"public":true},${payload}]}`]) {
+      for (const bytes of jsonEncodings(text)) {
+        await writeFile(path, bytes);
+        await assert.rejects(assertNoPackagedLeaks(directory), error => {
+          assert.deepEqual(leakDiagnostic(error), { category: 'AMBIGUOUS_JSON', entry: 1, archiveEntries: [] });
+          assert.doesNotMatch(JSON.stringify(leakDiagnostic(error)), /DO-NOT-PRINT|ATTESTAMP_SYNTHETIC|\.dat/);
+          return true;
+        });
+        const inner = zip([['public.json', '{"api_key":null}'], [`${marker}.json`, bytes]], { compressed: true, descriptor: true });
+        await writeFile(path, zip([['nested.dat', inner]], { compressed: true }));
+        await assert.rejects(assertNoPackagedLeaks(directory), error => {
+          assert.deepEqual(leakDiagnostic(error), { category: 'AMBIGUOUS_JSON', entry: 1, archiveEntries: [1, 2] });
+          return true;
+        });
+      }
+    }
+  }
+});
+
+test('duplicate detection preserves public escaped data and independent sibling member names', async t => {
+  const directory = await isolated(t), path = join(directory, 'public.dat');
+  const { publicKey } = generateKeyPairSync('ed25519');
+  const text = JSON.stringify({ publicKeys: [publicKey.export({ format: 'jwk' }), publicKey.export({ format: 'jwk' })],
+    records: [{ evidence: { round: 123 }, api_key: null }, { evidence: null, api_key: '' }],
+    description: 'Quoted "public": [braces{}] and escaped backslash \\', password: '' })
+    .replaceAll('"kty"', '"\\u006bty"').replaceAll('"evidence"', '"\\u0065vidence"');
+  for (const bytes of jsonEncodings(text)) {
+    await writeFile(path, bytes); await assertNoPackagedLeaks(directory);
+    await writeFile(path, zip([['nested.dat', zip([['public.json', bytes]], { compressed: true })]], { compressed: true }));
+    await assertNoPackagedLeaks(directory);
+  }
+  assert.doesNotThrow(() => rejectSecretBytes(Buffer.from(String.raw`{"value":"\\u0041 is a literal escape","api_\u006bey":null}`)));
+});
+
+test('JSON depth, string-token and value budgets still reject with safe fixed categories', () => {
+  assert.doesNotThrow(() => rejectSecretBytes(Buffer.from('['.repeat(32) + 'null' + ']'.repeat(32))));
+  for (const text of ['['.repeat(33) + 'null' + ']'.repeat(33),
+    '[' + '"",'.repeat(1_000_000) + '""]', '[' + '0,'.repeat(1_000_000) + '0]']) {
+    assert.throws(() => rejectSecretBytes(Buffer.from(text)), isLeak('CONTENT_LIMIT'));
+  }
+});
+
+test('prepared app, verifier, output and Store gates reject nested escaped duplicates in every channel', async t => {
+  for (const channel of ['development', 'release-candidate', 'production']) {
+    for (const [path, bytes] of [
+      [`${resources}/spikes/distribution/settings.json`, jsonEncodings(duplicateJSON[0])[2]],
+      [`${verifier}/Contents/Resources/spikes/recipient/settings.json`, jsonEncodings(`{"items":[${duplicateJSON[2]}]}`)[5]],
+      ['Start Here.md', jsonEncodings(duplicateJSON[2])[1]],
+      ['Chrome-Web-Store-upload.zip', zip([['nested.dat', zip([['settings.json',
+        jsonEncodings(`{"items":[${duplicateJSON[0]}]}`)[4]]], { compressed: true })]], { compressed: true })],
+    ]) {
+      const f = await fixture(t, channel), policy = structuredClone(f.policy);
+      assert.equal((await f.run()).status, 'PASSED');
+      await f.write(path, bytes); await f.seal();
+      const report = await f.run(); assert.deepEqual(f.policy, policy);
+      assert.equal(report.status, 'FAILED'); assert.equal(report.failure, 'OUTPUT_FILES_REJECTED');
+      assert.equal(report.packageLeak.category, 'AMBIGUOUS_JSON');
+      assert.ok(Number.isSafeInteger(report.packageLeak.entry));
+      assert.deepEqual(report.packageLeak.archiveEntries, path.endsWith('.zip') ? [1, 1] : []);
+      assert.equal(report.releaseReady, false); assert.equal(report.sourceDigest, null); assert.equal(report.dependencyDigest, null);
+      assert.doesNotMatch(JSON.stringify(report), /DO-NOT-PRINT|ATTESTAMP_SYNTHETIC|\/private\/tmp|settings\.json/);
+    }
+  }
+});
+
 test('the complete large-file stream is scanned across chunk boundaries, both UTF-16 alignments and the metadata cap', async t => {
   const directory = await isolated(t); await mkdir(join(directory, 'Contents/MacOS'), { recursive: true });
   const path = join(directory, 'Contents/MacOS/test-binary');
@@ -163,13 +243,16 @@ test('development, RC and production policy gates reject app, verifier, output a
 
 test('CLI leak reports are bounded and deterministic without filenames, evidence, keys, environment or raw errors', async t => {
   const f = await fixture(t), policy = join(f.directory, 'public-policy.json'); await writeFile(policy, canonical(f.policy));
-  await f.write(`${resources}/${marker}.txt`, sentinel);
   const invoke = () => spawnSync(process.execPath, [cli, f.output, policy], { env: {}, encoding: 'utf8', timeout: 15_000 });
-  const first = invoke(), second = invoke();
-  assert.equal(first.status, 1); assert.equal(first.stderr, ''); assert.equal(second.stdout, first.stdout);
-  const report = JSON.parse(first.stdout); assert.equal(report.packageLeak.category, 'SYNTHETIC_EVIDENCE');
-  assert.ok(Number.isSafeInteger(report.packageLeak.entry)); assert.ok(first.stdout.length < 2048);
-  assert.doesNotMatch(first.stdout, /DO-NOT-PRINT|ATTESTAMP_SYNTHETIC|\/private\/tmp|Error:|\.txt/);
+  for (const [category, bytes] of [['SYNTHETIC_EVIDENCE', sentinel], ['AMBIGUOUS_JSON',
+    zip([[`${marker}.json`, jsonEncodings(duplicateJSON[2])[5]]], { compressed: true })]]) {
+    await f.write(`${resources}/${marker}.txt`, bytes);
+    const first = invoke(), second = invoke();
+    assert.equal(first.status, 1); assert.equal(first.stderr, ''); assert.equal(second.stdout, first.stdout);
+    const report = JSON.parse(first.stdout); assert.equal(report.packageLeak.category, category);
+    assert.ok(Number.isSafeInteger(report.packageLeak.entry)); assert.ok(first.stdout.length < 2048);
+    assert.doesNotMatch(first.stdout, /DO-NOT-PRINT|ATTESTAMP_SYNTHETIC|\/private\/tmp|Error:|\.txt|\.json/);
+  }
 });
 
 test('leak rejection still works with writes, network, Mach lookups and Apple Events denied', { skip: process.platform !== 'darwin' }, async t => {

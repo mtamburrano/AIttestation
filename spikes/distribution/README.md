@@ -210,7 +210,7 @@ codes, safe numeric leak locations, the validated channel and successful public 
 digests/update status, marks later checks `NOT_RUN`, and never prints input paths,
 secret contents or raw errors. Inspection is bounded to 50,000 filesystem entries,
 32 directory levels, 1 GiB per file, 6 GiB total, 256 MiB retained small-file data,
-16 MiB per JSON/ZIP, one million JSON values, and 256 entries/16 MiB expanded
+16 MiB per JSON/ZIP, one million JSON values or structural/string tokens, and 256 entries/16 MiB expanded
 data across each ZIP tree, with at most three nested archives. The CLI has a
 two-minute deadline.
 
@@ -244,7 +244,12 @@ The rules identify:
 
 Text scanning covers every file chunk with a 16 KiB overlap, including large
 executables, ASCII/UTF-8 and either UTF-16 byte order/alignment. Bounded JSON
-inspection also decodes escaped field names and string values. ZIPs are
+inspection also decodes escaped field names and string values. It rejects
+duplicate decoded names within each object as `AMBIGUOUS_JSON` before parsing
+can discard an earlier credential or evidence value. This includes nested
+objects/arrays, UTF-8 or UTF-16 with optional byte-order marks, and JSON in
+compressed archives. Repeated names in separate sibling objects remain allowed;
+depth and token/value limits fail as `CONTENT_LIMIT`. ZIPs are
 recognized by suffix or leading signature, including renamed/nested archives;
 inspection stays in memory and rejects unsupported/encrypted/ambiguous ZIPs
 and expansion or nesting limits.
