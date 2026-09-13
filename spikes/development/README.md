@@ -94,6 +94,21 @@ npm run dev -- init
 npm run dev -- doctor
 ```
 
+`CHROME_SIGNATURE_REJECTED` means the installed browser did not pass the unchanged
+Google signature requirement, even if its major version is correct. Inspect it
+without modifying the app:
+
+```sh
+/usr/bin/codesign --verify --strict -R '=anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"' '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+/usr/bin/xattr -lr '/Applications/Google Chrome.app'
+```
+
+The `resource fork, Finder information, or similar detritus not allowed` error can
+come from Finder metadata, as [Apple explains](https://developer.apple.com/library/archive/qa/qa1940/_index.html).
+Diagnose any cleanup on a copy first, preserve a backup of the exact affected
+attributes, and obtain the installed app owner's permission before changing it.
+Do not skip signature validation or clear all extended attributes automatically.
+
 Initialization refuses any existing test control, vault-support or Chrome directory.
 This is intentional: do not remove existing data to make it pass. Use a freshly
 created dedicated account. Native registration lives in that user's explicit
@@ -156,6 +171,13 @@ load the output's `extension` directory unpacked. Verify its unchanged ID is
 `medilhopfckldjgdnchfkpmfmfnkadca`. Open one empty `https://chatgpt.com/` tab and
 sign into the designated test account. Enter protected text only in the local
 composer. Its banner identifies private development; no Store connection is needed.
+
+While a designated ChatGPT account is unavailable, local startup, rejection while
+unpaired, stop/restart and an empty-vault backup/restore can be checked in the test
+user. Leave provider tabs closed and sponsorship unconfigured. These checks do
+not establish installed pairing, successful sends in any mode, receipt export or
+live TestNet confirmation. A GUI login must remain active; Fast User Switching
+back to the signing account is fine, but logging out ends that test session.
 
 1. Connect anchoring using the local sponsor's access code. Enroll the one supported
    empty ChatGPT tab. Record only whether authenticated pairing succeeds.

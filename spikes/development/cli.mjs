@@ -16,8 +16,10 @@ export function checkPlatform() {
     osVersion: run('/usr/bin/sw_vers', ['-productVersion']).trim(),
     chromeVersion: run('/usr/libexec/PlistBuddy', ['-c', 'Print CFBundleShortVersionString',
       '/Applications/Google Chrome.app/Contents/Info.plist']).trim() });
-  run('/usr/bin/codesign', codeSignatureCheckArguments(CHROME,
-    'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"'));
+  try {
+    run('/usr/bin/codesign', codeSignatureCheckArguments(CHROME,
+      'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"'));
+  } catch { throw Error('CHROME_SIGNATURE_REJECTED'); }
 }
 
 export async function registerNativeHost(paths, browserHost) {
