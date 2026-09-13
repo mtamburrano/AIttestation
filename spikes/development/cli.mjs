@@ -3,24 +3,13 @@ import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { codeSignatureCheckArguments } from '../distribution/local.mjs';
-import { CHROME, DEVELOPMENT_PROFILE, assertPlatform, exists, initializeAccount, ownerDirectory,
-  privateJSON, testAccount, validateAccount, writeNewJSON } from './environment.mjs';
+import { checkPlatform } from './chrome.mjs';
+import { DEVELOPMENT_PROFILE, exists, initializeAccount, ownerDirectory,
+  privateJSON, validateAccount, writeNewJSON } from './environment.mjs';
 
 const run = (command, args) => execFileSync(command, args, {
   env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', timeout: 15000,
 });
-
-export function checkPlatform() {
-  assertPlatform({ platform: process.platform, arch: process.arch,
-    osVersion: run('/usr/bin/sw_vers', ['-productVersion']).trim(),
-    chromeVersion: run('/usr/libexec/PlistBuddy', ['-c', 'Print CFBundleShortVersionString',
-      '/Applications/Google Chrome.app/Contents/Info.plist']).trim() });
-  try {
-    run('/usr/bin/codesign', codeSignatureCheckArguments(CHROME,
-      'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"'));
-  } catch { throw Error('CHROME_SIGNATURE_REJECTED'); }
-}
 
 export async function registerNativeHost(paths, browserHost) {
   const directory = join(paths.chrome, 'NativeMessagingHosts');
@@ -91,17 +80,18 @@ async function privateApplication(output) {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
   const manifest = JSON.parse(await readFile(join(app, 'Contents/Resources/spikes/development/private-development.json')));
   if (manifest.profile !== DEVELOPMENT_PROFILE) throw Error('PRIVATE_ENTRYPOINT_REQUIRED');
+  if (manifest.browserPolicy !== 'EXPLICIT_TEST_USER_COPY') throw Error('PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT');
   return app;
 }
 
-export async function startDevelopment(output, mode) {
+export async function startDevelopment(output, mode, chromeApplication) {
   if (mode !== '--live-chatgpt-testnet') throw Error('EXPLICIT_LIVE_TEST_OPT_IN_REQUIRED');
-  const paths = await validateAccount(); checkPlatform();
+  const paths = await validateAccount(); await checkPlatform(chromeApplication, paths);
   const app = await privateApplication(output);
   if (await exists(join(paths.control, 'runtime.json'))) throw Error('STOP_PREVIOUS_PRIVATE_RUNTIME_FIRST');
   await registerNativeHost(paths, join(app, 'Contents/MacOS/provenance-browser-host'));
   try {
-    await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: 'live-chatgpt-testnet' });
+    await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: 'live-chatgpt-testnet', chromeApplication });
     const child = spawn(join(app, 'Contents/MacOS/provenance-app-host'), [], {
       env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore', detached: true,
     });
@@ -138,17 +128,19 @@ async function maintenance(output, operation) {
 
 export async function command(args) {
   const [action, ...rest] = args;
-  if (action === 'doctor' && rest.length === 0) { checkPlatform(); testAccount(); return { ready: true, liveCheck: 'NOT_RUN' }; }
+  if (action === 'doctor' && rest.length === 2 && rest[0] === '--chrome-app') {
+    await checkPlatform(rest[1]); return { ready: true, liveCheck: 'NOT_RUN' };
+  }
   if (action === 'init' && rest.length === 0) { await initializeAccount(); return { initialized: true }; }
   if (action === 'prepare' && rest.length === 2) {
     const { prepareDevelopment } = await import('./prepare.mjs'); return prepareDevelopment(...rest);
   }
-  if (action === 'start' && rest.length === 2) return startDevelopment(...rest);
+  if (action === 'start' && rest.length === 4 && rest[1] === '--chrome-app') return startDevelopment(rest[0], rest[3], rest[2]);
   if (action === 'stop' && rest.length === 0) return stopDevelopment();
   if (action === 'backup' && rest.length === 2) return maintenance(rest[0], { mode: 'backup', outputDirectory: rest[1] });
   if (action === 'restore' && rest.length === 4) return maintenance(rest[0], { mode: 'restore',
     outputDirectory: rest[1], packageFile: rest[2], secretFile: rest[3] });
-  throw Error('USAGE: dev doctor|init|prepare CONFIG NEW_BUILD|start BUILD --live-chatgpt-testnet|stop|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
+  throw Error('USAGE: dev doctor --chrome-app APP|init|prepare CONFIG NEW_BUILD|start BUILD --chrome-app APP --live-chatgpt-testnet|stop|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

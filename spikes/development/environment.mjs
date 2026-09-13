@@ -6,7 +6,6 @@ import { readReleaseFile } from '../distribution/release-inputs.mjs';
 
 export const DEVELOPMENT_PROFILE = 'pap-private-development/1';
 export const TEST_USER = 'attestamp-test';
-export const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 export function testAccount(info = userInfo()) {
   if (info.username !== TEST_USER || info.uid < 501 || info.homedir !== `/Users/${TEST_USER}`) {

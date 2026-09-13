@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink, copyFile, chmod, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { assertPlatform, initializeAccount, testAccount, validateAccount, newDirectory } from '../spikes/development/environment.mjs';
 import { validateDevelopmentConfig } from '../spikes/development/prepare.mjs';
 import { registerNativeHost, removeNativeHost, command } from '../spikes/development/cli.mjs';
+import { chromeApplicationFiles, checkPlatform } from '../spikes/development/chrome.mjs';
 import { algorandAddress, initializeSponsor, serveSponsor } from '../spikes/development/sponsor.mjs';
 import { localTLSRequest } from '../spikes/development/tls.mjs';
 import { ManagedSponsorship } from '../spikes/managed/service.mjs';
@@ -44,8 +45,48 @@ test('private development rejects ordinary accounts, unsupported Chrome and prod
   assert.throws(() => validateDevelopmentConfig({ ...config, allowFakeConfirmation: true }), /INVALID_PRIVATE/);
   assert.throws(() => validateDevelopmentConfig({ ...config, sponsor: {
     origin: 'http://127.0.0.1:37461', certificateFile: '/private/test/cert' } }), /TLS_SPONSOR/);
-  await assert.rejects(command(['start', '/unused', '--offline']), /LIVE_TEST_OPT_IN/);
+  await assert.rejects(command(['start', '/unused', '--chrome-app', '/unused.app', '--offline']), /LIVE_TEST_OPT_IN/);
+  await assert.rejects(command(['start', '/unused', '--live-chatgpt-testnet']), /USAGE/);
+  await assert.rejects(command(['doctor']), /USAGE/);
   await assert.rejects(serveSponsor('/unused', '--fixture'), /LIVE_TESTNET_OPT_IN/);
+});
+
+test('private Chrome selection requires an explicit separate owned copy and rejects aliases and shared files', async t => {
+  const root = await isolated(t), application = join(root, 'Google Chrome.app');
+  const paths = { home: root, control: join(root, 'control'), support: join(root, 'vault'), chrome: join(root, 'chrome-data') };
+  const executable = join(application, 'Contents/MacOS/Google Chrome');
+  const infoPlist = join(application, 'Contents/Info.plist');
+  await mkdir(join(application, 'Contents/MacOS'), { recursive: true });
+  await writeFile(executable, 'synthetic executable'); await writeFile(infoPlist, 'synthetic metadata');
+  assert.deepEqual(await chromeApplicationFiles(application, paths), { application, executable, infoPlist });
+  for (const candidate of [undefined, '/Applications/Google Chrome.app', 'Google Chrome.app', `${root}/../Google Chrome.app`]) {
+    await assert.rejects(chromeApplicationFiles(candidate, paths), /EXPLICIT_TEST_USER_CHROME_COPY/);
+  }
+  await assert.rejects(chromeApplicationFiles(join(paths.chrome, 'Google Chrome.app'), paths), /MUST_BE_SEPARATE/);
+  const alias = join(root, 'Alias.app'); await symlink(application, alias);
+  await assert.rejects(chromeApplicationFiles(alias, paths), /UNSAFE_PRIVATE_CHROME_COPY/);
+  await chmod(application, 0o777);
+  await assert.rejects(chromeApplicationFiles(application, paths), /UNSAFE_PRIVATE_CHROME_COPY/);
+  await chmod(application, 0o755);
+  const shared = join(root, 'shared-executable'); await link(executable, shared);
+  await assert.rejects(chromeApplicationFiles(application, paths), /UNSAFE_PRIVATE_CHROME_COPY/);
+  await rm(shared);
+  await rm(executable); await symlink(infoPlist, executable);
+  await assert.rejects(chromeApplicationFiles(application, paths), /UNSAFE_PRIVATE_CHROME_COPY/);
+});
+
+test('relocating a browser never substitutes an ad hoc signature for Google identity', {
+  skip: process.platform !== 'darwin' || process.arch !== 'arm64',
+}, async t => {
+  const root = await isolated(t), application = join(root, 'Google Chrome.app');
+  const paths = { home: root, control: join(root, 'control'), support: join(root, 'vault'), chrome: join(root, 'chrome-data') };
+  await mkdir(join(application, 'Contents/MacOS'), { recursive: true });
+  await copyFile('/usr/bin/true', join(application, 'Contents/MacOS/Google Chrome'));
+  await writeFile(join(application, 'Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Google Chrome</string><key>CFBundleIdentifier</key><string>com.google.Chrome</string><key>CFBundleShortVersionString</key><string>153.0.0.0</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>');
+  const signed = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', application], {
+    env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 15000 });
+  assert.equal(signed.status, 0, signed.stderr);
+  await assert.rejects(checkPlatform(application, paths), /CHROME_SIGNATURE_REJECTED/);
 });
 
 test('account setup refuses existing state and registration cleanup is ownership safe across restarts', async t => {

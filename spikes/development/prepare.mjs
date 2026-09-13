@@ -88,11 +88,12 @@ export async function prepareDevelopment(configPath, output) {
       '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
       join(root, 'spikes/vault/native/macos-app-host.swift'), '-o', join(contents, 'MacOS/provenance-app-host')]);
     const dev = join(contents, 'Resources/spikes/development'); await mkdir(dev);
-    for (const name of ['runtime.mjs', 'environment.mjs', 'tls.mjs', 'recovery.mjs']) {
+    for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs']) {
       await copyFile(join(root, 'spikes/development', name), join(dev, name));
     }
     await writeNewJSON(join(dev, 'private-development.json'), { profile: DEVELOPMENT_PROFILE,
-      sponsorOrigin: config.sponsor?.origin ?? null, assurance: 'PRIVATE_TESTNET_ONLY', updaterEnabled: false });
+      sponsorOrigin: config.sponsor?.origin ?? null, assurance: 'PRIVATE_TESTNET_ONLY', updaterEnabled: false,
+      browserPolicy: 'EXPLICIT_TEST_USER_COPY' });
     if (certificate) await writeFile(join(dev, 'sponsor-certificate.pem'), certificate);
     run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName Attestamp Private Test', join(contents, 'Info.plist')]);
     const html = join(contents, 'Resources/spikes/browser/chatgpt/product.html');

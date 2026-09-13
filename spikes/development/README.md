@@ -8,8 +8,8 @@ Notarization, Store publication, public DNS/CDN and billing are separate release
 steps. A private build has no update channel or installed production metadata.
 
 The [readiness record](READINESS.md) distinguishes implemented tooling, automated
-fixtures and the installed checks still needed. The private installed flow has
-not yet been validated. Do not treat these instructions as owner acceptance.
+fixtures and the installed checks still needed. Do not treat these instructions
+as owner acceptance.
 
 ## Prepare once
 
@@ -87,27 +87,47 @@ into the test user's home and give that user ownership; do not share a signing
 private key. The output contains only the public sponsor certificate, if configured.
 Its app can be relocated before registration.
 
-In the test user's fresh checkout, before opening Chrome or the app:
+Use a separate copy of Chrome inside the test user's home, owned by that user.
+For example, while signed into `attestamp-test`, create a new private directory
+and copy the application bytes from the supported installation:
+
+```sh
+/bin/mkdir -m 700 /Users/attestamp-test/AttestampPrivateBrowser
+/usr/bin/ditto '/Applications/Google Chrome.app' '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app'
+```
+
+Keep this copy separate from the vault, control and browser user-data directories.
+The development commands require an explicit canonical `--chrome-app` path;
+symlinks, shared installations, hard-linked executables and other users' copies
+are rejected. No environment variable or production setting selects the browser.
+The copied app must still have Google's `com.google.Chrome` identity, team
+`EQHXZ8M8AV`, valid strict signature and supported major. Native messaging continues
+to authenticate the actual running Chrome parent and ancestry with the same
+requirements; moving the signed app needs no native trust exception.
+
+In the test user's fresh checkout, before opening Chrome or Attestamp:
 
 ```sh
 npm run dev -- init
-npm run dev -- doctor
+npm run dev -- doctor --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app'
 ```
 
-`CHROME_SIGNATURE_REJECTED` means the installed browser did not pass the unchanged
-Google signature requirement, even if its major version is correct. Inspect it
-without modifying the app:
+`CHROME_SIGNATURE_REJECTED` means the selected copy did not pass the unchanged
+Google signature requirement, even if its major version is correct. Inspect the
+copy without modifying the shared installation:
 
 ```sh
-/usr/bin/codesign --verify --strict -R '=anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"' '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-/usr/bin/xattr -lr '/Applications/Google Chrome.app'
+/usr/bin/codesign --verify --strict -R '=anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"' '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app/Contents/MacOS/Google Chrome'
+/usr/bin/xattr -lr '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app'
 ```
 
 The `resource fork, Finder information, or similar detritus not allowed` error can
 come from Finder metadata, as [Apple explains](https://developer.apple.com/library/archive/qa/qa1940/_index.html).
-Diagnose any cleanup on a copy first, preserve a backup of the exact affected
-attributes, and obtain the installed app owner's permission before changing it.
-Do not skip signature validation or clear all extended attributes automatically.
+If present, back up the exact affected attributes and remove only
+`com.apple.FinderInfo` from this test-only copy. Check that the executable hashes
+match the source and that strict signature validation now passes. Never clear all
+extended attributes, edit signed bundle files or re-sign Chrome. The shared app,
+personal profiles and shared updater settings are not part of this workflow.
 
 Initialization refuses any existing test control, vault-support or Chrome directory.
 This is intentional: do not remove existing data to make it pass. Use a freshly
@@ -162,11 +182,22 @@ cannot authorize protected release. No public backend or DNS is required.
 In the test user, using only a designated test ChatGPT account and synthetic text:
 
 ```sh
-npm run dev -- start /absolute/copied/private-build --live-chatgpt-testnet
+npm run dev -- start /absolute/copied/private-build --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app' --live-chatgpt-testnet
 ```
 
 This is the explicit live-boundary opt-in. It opens the local composer in the
-isolated Chrome directory. Visit `chrome://extensions`, enable Developer mode and
+explicit Chrome copy with the isolated user-data directory. The private runtime
+rechecks the selected copy before opening the vault, and supplies the actual test
+user's HOME. It disables background networking, component updates and Chrome's
+updater scheduler for this process; it does not change updater preferences or
+services. The supported browser's
+[scheduler switch](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.37/chrome/browser/chrome_browser_main.cc#1075)
+skips periodic updater setup, while
+[copy ownership](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.37/chrome/browser/updater/browser_updater_client_util_mac.mm#250)
+keeps its updater scope in the test account. Use this command for every launch;
+do not open the copy's About/Update action or promote its updater.
+
+Visit `chrome://extensions`, enable Developer mode and
 load the output's `extension` directory unpacked. Verify its unchanged ID is
 `medilhopfckldjgdnchfkpmfmfnkadca`. Open one empty `https://chatgpt.com/` tab and
 sign into the designated test account. Enter protected text only in the local
@@ -178,6 +209,10 @@ user. Leave provider tabs closed and sponsorship unconfigured. These checks do
 not establish installed pairing, successful sends in any mode, receipt export or
 live TestNet confirmation. A GUI login must remain active; Fast User Switching
 back to the signing account is fine, but logging out ends that test session.
+
+An older private build without explicit browser selection is rejected with
+`PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT`; prepare an updated signed build.
+The production package has no browser-path override.
 
 1. Connect anchoring using the local sponsor's access code. Enroll the one supported
    empty ChatGPT tab. Record only whether authenticated pairing succeeds.
@@ -255,7 +290,7 @@ saving both the encrypted recovery package and separate recovery secret before
 stopping. This laboratory is not the persistent, Keychain-backed private app.
 
 Automatic test cleanup removes only directories created by that invocation.
-Private app stop preserves its account, vault, keys and browser state. After the
+Private app stop preserves its account, vault, keys, browser copy and browser state. After the
 installed recovery check, exports and logs have been saved, remove the **dedicated
 test user** using System Settings if desired. Delete only the exact build/sponsor
 directories created for this rehearsal, after stopping them. Never reset an
