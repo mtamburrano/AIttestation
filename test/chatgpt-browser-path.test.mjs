@@ -240,11 +240,13 @@ test('stale edit, scope/tab ambiguity, restart, permission, adapter and provider
   const cases = {
     'stale edit revision': async ({ session, scope, version }) => session.release({ id: version.id, scope, currentText: 'locked', editRevision: 2 }),
     'scope destination change': async ({ adapter, session, scope, version }) => {
-      assert.throws(() => sync(adapter, [tab({ destination: 'conversation:other', url: 'https://chatgpt.com/c/other' })]));
+      sync(adapter, [tab({ destination: 'conversation:other', url: 'https://chatgpt.com/c/other' })]);
+      assert.equal(session.status().eligibility, 'REVOKED');
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
     'multiple ChatGPT tabs': async ({ adapter, session, scope, version }) => {
-      assert.throws(() => sync(adapter, [tab(), tab({ id: 18, active: false })]));
+      sync(adapter, [tab(), tab({ id: 18, active: false })]);
+      assert.equal(session.status().eligibility, 'TEMPORARILY_UNAVAILABLE');
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
     'runtime restart': async ({ adapter, session, scope, version }) => {
@@ -259,8 +261,8 @@ test('stale edit, scope/tab ambiguity, restart, permission, adapter and provider
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
     'unsupported provider change': async ({ adapter, session, scope, version }) => {
-      assert.throws(() => sync(adapter, [tab({ surfaceSupported: false })]));
-      assert.equal(session.status().eligibility, 'REVOKED', 'the UI must not retain an eligible claim after drift');
+      sync(adapter, [tab({ surfaceSupported: false })]);
+      assert.equal(session.status().eligibility, 'TEMPORARILY_UNAVAILABLE', 'the UI must not retain an eligible claim after drift');
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
     'attachment added': async ({ session, scope, version }) => session.release({ id: version.id, scope,
@@ -442,6 +444,7 @@ test('native bridge frames bounded messages and correlates only the exact releas
   let controller, outbound;
   const adapter = new ChatGPTChromeAdapter(command => controller.sendRelease(command), { extensionId });
   controller = new ChromeBridgeController(adapter, message => {
+    if (message.kind === 'PAP_READY') return;
     outbound = structuredClone(message);
     queueMicrotask(() => controller.receive(observedResponse(message)));
   }, { localBrowser: { product: 'Google Chrome', channel: 'stable', major: 153 },
@@ -553,7 +556,8 @@ test('packaged composer and isolated native framing drive the real bridge, adapt
     output.on('data', chunk => {
       try {
         const messages = decoder.push(chunk);
-        if (messages.length) resolve(messages[0]);
+        const command = messages.find(message => message.kind === 'PAP_RELEASE');
+        if (command) resolve(command);
       } catch (error) { reject(error); }
     });
   });

@@ -50,17 +50,37 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     'spikes/development/prepare.mjs': ['ai.provenance.consumer.bridge-peer-validator',
       'ai.provenance.consumer.browser-host', 'ai.provenance.consumer.runtime',
       'ai.provenance.keychain-helper', 'ai.provenance.verifier.runtime'],
+    'spikes/development/product-fixtures.mjs': ['PAP_HELLO', 'PAP_READY', 'PAP_RELEASE', 'PAP_STATE'],
+    'spikes/development/product-test-worker.mjs': ['pap-product-test/1'],
+    'spikes/development/product-test.mjs': ['pap-product-test/1'],
+    'spikes/release/diagnostics.mjs': ['pap-local-diagnostics/1'],
   };
   for (const [file, expected] of Object.entries(privateSources)) {
     assert.deepEqual(sources[file], expected); delete sources[file];
   }
-  assert.deepEqual(sources, baseline.sources, 'Technical identities require a separate reviewed migration');
+  // Native reconnect adds an explicit epoch handshake. Keep the historical
+  // baseline frozen and enumerate this wire migration independently of code.
+  const expectedSources = { ...baseline.sources,
+    'spikes/browser/chatgpt/adapter.mjs': ['medilhopfckldjgdnchfkpmfmfnkadca', 'pap-chatgpt-chrome/3', 'pap-chatgpt-release/1'],
+    'spikes/browser/chatgpt/bridge-runtime.mjs': ['PAP_BRIDGE_AUTH', 'PAP_BRIDGE_READY', 'PAP_HELLO', 'PAP_HELLO', 'PAP_STATE', 'pap-native-peer-validation/1'],
+    'spikes/browser/chatgpt/bridge.mjs': ['PAP_HELLO', 'PAP_READY', 'PAP_RELEASE', 'PAP_STATE'],
+    'spikes/browser/chatgpt/extension/service-worker.js': ['PAP_HELLO', 'PAP_INSPECT', 'PAP_READY', 'PAP_RELEASE', 'PAP_RELEASE',
+      'PAP_STATE', 'PAP_SURFACE_CHANGED', 'ai.provenance.consumer', 'pap-chatgpt-chrome/3', 'pap-chatgpt-release/1'],
+    'spikes/browser/chatgpt/native-host.mjs': ['PAP_BRIDGE_AUTH', 'PAP_BRIDGE_READY', 'pap-chrome-native-bridge/3'],
+  };
+  assert.deepEqual(sources, expectedSources, 'Technical identities require an explicit protocol migration');
   for (const [file, expected] of Object.entries(baseline.json)) {
     const actual = JSON.parse(await read(file));
     if (file === 'spikes/browser/chatgpt/extension/manifest.json') {
       for (const key of ['name', 'short_name', 'description']) delete actual[key];
     }
-    assert.deepEqual(actual, expected, `${file}: public key, trust roots and release/provider configuration are frozen`);
+    const migrated = structuredClone(expected);
+    if (file === 'spikes/distribution/fixtures/compatibility.json') {
+      for (const fixture of migrated.cases) if (fixture.adapterProfile === 'pap-chatgpt-chrome/2') fixture.adapterProfile = 'pap-chatgpt-chrome/3';
+      migrated.cases.push({ name: 'extension without epoch-bound reconnect', appSequence: 2,
+        adapterProfile: 'pap-chatgpt-chrome/2', chromeMajor: 153, supported: false });
+    }
+    assert.deepEqual(actual, migrated, `${file}: public key, trust roots and release/provider configuration are frozen`);
   }
   assert.equal(JSON.parse(await read('package.json')).name, 'private-provenance-spikes');
   for (const file of ['spikes/browser/chatgpt/native/macos-browser-host.swift',

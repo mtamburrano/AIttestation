@@ -14,6 +14,7 @@ import { LocalDiagnostics, emit } from '../../release/diagnostics.mjs';
 const MAX_LINE_BYTES = 512 * 1024;
 const MAX_PEER_RESULT_BYTES = 4 * 1024;
 const AUTH_TIMEOUT_MS = 2_000;
+const HELLO_TIMEOUT_MS = 6_000;
 const PEER_VALIDATION_TIMEOUT_MS = 5_000;
 const RENDEZVOUS_LIFETIME_MS = 4 * 60_000;
 export const NATIVE_PEER_VALIDATION_PROFILE = 'pap-native-peer-validation/1';
@@ -156,7 +157,7 @@ export async function startChromeProtectionRuntime(directory, {
       return Promise.reject(error);
     }
     return controller.sendRelease(command, diagnosticRefs);
-  }, { extensionId, diagnostics: events });
+  }, { extensionId, diagnostics: events, runtimeEpoch });
   const session = await new ChatGPTProtectionSession(directory, adapter, {
     vault, vaultKey, fastTrust, managed, diagnostics: events,
     ...(collectFast === undefined ? {} : { collectFast }),
@@ -185,8 +186,9 @@ export async function startChromeProtectionRuntime(directory, {
     emit(connectionEvents, 'BRIDGE_CONNECTED');
     let authenticated = false, peerIdentity = null, bytes = Buffer.alloc(0), connectionController = null;
     let authTimer;
-    const fail = () => { emit(connectionEvents, 'BRIDGE_REJECTED'); socket.destroy(); };
-    socket.on('error', () => {});
+    const fail = (code = 'BRIDGE_REJECTED') => { emit(connectionEvents, code); socket.destroy(); };
+    socket.on('error', () => fail('BRIDGE_SOCKET_ERROR'));
+    socket.once('end', () => fail('BRIDGE_PEER_EOF'));
     const receive = chunk => {
       try {
         bytes = Buffer.concat([bytes, Buffer.from(chunk)]);
@@ -202,6 +204,7 @@ export async function startChromeProtectionRuntime(directory, {
                 || auth.extensionOrigin !== extensionOrigin || auth.runtimeEpoch !== runtimeEpoch
                 || now() >= expiresAt || !timingSafeEqual(supplied, currentToken)) return fail();
             authenticated = true; clearTimeout(authTimer); candidateSocket = null; activeSocket = socket;
+            authTimer = setTimeout(() => fail('BRIDGE_HELLO_TIMEOUT'), HELLO_TIMEOUT_MS);
             emit(connectionEvents, 'BRIDGE_AUTHENTICATED', { durationMs: performance.now() - connectedAt });
             connectionController = new ChromeBridgeController(adapter, message => {
               if (socket.destroyed) throw bridgeError('Browser bridge disconnected');
@@ -209,6 +212,7 @@ export async function startChromeProtectionRuntime(directory, {
             }, { timeoutMs: controllerTimeoutMs, localBrowser: peerIdentity.browser,
               localPlatform: peerIdentity.platform, diagnostics: connectionEvents });
             controller = connectionController;
+            socket.write(`${canonical({ kind: 'PAP_BRIDGE_READY', profile: NATIVE_BRIDGE_PROFILE, runtimeEpoch })}\n`);
             // Consume the just-used token. A replacement is published for a
             // later Chrome reconnect while this socket remains the only peer.
             publishRendezvous().catch(() => socket.destroy());
@@ -219,7 +223,7 @@ export async function startChromeProtectionRuntime(directory, {
           if (message.kind === 'PAP_HELLO' || message.kind === 'PAP_STATE') {
             latestBrowserState = { ...structuredClone(message), browser: undefined, platform: undefined };
             delete latestBrowserState.browser; delete latestBrowserState.platform;
-            if (message.kind === 'PAP_HELLO') pairedResolve();
+            if (message.kind === 'PAP_HELLO') { clearTimeout(authTimer); pairedResolve(); }
           }
         }
       } catch { fail(); }
@@ -229,9 +233,9 @@ export async function startChromeProtectionRuntime(directory, {
       clearTimeout(authTimer);
       if (candidateSocket === socket) candidateSocket = null;
       if (activeSocket === socket) activeSocket = null;
-      if (controller === connectionController) controller = null;
-      latestBrowserState = null;
-      connectionController?.disconnect();
+      if (connectionController && controller === connectionController) {
+        controller = null; latestBrowserState = null; connectionController.disconnect();
+      }
     });
     Promise.resolve().then(() => attestPeer(socket,
       peerValidatorPath === undefined ? {} : { validatorPath: peerValidatorPath })).then(identity => {
@@ -240,9 +244,9 @@ export async function startChromeProtectionRuntime(directory, {
       keys(identity.platform, ['product', 'arch', 'version']);
       if (closed || socket.destroyed) return fail();
       peerIdentity = structuredClone(identity);
-      authTimer = setTimeout(fail, AUTH_TIMEOUT_MS);
+      authTimer = setTimeout(() => fail('BRIDGE_AUTH_TIMEOUT'), AUTH_TIMEOUT_MS);
       socket.on('data', receive); socket.resume();
-    }).catch(fail);
+    }).catch(() => fail('BRIDGE_PEER_REJECTED'));
   });
 
   try {

@@ -4,6 +4,7 @@ let detected = null, scope = null, selected = null, editRevision = 0, busy = fal
 let previewId = null;
 let diagnosticPreviewId = null;
 let installationConfigured = false, releaseChannel = null, updateAvailable = false;
+let capabilityUnavailable = false;
 
 async function api(path, data = {}) {
   const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${secret}` }, body: JSON.stringify(data) });
@@ -12,13 +13,13 @@ async function api(path, data = {}) {
 
 function controls() {
   $('enroll').disabled = busy || scope !== null || detected === null;
-  $('freeze').disabled = busy || scope === null;
+  $('freeze').disabled = busy || capabilityUnavailable || scope === null;
   $('request').disabled = busy || selected === null;
   $('cancel').disabled = busy || selected === null || selected.anchor !== 'PENDING' || selected.attempt !== null;
-  $('confirm').disabled = busy || selected === null || selected.anchor !== 'PENDING' || !/^[A-Z2-7]{52}$/.test($('transaction').value);
-  $('release').disabled = busy || selected === null || selected.mode !== 'Sealed'
+  $('confirm').disabled = busy || capabilityUnavailable || selected === null || selected.anchor !== 'PENDING' || !/^[A-Z2-7]{52}$/.test($('transaction').value);
+  $('release').disabled = busy || capabilityUnavailable || selected === null || selected.mode !== 'Sealed'
     || selected.state !== 'SEALED_NOT_SENT' || selected.editRevision !== editRevision;
-  $('managed-anchor').disabled = busy || selected === null || selected.anchor !== 'PENDING' || selected.state === 'CANCELLED';
+  $('managed-anchor').disabled = busy || capabilityUnavailable || selected === null || selected.anchor !== 'PENDING' || selected.state === 'CANCELLED';
   for (const id of ['connect-account', 'account-status', 'disconnect-account']) $(id).disabled = busy;
   for (const id of ['refresh-history', 'preview-export', 'redact']) $(id).disabled = busy;
   $('save-export').disabled = busy || previewId === null;
@@ -143,6 +144,7 @@ function action(id, operation) {
 
 async function refresh() {
   const state = await api('/status');
+  capabilityUnavailable = state.protection.eligibility === 'TEMPORARILY_UNAVAILABLE';
   const tabs = state.browser?.tabs ?? [];
   detected = tabs.length === 1 && tabs[0].active && tabs[0].surfaceSupported
     && tabs[0].composerEmpty && !tabs[0].attachmentsPresent ? tabs[0] : null;
@@ -153,6 +155,8 @@ async function refresh() {
     scope = null; detected = null; selected = null;
     $('scope').textContent = 'Protection eligibility revoked. Existing receipts remain available.';
     $('pairing').textContent = 'The supported browser or provider state changed. Reopen the app and pair again.';
+  } else if (capabilityUnavailable) {
+    $('pairing').textContent = 'ChatGPT is temporarily unavailable for protected sending. Return to the enrolled tab with an empty composer, then refresh.';
   }
 }
 

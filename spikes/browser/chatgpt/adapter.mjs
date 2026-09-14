@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
 import { emit } from '../../release/diagnostics.mjs';
 
-export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/2';
+export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/3';
 export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-10';
 export const CHATGPT_RELEASE_PROTOCOL = 'pap-chatgpt-release/1';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
@@ -37,16 +37,18 @@ function macOSSupported(version) {
 }
 
 export class ChatGPTChromeAdapter {
-  #send; #extensionId; #runtimeEpoch = randomUUID(); #connection = null; #tabs = [];
+  #send; #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
   #enrollment = null; #generation = 0; #attempts = new Set();
   #diagnostics;
 
-  constructor(send, { extensionId, diagnostics = null }) {
-    if (typeof send !== 'function' || typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)) {
+  constructor(send, { extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
+    if (typeof send !== 'function' || typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
+        || typeof runtimeEpoch !== 'string' || runtimeEpoch.length < 1 || runtimeEpoch.length > 128) {
       throw Error('Invalid ChatGPT adapter construction');
     }
     this.#send = send; this.#extensionId = extensionId;
     this.#diagnostics = diagnostics;
+    this.#runtimeEpoch = runtimeEpoch;
   }
 
   get capabilities() {
@@ -93,15 +95,14 @@ export class ChatGPTChromeAdapter {
 
   synchronize({ browserSessionId, permissionState, adapterProfile, releaseProtocol, pageContract, tabs }) {
     if (!this.#connection || browserSessionId !== this.#connection.browserSessionId) {
-      this.#invalidate('browser restart'); fail('browser session changed');
+      this.disconnect(); fail('browser session changed');
     }
-    if (permissionState !== 'granted') { this.#invalidate('permission lost'); fail('Chrome permission lost'); }
+    if (permissionState !== 'granted') { this.disconnect(); fail('Chrome permission lost'); }
     if (adapterProfile !== CHATGPT_ADAPTER_PROFILE || releaseProtocol !== CHATGPT_RELEASE_PROTOCOL
         || pageContract !== CHATGPT_PAGE_CONTRACT) {
-      this.#invalidate('adapter mismatch'); fail('adapter or provider contract mismatch');
+      this.disconnect(); fail('adapter or provider contract mismatch');
     }
-    if (!Array.isArray(tabs) || tabs.length > 32) { this.#invalidate('invalid tab inventory'); fail('invalid tab inventory'); }
-    this.#tabs = [];
+    if (!Array.isArray(tabs) || tabs.length > 32) { this.disconnect(); fail('invalid tab inventory'); }
     let nextTabs;
     try {
       nextTabs = tabs.map(tab => {
@@ -111,15 +112,28 @@ export class ChatGPTChromeAdapter {
             || typeof tab.attachmentsPresent !== 'boolean') fail('invalid tab state');
         return structuredClone(tab);
       });
-    } catch (error) { this.#invalidate('invalid tab state'); throw error; }
+    } catch (error) { this.disconnect(); throw error; }
+    if (new Set(nextTabs.map(tab => tab.id)).size !== nextTabs.length) {
+      this.disconnect(); fail('duplicate tab identity');
+    }
+    const previous = this.#enrollment && this.eligibility(this.#enrollment.scope);
     this.#tabs = nextTabs;
     if (this.#enrollment) {
-      try { this.#assertHealthy(this.#enrollment.scope); }
-      catch (error) { this.#invalidate(error.message); throw error; }
+      const enrolled = this.#enrollment, tab = nextTabs.find(value => value.id === enrolled.tabId);
+      // A missing observation is not a new destination. Chrome's tab identity
+      // and URL still bind the scope while a content script is unavailable.
+      if (!tab || tab.url !== enrolled.url || !supportedURL(tab.url)
+          || tab.destination !== enrolled.destination && (tab.destination !== '' || tab.surfaceSupported)) {
+        emit(this.#diagnostics, 'SCOPE_DESTINATION_CHANGED'); this.#invalidate('destination changed');
+      } else {
+        const next = this.eligibility(enrolled.scope);
+        if (next !== previous) emit(this.#diagnostics, next === 'ELIGIBLE' ? 'CAPABILITY_RESTORED' : 'CAPABILITY_UNAVAILABLE');
+      }
     }
     const chatGPTTabs = this.#chatGPTTabs();
     return { eligible: chatGPTTabs.length === 1 && this.#eligibleTabs().length === 1,
-      tabCount: chatGPTTabs.length };
+      tabCount: chatGPTTabs.length,
+      eligibility: this.#enrollment ? this.eligibility(this.#enrollment.scope) : 'UNENROLLED' };
   }
 
   #chatGPTTabs() { return this.#tabs.filter(tab => chatGPTURL(tab.url)); }
@@ -129,12 +143,15 @@ export class ChatGPTChromeAdapter {
   }
   #invalidate(reason) {
     emit(this.#diagnostics, 'SCOPE_INVALIDATED');
-    this.#generation++; this.#enrollment = null; this.#tabs = [];
+    this.#generation++; this.#enrollment = null;
     return reason;
   }
   invalidate(reason = 'scope invalidated') { this.#invalidate(reason); }
+  disconnect() {
+    this.#connection = null; this.#tabs = []; this.#invalidate('native bridge disconnected');
+  }
   restart() {
-    this.#runtimeEpoch = randomUUID(); this.#connection = null; this.#invalidate('runtime restart');
+    this.#runtimeEpoch = randomUUID(); this.disconnect();
   }
 
   enroll({ tabId, destination }) {
@@ -161,11 +178,18 @@ export class ChatGPTChromeAdapter {
     const tabs = this.#chatGPTTabs(), tab = tabs.find(value => value.id === enrolled.tabId);
     if (tabs.length !== 1 || !tab || !tab.active || !tab.surfaceSupported
         || tab.attachmentsPresent || !tab.composerEmpty || tab.destination !== enrolled.destination
-        || tab.url !== enrolled.url) fail('tab ambiguity, scope change, attachment state, or unsupported provider surface');
+        || tab.url !== enrolled.url) {
+      const error = Error('Provider capability is temporarily unavailable');
+      error.code = 'CAPABILITY_UNAVAILABLE'; throw error;
+    }
     return { enrolled, tab };
   }
 
   assertEligible(scope) { this.#assertHealthy(scope); return true; }
+  eligibility(scope) {
+    try { this.#assertHealthy(scope); return 'ELIGIBLE'; }
+    catch (error) { return error.code === 'CAPABILITY_UNAVAILABLE' ? 'TEMPORARILY_UNAVAILABLE' : 'REVOKED'; }
+  }
 
   async dispatch(attempt) {
     let snapshot;

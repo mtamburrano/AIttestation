@@ -3,7 +3,7 @@ import { emit } from '../../release/diagnostics.mjs';
 
 export class ChromeBridgeController {
   #diagnostics;
-  #adapter; #write; #pending = new Map(); #timeoutMs; #connected = true; #localBrowser; #localPlatform;
+  #adapter; #write; #pending = new Map(); #timeoutMs; #connected = true; #localBrowser; #localPlatform; #paired = false;
 
   constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform, diagnostics = null } = {}) {
     if (!adapter || typeof write !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20_000) {
@@ -18,15 +18,20 @@ export class ChromeBridgeController {
   }
 
   receive(message) {
+    if (!this.#connected) return;
     if (!message || typeof message !== 'object') throw Error('Invalid Chrome bridge message');
     if (message.kind === 'PAP_HELLO') {
+      if (this.#paired) throw Error('Chrome bridge already paired');
       const hello = { ...message, browser: structuredClone(this.#localBrowser),
         platform: structuredClone(this.#localPlatform) };
-      this.#adapter.pair(hello);
+      const { runtimeEpoch } = this.#adapter.pair(hello);
       this.#adapter.synchronize(hello);
+      this.#paired = true;
+      this.#write({ kind: 'PAP_READY', runtimeEpoch, browserSessionId: message.browserSessionId });
       emit(this.#diagnostics, 'BRIDGE_HELLO');
       return;
     }
+    if (!this.#paired) throw Error('Chrome bridge is not paired');
     if (message.kind === 'PAP_STATE') {
       this.#adapter.synchronize(message); emit(this.#diagnostics, 'BRIDGE_STATE'); return;
     }
@@ -52,7 +57,7 @@ export class ChromeBridgeController {
   }
 
   sendRelease(command, diagnosticRefs = {}) {
-    if (!this.#connected || command?.profile !== CHATGPT_RELEASE_PROTOCOL || typeof command.attemptId !== 'string'
+    if (!this.#connected || !this.#paired || command?.profile !== CHATGPT_RELEASE_PROTOCOL || typeof command.attemptId !== 'string'
         || this.#pending.has(command.attemptId)) return Promise.reject(Error('Chrome bridge unavailable or duplicate attempt'));
     return new Promise((resolve, reject) => {
       const started = performance.now();
@@ -76,7 +81,7 @@ export class ChromeBridgeController {
   }
 
   disconnect() {
-    if (!this.#connected) return; this.#connected = false; this.#adapter.invalidate('native bridge disconnected');
+    if (!this.#connected) return; this.#connected = false; this.#adapter.disconnect();
     for (const pending of this.#pending.values()) {
       emit(this.#diagnostics, 'BRIDGE_DISCONNECTED', { ...pending.refs, durationMs: performance.now() - pending.started });
       clearTimeout(pending.timer); const error = Error('Chrome bridge disconnected'); error.exposure = 'UNKNOWN'; pending.reject(error);

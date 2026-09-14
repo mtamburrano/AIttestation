@@ -6,7 +6,7 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { b64, canonical, keys, parseCanonical, unb64 } from '../../vault/format.mjs';
 
-export const NATIVE_BRIDGE_PROFILE = 'pap-chrome-native-bridge/2';
+export const NATIVE_BRIDGE_PROFILE = 'pap-chrome-native-bridge/3';
 const MAX_MESSAGE_BYTES = 512 * 1024;
 const defaultRendezvous = join(homedir(), 'Library', 'Application Support', 'Private Provenance', 'browser-bridge.json');
 
@@ -75,36 +75,71 @@ async function rendezvous(path, extensionOrigin, now) {
 
 export async function runNativeHost({
   extensionOrigin, rendezvousPath = defaultRendezvous, input = process.stdin, output = process.stdout,
-  connect = path => createConnection(path), now = Date.now,
+  connect = path => createConnection(path), now = Date.now, handshakeTimeoutMs = 8_000,
+  onClose = () => {},
 } = {}) {
   if (!/^chrome-extension:\/\/[a-p]{32}\/$/.test(extensionOrigin ?? '')) throw Error('Untrusted Chrome extension origin');
+  if (!Number.isSafeInteger(handshakeTimeoutMs) || handshakeTimeoutMs < 1 || handshakeTimeoutMs > 10_000) {
+    throw Error('Invalid native handshake timeout');
+  }
   const entry = await rendezvous(rendezvousPath, extensionOrigin, now), socket = connect(entry.socketPath);
-  const ready = new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
-  await ready;
-  socket.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile: NATIVE_BRIDGE_PROFILE, extensionOrigin,
-    runtimeEpoch: entry.runtimeEpoch, token: entry.token })}\n`);
-  const decoder = new NativeFrameDecoder(); let buffered = Buffer.alloc(0);
-  input.on('data', chunk => {
-    try { for (const message of decoder.push(chunk)) socket.write(Buffer.concat([bridgeBytes(message), Buffer.from('\n')])); }
-    catch { socket.destroy(); }
+  return new Promise((resolveReady, rejectReady) => {
+    const decoder = new NativeFrameDecoder(); let buffered = Buffer.alloc(0), ready = false, closed = false;
+    const finish = reason => {
+      if (closed) return;
+      closed = true; clearTimeout(timer);
+      input.off('data', fromChrome);
+      // The browser keeps stdin open while its native port exists. Closing only
+      // the socket leaves a live relay (and its waiting native wrapper) behind.
+      socket.destroy(); input.destroy(); output.destroy();
+      if (!ready) rejectReady(Object.assign(Error(reason), { code: reason }));
+      try { onClose(reason); } catch {}
+    };
+    const timer = setTimeout(() => finish('NATIVE_HANDSHAKE_TIMEOUT'), handshakeTimeoutMs);
+    const fromChrome = chunk => {
+      if (closed) return;
+      try { for (const message of decoder.push(chunk)) socket.write(Buffer.concat([bridgeBytes(message), Buffer.from('\n')])); }
+      catch { finish('NATIVE_INPUT_INVALID'); }
+    };
+    input.once('end', () => finish('NATIVE_INPUT_ENDED'));
+    input.once('close', () => finish('NATIVE_INPUT_CLOSED'));
+    input.on('error', () => finish('NATIVE_INPUT_ERROR'));
+    output.once('close', () => finish('NATIVE_OUTPUT_CLOSED'));
+    output.on('error', () => finish('NATIVE_OUTPUT_ERROR'));
+    socket.on('error', () => finish('NATIVE_BACKEND_ERROR'));
+    socket.once('end', () => finish('NATIVE_BACKEND_EOF'));
+    socket.once('close', () => finish('NATIVE_BACKEND_CLOSED'));
+    socket.once('connect', () => {
+      if (closed) return;
+      socket.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile: NATIVE_BRIDGE_PROFILE, extensionOrigin,
+        runtimeEpoch: entry.runtimeEpoch, token: entry.token })}\n`);
+    });
+    socket.on('data', chunk => {
+      if (closed) return;
+      buffered = Buffer.concat([buffered, Buffer.from(chunk)]);
+      if (buffered.length > MAX_MESSAGE_BYTES * 2) return finish('NATIVE_BACKEND_INVALID');
+      for (;;) {
+        const newline = buffered.indexOf(0x0a); if (newline < 0) break;
+        const line = buffered.subarray(0, newline); buffered = buffered.subarray(newline + 1);
+        try {
+          const message = parseBridgeBytes(line);
+          if (!ready) {
+            keys(message, ['kind', 'profile', 'runtimeEpoch']);
+            if (message.kind !== 'PAP_BRIDGE_READY' || message.profile !== NATIVE_BRIDGE_PROFILE
+                || message.runtimeEpoch !== entry.runtimeEpoch) return finish('NATIVE_HANDSHAKE_REJECTED');
+            ready = true; clearTimeout(timer); input.on('data', fromChrome); resolveReady(socket);
+          } else output.write(encodeNativeFrame(message));
+        } catch { finish('NATIVE_BACKEND_INVALID'); break; }
+      }
+    });
+    if (input.destroyed || input.readableEnded || output.destroyed) finish('NATIVE_STDIO_CLOSED');
   });
-  socket.on('data', chunk => {
-    buffered = Buffer.concat([buffered, Buffer.from(chunk)]);
-    if (buffered.length > MAX_MESSAGE_BYTES * 2) return socket.destroy();
-    for (;;) {
-      const newline = buffered.indexOf(0x0a); if (newline < 0) break;
-      const line = buffered.subarray(0, newline); buffered = buffered.subarray(newline + 1);
-      try { output.write(encodeNativeFrame(parseBridgeBytes(line))); }
-      catch { socket.destroy(); break; }
-    }
-  });
-  input.on('end', () => socket.end());
-  return socket;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  runNativeHost({ extensionOrigin: process.argv[2] }).catch(() => {
+  runNativeHost({ extensionOrigin: process.argv[2], onClose: code => process.stderr.write(`${code}\n`) }).catch(() => {
     process.stderr.write('NATIVE_BRIDGE_START_FAILED\n'); process.exitCode = 1;
+    process.stdin.destroy(); process.stdout.destroy();
   });
 }
 

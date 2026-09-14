@@ -95,6 +95,7 @@ export async function productFixture(directory, scenario, diagnostics, network) 
     output.on('data', chunk => {
       try {
         for (const command of decoder.push(chunk)) {
+          if (command.kind === 'PAP_READY') continue;
           invariant(command.kind === 'PAP_RELEASE'); providerAttempts++;
           invariant(Buffer.from(command.textBytes, 'base64').toString('utf8') === SYNTHETIC_CANARY);
           const state = runtime.session.runtime.snapshot(), attempt = state.attempts[command.attemptId];

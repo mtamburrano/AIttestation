@@ -330,8 +330,7 @@ export class ChatGPTProtectionSession {
   }
 
   status() {
-    let eligibility = this.#scope ? 'ELIGIBLE' : 'UNENROLLED';
-    if (this.#scope) try { this.#adapter.assertEligible(this.#scope); } catch { eligibility = 'REVOKED'; }
+    const eligibility = this.#scope ? this.#adapter.eligibility(this.#scope) : 'UNENROLLED';
     return { scope: this.#scope, eligibility, versions: [...this.#versions.values()].map(value => this.#public(value)) };
   }
   async drain() { await this.#tail; }

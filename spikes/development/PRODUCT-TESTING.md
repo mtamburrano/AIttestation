@@ -49,6 +49,7 @@ need scenarios alongside their implementations.
 npm run test:product -- --scenario bridge-timeout
 npm run test:product -- --scenario confirmation-unavailable
 npm run test:product -- --list
+node --test test/native-bridge-lifecycle.test.mjs
 ```
 
 | Scenario | Expected observed behavior |
@@ -59,6 +60,14 @@ npm run test:product -- --list
 | `bridge-timeout` | One attempt, unknown outcome, no automatic resend |
 | `bridge-response-mismatch` | Mismatched reply rejected; unknown outcome, no automatic resend |
 | `account-disconnected` | Account required; no sponsor broadcast or dispatch |
+
+The separate native lifecycle regression executes the actual extension worker
+against a synthetic Chrome API and real relay child processes. It holds browser
+stdin open during backend failure, exercises normal engine stop/start, and checks
+new-epoch pairing without replaying an interrupted release. It also covers bounded
+backoff, stale async callbacks and recoverable provider capability changes, with
+correlated content-free diagnostics. Every process, socket and encrypted vault
+belongs to that fresh test run; installed Chrome and macOS identity are not claimed.
 
 `PASS` means the expected scenario invariant held, including expected failures.
 Unexpected failures use fixed reason codes, preserve the bounded diagnostic report

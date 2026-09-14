@@ -72,7 +72,8 @@ The Manifest V3 extension has only `nativeMessaging` and the single
 Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
 that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
 access is disabled. The draft item is not yet a published or verified Web Store
-listing. Adapter profile version 2 rejects the older permission contract.
+listing. Adapter profile version 3 requires an acknowledged runtime epoch before
+dispatch and rejects older extension contracts.
 Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and
@@ -106,16 +107,34 @@ native-framing relay used behind the compiled
 [`provenance-browser-host`](native/macos-browser-host.swift). It exposes no vault,
 filesystem, clipboard, signer, or generic command API to the extension.
 
-Eligibility is revoked on edit-revision mismatch, destination/scope change, a
-second ChatGPT tab, browser/runtime restart, permission loss, protocol mismatch,
-unrecognized provider markup, nonempty provider composer, or attachment state.
+Native bridge profile version 3 acknowledges authentication with
+`PAP_BRIDGE_READY`; the relay allows eight seconds for connection and authentication.
+The controller then acknowledges the extension's hello with `PAP_READY`, bound to
+the same runtime epoch used by release commands. Both ends bound the hello wait.
+Backend EOF, socket errors, malformed frames and failed handshakes close the
+relay's socket and stdio, allowing its native wrapper to exit and Chrome to
+reconnect. Fixed `NATIVE_*` reason codes go to stderr without paths or error text.
+The worker retries after 1, 2, 4, 8, 16 and at most 30 seconds; only successful
+pairing resets the delay. Async observations and replies remain bound to their
+originating port. Reconnection never queues or replays a release.
+
+Eligibility is revoked on destination/scope change, browser/runtime restart,
+permission loss, protocol mismatch or transport loss. Edit-revision mismatches
+still reject stale versions. Temporary markup loss, an unavailable content script,
+a nonempty composer, attachments, tab inactivity or an additional ChatGPT tab
+produce `TEMPORARILY_UNAVAILABLE` while retaining the enrolled scope. They block
+admission and release until the same pinned destination is healthy again. Tab URL
+changes, tab removal or an observed different destination invalidate that scope;
+an unknown destination during failed surface inspection cannot establish a change.
+This adapter still admits only one tab; independent concurrent scopes require
+the engine's separate conversation contexts.
 Unknown and interrupted attempts are never resent automatically; an explicit retry
 creates a new attempt and consumes a new authorization.
 
 DOM/input changes trigger a fixed content-free surface notification, followed by
-the runtime's ordinary capability check. Unrecognized provider markup revokes
-enrollment; the provider cannot download new selectors or retain a protected state
-through an unsigned configuration update.
+the runtime's ordinary capability check. Recovering the same supported surface
+restores capability without automatically sending. The provider cannot download
+new selectors or authorize a release through an unsigned configuration update.
 
 ## macOS package boundary
 
@@ -185,6 +204,14 @@ observer against a fresh loopback TLS algod fixture, and checks the recorded pub
 TestNet archive, fast corroboration, conflict cases, and later State-Proof upgrade.
 Neither command opens a user Chrome profile, accesses a ChatGPT account, submits a
 transaction, or touches an operational evidence store.
+
+`node --test test/native-bridge-lifecycle.test.mjs` also runs the real relay in
+isolated child processes with Chrome's stdin held open. A synthetic Chrome API
+executes the actual extension worker across normal engine stop/start, including
+an interrupted dispatch, a new epoch, late replies, transient capability recovery
+and bounded reconnect backoff. It uses fresh encrypted stores and memory keys;
+no retained installation, browser profile or account is accessed. Native macOS
+ancestry and actual provider behavior remain separately labelled platform checks.
 
 The content-script fixture is deliberately selector-pinned. A release candidate
 still needs a bounded owner-run check through the installed manifest and actual
