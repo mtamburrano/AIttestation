@@ -49,6 +49,7 @@ need scenarios alongside their implementations.
 npm run test:product -- --scenario bridge-timeout
 npm run test:product -- --scenario confirmation-unavailable
 npm run test:product -- --scenario sealed-delayed-confirmation
+npm run test:product -- --scenario account-disconnected-cancel
 npm run test:product -- --list
 node --test test/native-bridge-lifecycle.test.mjs
 npm run test:chatgpt
@@ -63,6 +64,18 @@ npm run test:chatgpt
 | `bridge-timeout` | One attempt, unknown outcome, no automatic resend |
 | `bridge-response-mismatch` | Mismatched reply rejected; unknown outcome, no automatic resend |
 | `account-disconnected` | Account required; no sponsor broadcast or dispatch |
+| `account-disconnected-cancel` | Terminal cancellation; three selected signed records, portable local assertion, no anchor or release attempt after repeated requests |
+
+The cancellation scenario follows the authenticated API from disconnected-account
+freeze through cancellation, history, selective export and independent recipient
+verification. Diagnostics contain one correlated cancellation and subsequent
+rejections, with no confirmation or dispatch. Focused engine/recipient tests also
+cover identical text in different frozen versions, queued requests, restart,
+legacy unassociated records, recovery, missing bytes and mismatched signing keys.
+`npm run test:recipient-browser` checks the real product controls and recipient
+cancellation copy in a fresh headless Chrome profile against local fixtures,
+including cancellation initiated by another local view. It makes no live provider
+or TestNet requests and does not use the retained test installation.
 
 The separate native lifecycle regression executes the actual extension worker
 against a synthetic Chrome API and real relay child processes. It holds browser

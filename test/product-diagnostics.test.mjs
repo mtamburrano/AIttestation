@@ -143,7 +143,14 @@ test('documented runner exercises real components with correlated bounded report
       assert.ok(dispatch && bridge && bridge.bridgeId && dispatch.dispatchId === bridge.dispatchId);
       assert.ok(dispatch.sequence < bridge.sequence);
     }
-    if (scenario.scenario !== 'account-disconnected') {
+    if (scenario.scenario === 'account-disconnected-cancel') {
+      assert.equal(scenario.providerAttempts, 0); assert.equal(scenario.sponsorBroadcasts, 0);
+      assert.equal(correlated.filter(event => event.code === 'OPERATION_CANCELLED').length, 1);
+      assert.ok(correlated.some(event => event.code === 'ACCOUNT_REQUIRED'));
+      assert.ok(correlated.filter(event => event.code === 'OPERATION_REJECTED').length >= 5);
+      assert.ok(!correlated.some(event => event.dispatchId || event.confirmationId || event.code === 'SPONSOR_SUBMITTED'));
+    }
+    if (!scenario.scenario.startsWith('account-disconnected')) {
       const confirmation = correlated.filter(event => event.confirmationId);
       assert.ok(confirmation.length >= 2 && new Set(confirmation.map(event => event.confirmationId)).size === 1);
       if (scenario.scenario === 'sealed-delayed-confirmation') {

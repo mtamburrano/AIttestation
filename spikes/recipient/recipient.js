@@ -23,7 +23,15 @@ $('verify').onclick = async () => {
         const row = document.createElement('tr'), name = document.createElement('th'), value = document.createElement('td');
         name.textContent = label; value.textContent = record[key]; row.append(name, value); table.append(row);
       }
-      section.append(table); $('results').append(section);
+      section.append(table);
+      for (const assertion of record.localAssertions.filter(value => value.kind === 'release-cancelled')) {
+        const note = document.createElement('p');
+        note.textContent = `${assertion.association === 'UNASSOCIATED'
+          ? 'Unassociated cancellation: no verified link to a selected frozen prompt.'
+          : 'The client asserts that it cancelled this frozen prompt.'} ${assertion.claim}`;
+        section.append(note);
+      }
+      $('results').append(section);
     }
     $('report').textContent = JSON.stringify(report, null, 2);
     $('status').textContent = `Local verification finished. ${report.records.length} selected records; trust ${report.trust.toLowerCase().replaceAll('_', ' ')}.`;

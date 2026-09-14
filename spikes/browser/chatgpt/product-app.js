@@ -14,12 +14,11 @@ async function api(path, data = {}) {
 function controls() {
   $('enroll').disabled = busy || scope !== null || detected === null;
   $('freeze').disabled = busy || capabilityUnavailable || scope === null;
-  $('request').disabled = busy || selected === null;
-  $('cancel').disabled = busy || selected === null || selected.anchor !== 'PENDING' || selected.attempt !== null;
-  $('confirm').disabled = busy || capabilityUnavailable || selected === null || selected.anchor !== 'PENDING' || !/^[A-Z2-7]{52}$/.test($('transaction').value);
-  $('release').disabled = busy || capabilityUnavailable || selected === null || selected.mode !== 'Sealed'
-    || selected.state !== 'SEALED_NOT_SENT' || selected.editRevision !== editRevision;
-  $('managed-anchor').disabled = busy || capabilityUnavailable || selected === null || selected.anchor !== 'PENDING' || selected.state === 'CANCELLED';
+  $('request').disabled = busy || !selected?.actions?.anchorRequest;
+  $('cancel').disabled = busy || !selected?.actions?.cancel;
+  $('confirm').disabled = busy || capabilityUnavailable || !selected?.actions?.anchor || !/^[A-Z2-7]{52}$/.test($('transaction').value);
+  $('release').disabled = busy || capabilityUnavailable || !selected?.actions?.release || selected.editRevision !== editRevision;
+  $('managed-anchor').disabled = busy || capabilityUnavailable || !selected?.actions?.anchor;
   for (const id of ['connect-account', 'account-status', 'disconnect-account']) $(id).disabled = busy;
   for (const id of ['refresh-history', 'preview-export', 'redact']) $(id).disabled = busy;
   $('save-export').disabled = busy || previewId === null;
@@ -97,7 +96,8 @@ action('download-update', async () => {
 });
 
 async function receipt(value) {
-  $('receipt').textContent = `${value.mode}\nState: ${value.state}\nAnchor: ${value.anchor}\nTimestamp: ${value.timestamp}\nVersion: ${value.id}\nEdit revision: ${value.editRevision}${value.managed?.message ? `\n${value.managed.message}` : ''}`;
+  const message = value.message ?? value.managed?.message;
+  $('receipt').textContent = `${value.mode}\nState: ${value.state}\nAnchor: ${value.anchor}\nTimestamp: ${value.timestamp}\nVersion: ${value.id}\nEdit revision: ${value.editRevision}${message ? `\n${message}` : ''}`;
   await loadReceipts();
 }
 
@@ -143,7 +143,17 @@ function action(id, operation) {
 }
 
 async function refresh() {
+  const selectedId = selected?.id;
   const state = await api('/status');
+  if (selected && selected.id === selectedId) {
+    const current = state.protection.versions.find(version => version.id === selected.id);
+    const becameCancelled = current?.state === 'CANCELLED' && selected.state !== 'CANCELLED';
+    // A delayed status reply cannot reopen controls after this view observed cancellation.
+    if (selected.state !== 'CANCELLED') selected = current ?? null;
+    if (becameCancelled) {
+      await receipt(selected); $('anchor').textContent = ''; $('status').textContent = selected.message;
+    }
+  }
   capabilityUnavailable = state.protection.eligibility === 'TEMPORARILY_UNAVAILABLE';
   const tabs = state.browser?.tabs ?? [];
   detected = tabs.length === 1 && tabs[0].active && tabs[0].surfaceSupported
@@ -172,7 +182,7 @@ $('draft').addEventListener('input', () => {
   editRevision++;
   if (scope !== null) api('/draft', { text: $('draft').value, attachments: [], scope, editRevision })
     .catch(error => { $('status').textContent = error.message; });
-  if (selected && selected.editRevision !== editRevision) $('status').textContent = 'Draft changed. The frozen version is stale; freeze a new version.';
+  if (selected && selected.state !== 'CANCELLED' && selected.editRevision !== editRevision) $('status').textContent = 'Draft changed. The frozen version is stale; freeze a new version.';
   controls();
 });
 $('transaction').addEventListener('input', controls);
@@ -241,7 +251,7 @@ action('release', async () => {
 
 action('cancel', async () => {
   selected = await api('/cancel', { id: selected.id, scope }); await receipt(selected);
-  $('status').textContent = 'Pending version cancelled. No downgrade or release occurred.';
+  $('anchor').textContent = ''; $('status').textContent = selected.message;
 });
 
 action('close', async () => {

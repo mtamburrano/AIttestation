@@ -235,6 +235,63 @@ test('pending Sealed confirmation supports explicit evidence retry or cancellati
   }
 });
 
+test('disconnected cancellation is terminal, selective and cannot trigger queued or repeated work', async t => {
+  for (const mode of ['Sealed', 'Always Protect']) await t.test(mode, async t => {
+    let requests = 0, observations = 0;
+    const managed = new ManagedAnchoringClient({ origin: 'https://unused-synthetic.invalid', keyStore: new MemoryKeyStore(),
+      request: async () => { requests++; throw Error('Unexpected external request'); } });
+    const { session, commands, scope } = await fixture(t, { managed,
+      collectFast: async () => { observations++; throw Error('Unexpected confirmation'); } });
+    const text = 'same exact e\u0301\r\n☕ text', version = await session.freeze({ text, mode, scope, editRevision: 1 });
+    const other = await session.freeze({ text, mode, scope, editRevision: 1 });
+    const request = { id: version.id, scope, currentText: text, editRevision: 1 };
+    const pending = await session.anchorManaged(request);
+    assert.equal(pending.managed.state, 'ACCOUNT_REQUIRED'); assert.equal(pending.actions.cancel, true);
+    const original = session.vault.inspect().records;
+    const results = await Promise.allSettled([
+      session.cancel(request), session.cancel(request), session.anchorManaged(request),
+      session.confirmFast({ ...request, transactionId: 'A'.repeat(52) }), session.release(request),
+      session.retry({ ...request, explicit: true, priorAttempt: 'never-attempted' }),
+    ]);
+    assert.equal(results[0].status, 'fulfilled');
+    assert.ok(results.slice(1).every(result => result.status === 'rejected' && /cancelled/.test(result.reason.message)));
+    const cancelled = results[0].value;
+    assert.equal(cancelled.state, 'CANCELLED'); assert.ok(Object.values(cancelled.actions).every(value => value === false));
+    assert.equal(cancelled.managed.message, undefined); assert.match(cancelled.message, /cancelled/);
+    const records = session.vault.inspect().records, durable = session.runtime.snapshot();
+    for (const record of original) assert.deepEqual(records.find(r => r.recordDigest === record.recordDigest), record);
+    assert.equal(durable.seals[version.id].cancelled, true); assert.equal(durable.seals[version.id].authorization, null);
+    assert.deepEqual(durable.attempts, {});
+    for (const operation of [
+      () => session.cancel(request), () => session.anchorManaged({ ...request, currentText: 'stale UI', editRevision: 99 }),
+      () => session.confirmFast({ ...request, currentText: 'stale UI', editRevision: 99, transactionId: 'A'.repeat(52) }),
+      () => session.release({ ...request, currentText: 'stale UI', editRevision: 99 }),
+      () => session.retry({ ...request, currentText: 'stale UI', editRevision: 99, explicit: true }),
+      () => session.upgradeConsensus({ id: version.id }),
+    ]) await assert.rejects(Promise.resolve().then(operation), /cancelled/);
+    assert.throws(() => session.anchorRequest(version.id), /cancelled/);
+    assert.doesNotThrow(() => session.updateDraft({ text, scope, editRevision: 1 }), 'rejected cancelled requests do not mutate the active draft');
+    assert.deepEqual(session.runtime.snapshot(), durable); assert.deepEqual(session.vault.inspect().records, records);
+    assert.equal(requests, 0); assert.equal(observations, 0); assert.equal(commands.length, 0);
+    const groups = session.receipts.list(), group = groups.find(g => g.id === version.descriptorId);
+    assert.equal(group.recordIds.length, 3); assert.equal(groups.find(g => g.id === other.descriptorId).recordIds.length, 2);
+    const preview = session.receipts.prepare({ ids: [group.id] });
+    const bundle = parseCanonical(session.receipts.export(preview.previewId));
+    assert.deepEqual(bundle.disclosure.records.map(r => r.manifest.eventId).sort(), [...group.recordIds].sort());
+    const cancellation = bundle.disclosure.records.find(r => !original.some(o => o.recordDigest === r.recordDigest));
+    const assertion = parseCanonical(session.vault.read(cancellation.manifest.evidence[0].objectDigest));
+    assert.equal(assertion.kind, 'release-cancelled'); assert.equal(assertion.version, version.id);
+    assert.equal(assertion.recordDigest, version.recordDigest);
+    const report = verifyPortable(session.receipts.export(preview.previewId));
+    const target = report.records.find(r => r.recordDigest === version.recordDigest);
+    assert.equal(target.localAssertions.length, 1); assert.equal(target.localAssertions[0].assurance, 'CLIENT_ASSERTION_ONLY');
+    assert.equal(target.localAssertions[0].providerNonEgress, 'NOT_PROVEN');
+    assert.equal(target.releaseControl, 'UNKNOWN'); assert.equal(target.anchor, 'INDETERMINATE');
+    assert.equal(target.timestamp, 'LOCAL_CLAIMED'); assert.equal(target.keyAttribution, 'SIGNATURE_VALID');
+    assert.deepEqual(report.publicProofs, { objects: 0, references: 0, verifications: 0 });
+  });
+});
+
 test('stale edit, scope/tab ambiguity, restart, permission, adapter and provider changes all fail closed', async t => {
   const cases = {
     'stale edit revision': async ({ session, scope, version }) => session.release({ id: version.id, scope, currentText: 'locked', editRevision: 2 }),

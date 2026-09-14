@@ -7,6 +7,7 @@ export const PORTABLE_PROFILE = 'pap-portable-evidence/1';
 export const RECIPIENT_LIMITS = Object.freeze({ wire: 16 * 2 ** 20, total: 12 * 2 ** 20,
   records: 128, objects: 128, proofs: 8, anchors: 128, proof: 8 * 2 ** 20, trust: 64 * 1024 });
 export const CLAIMS = 'Selected records only. Signatures authenticate key assertions, not authorship, event truth, provider receipt, complete history or latest state. Checkpoint authenticity is a separate recipient trust assumption.';
+export const CANCELLATION_CLAIM = 'Cancellation is a signed local client assertion. It does not independently establish provider non-egress, authorship, event truth or anchor assurance.';
 
 // Older exports were ordinary JSON. Preserve them while rejecting duplicate names
 // and excessive nesting before JSON.parse, including escaped duplicate names.
@@ -86,6 +87,15 @@ export function signedObservation(record, bytes, checked) {
     const value = parseCanonical(bytes, LIMITS.manifest);
     return value.profile === 'pap-chatgpt-observation/1' ? value : null;
   } catch { return null; }
+}
+
+export function linksCancellation(record, observation, targetRecord, targetObservation) {
+  return observation?.kind === 'release-cancelled'
+    && typeof observation.version === 'string' && /^[a-zA-Z0-9-]{1,80}$/.test(observation.version)
+    && ['Sealed', 'Always Protect'].includes(observation.mode)
+    && targetObservation?.kind === 'frozen-text-version' && targetObservation.mode === observation.mode
+    && observation.recordDigest === targetRecord?.recordDigest
+    && record.manifest.signingPublicKey === targetRecord?.manifest.signingPublicKey;
 }
 
 export function verifyPortable(input, trust = null, { algorandVerifierPath } = {}) {
@@ -173,10 +183,20 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
       result.timestamp = timestamps.size === 1 ? [...timestamps][0] : 'INDETERMINATE';
     }
   }
+  const observations = new Map(disclosure.records.map((record, index) => [record.recordDigest,
+    signedObservation(record, objects.get(record.manifest?.evidence?.[0]?.objectDigest), checked.records[index])]));
+  const sourceRecords = new Map(disclosure.records.map(record => [record.recordDigest, record]));
   disclosure.records.forEach((record, index) => {
-    const observation = signedObservation(record, objects.get(record.manifest?.evidence?.[0]?.objectDigest), checked.records[index]);
+    const observation = observations.get(record.recordDigest);
     const target = byDigest.get(observation?.recordDigest);
-    if (!target || record.manifest.signingPublicKey !== disclosure.records.find(r => r.recordDigest === target.recordDigest)?.manifest?.signingPublicKey) return;
+    if (observation?.kind === 'release-cancelled') {
+      const linked = linksCancellation(record, observation, sourceRecords.get(observation.recordDigest), observations.get(observation.recordDigest));
+      (linked ? target : records[index]).localAssertions.push({ kind: 'release-cancelled', state: 'CANCELLED',
+        association: linked ? 'SIGNED_RECORD_DIGEST' : 'UNASSOCIATED', assurance: 'CLIENT_ASSERTION_ONLY',
+        providerNonEgress: 'NOT_PROVEN', claim: CANCELLATION_CLAIM });
+      return;
+    }
+    if (!target || record.manifest.signingPublicKey !== sourceRecords.get(target.recordDigest)?.manifest?.signingPublicKey) return;
     if (observation.kind === 'fast-confirmation' || observation.kind === 'consensus-assurance-upgrade') {
       target.localAssertions.push({ kind: observation.kind, anchor: observation.report?.anchor ?? 'UNKNOWN',
         timestamp: observation.report?.timestamp ?? 'UNKNOWN', assurance: 'CLIENT_ASSERTION_ONLY' });
@@ -193,6 +213,9 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
       target.releaseControl = new Set(releases.map(a => a.releaseControl)).size === 1 ? releaseControl : 'UNKNOWN';
     }
   });
+  for (const record of records) {
+    if (record.localAssertions.some(assertion => assertion.kind === 'release-cancelled')) record.releaseControl = 'UNKNOWN';
+  }
   return { profile: 'pap-recipient-report/1', scope: 'SELECTIVE', records,
     publicProofs: { objects: proofs.size, references: references.size, verifications: cache.size },
     claims: CLAIMS, trust: trust === null ? 'NOT_SELECTED' : 'SEPARATELY_SELECTED' };

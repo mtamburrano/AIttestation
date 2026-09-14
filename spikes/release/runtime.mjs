@@ -172,7 +172,7 @@ export class ReleaseRuntime {
     return this.#serial(async () => {
       const { id, scope, expectedDigest, currentPayload, protocol = this.#protocol } = request;
       const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
-      if (seal.mode !== 'Continuous' || protocol !== this.#protocol || expectedDigest !== seal.digest
+      if (seal.mode !== 'Continuous' || seal.cancelled || protocol !== this.#protocol || expectedDigest !== seal.digest
           || digest(this.#validate(currentPayload)) !== seal.digest || seal.priorAttempt) {
         throw Error('Stale, duplicate, mode, or protocol mismatch');
       }

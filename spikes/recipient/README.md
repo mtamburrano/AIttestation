@@ -13,6 +13,24 @@ bytes or inherit the original's anchor/release assurance. The relationship is a
 key assertion; the verifier does not claim the replacement is a proven substring
 or transformation of withheld content.
 
+New `release-cancelled` observations retain their frozen version ID and record
+digest. Receipt history and selective exports include that original signed record
+only with the matching signed frozen observation, mode and signing key. The
+recipient displays it as `CLIENT_ASSERTION_ONLY`, with provider non-egress
+`NOT_PROVEN` and release control `UNKNOWN`. It adds no authorship, event-truth,
+timestamp or anchor assurance, and cannot establish the latest state or recall a
+transaction that was already submitted. Missing observation bytes produce no
+cancellation assertion; no evidence is inferred from omitted records.
+
+Legacy cancellations without a reliable digest link remain immutable. History
+lists each as **Unassociated cancellation**, selectable on its own for export.
+Unknown targets, incompatible modes and mismatched signing keys cannot attach a
+cancellation to a prompt. Neither timestamps, record order, matching text nor a
+version ID alone supply the missing association. Recipient verification reports
+unassociated cancellations on their own signed records, and a selected prompt
+without its cancellation makes no cancellation claim. Recovery preserves these
+records and classifications; no migration rewrites or re-signs historical evidence.
+
 ## Recipient use
 
 The consumer build includes a separate **Attestamp Verifier.app** in its

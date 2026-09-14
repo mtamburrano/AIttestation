@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { canonical, parseCanonical, objectDigest, pack, keys, LIMITS } from '../vault/format.mjs';
 import { publicProofDigest, verifyRecord } from '../vault/records.mjs';
-import { PORTABLE_PROFILE, RECIPIENT_LIMITS, verifyPortable, signedObservation, CLAIMS } from './portable.mjs';
+import { PORTABLE_PROFILE, RECIPIENT_LIMITS, verifyPortable, signedObservation, linksCancellation, CLAIMS } from './portable.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
@@ -35,11 +35,21 @@ export class LocalReceipts {
       const text = records.find(r => r.manifest.eventId === value.textRecord
         && r.manifest.evidence[0].objectDigest === value.textObject);
       if (!text) throw Error('Receipt text reference missing');
-      const related = observations.filter(entry => entry.value.recordDigest === record.recordDigest);
+      const related = observations.filter(entry => entry.value.recordDigest === record.recordDigest
+        && (entry.value.kind !== 'release-cancelled' || linksCancellation(entry.record, entry.value, record, value)));
       return { id: record.manifest.eventId, title: `${value.mode} · ${record.manifest.localClaimedTime}`,
         textRecordId: text.manifest.eventId, recordIds: [text.manifest.eventId, record.manifest.eventId,
           ...related.map(entry => entry.record.manifest.eventId)], related,
         recordDigest: record.recordDigest, derivative: false };
+    });
+    const grouped = new Set(groups.flatMap(group => group.recordIds));
+    // Legacy version IDs cannot be inferred from prompt bytes, time, mode or record order.
+    // Keep the original signed observation selectable without inventing a prompt link.
+    for (const { record } of observations.filter(entry => entry.value.kind === 'release-cancelled'
+        && !grouped.has(entry.record.manifest.eventId))) groups.push({
+      id: record.manifest.eventId, title: `Unassociated cancellation · ${record.manifest.localClaimedTime}`,
+      textRecordId: record.manifest.eventId, recordIds: [record.manifest.eventId], related: [],
+      recordDigest: record.recordDigest, derivative: false, unassociatedCancellation: true,
     });
     for (const record of records.filter(r => r.manifest.type === 'derivative')) groups.push({
       id: record.manifest.eventId, title: `Redacted derivative · ${record.manifest.localClaimedTime}`,
@@ -83,6 +93,7 @@ export class LocalReceipts {
         const record = disclosure.records.find(record => record.manifest.eventId === group.textRecordId);
         const content = includeEvidence ? this.#vault.read(record.manifest.evidence[0].objectDigest) : null;
         return { receiptId: group.id, derivative: group.derivative,
+          ...(group.unassociatedCancellation ? { unassociatedCancellation: true } : {}),
           preview: content?.subarray(0, 4096).toString('utf8') ?? null, truncated: content ? content.length > 4096 : false };
       }),
       evidenceObjects: disclosure.objects.length, publicProofObjects: proofs.size, anchorReferences: anchors.length,
@@ -99,6 +110,7 @@ export class LocalReceipts {
     if (typeof text !== 'string' || !text.isWellFormed() || Buffer.byteLength(text) > LIMITS.field) throw Error('Redacted text limit');
     const { groups, records } = this.#history(), group = groups.find(group => group.id === id);
     if (!group) throw Error('Select one source receipt');
+    if (group.unassociatedCancellation) throw Error('Unassociated cancellation has no source prompt to redact');
     const source = records.find(record => record.manifest.eventId === group.textRecordId);
     const record = this.#vault.capture(Buffer.from(text, 'utf8'), { type: 'derivative', relationships: [{
       type: 'redacted_from', recordDigest: source.recordDigest, objectDigest: source.manifest.evidence[0].objectDigest,

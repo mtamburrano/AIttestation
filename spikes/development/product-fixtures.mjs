@@ -11,9 +11,10 @@ import { ManagedSponsorship } from '../managed/service.mjs';
 import { ManagedAnchoringClient } from '../managed/client.mjs';
 import { MANAGED_NETWORK } from '../managed/protocol.mjs';
 import { MemoryKeyStore } from '../vault/key-lifecycle.mjs';
+import { verifyPortable } from '../recipient/portable.mjs';
 
 export const PRODUCT_SCENARIOS = Object.freeze(['sealed-success', 'sealed-delayed-confirmation', 'confirmation-unavailable',
-  'confirmation-rejected', 'bridge-timeout', 'bridge-response-mismatch', 'account-disconnected']);
+  'confirmation-rejected', 'bridge-timeout', 'bridge-response-mismatch', 'account-disconnected', 'account-disconnected-cancel']);
 export const SYNTHETIC_CANARY = 'SYNTHETIC_PRIVATE_PROMPT_e\u0301☕_https://private.invalid/c/secret?token=SECRET_CANARY_<div>PRIVATE_DOM</div>';
 const transactionId = 'A'.repeat(52), sponsorOrigin = 'https://synthetic-sponsor.invalid';
 const trust = Object.freeze({ profile: FAST_CONFIRM_PROFILE, network: MANAGED_NETWORK, genesis: 'synthetic-genesis',
@@ -43,6 +44,7 @@ async function assertEncrypted(directory) {
 export async function productFixture(directory, scenario, diagnostics, network) {
   invariant(PRODUCT_SCENARIOS.includes(scenario), 'UNKNOWN_SCENARIO');
   invariant(typeof network?.allowRuntime === 'function', 'FIXTURE_NETWORK_FORBIDDEN');
+  const disconnected = scenario.startsWith('account-disconnected');
   const keyStore = new MemoryKeyStore(), input = new PassThrough(), output = new PassThrough();
   let runtime, socket, payload, providerAttempts = 0, broadcasts = 0, preparations = 0, sponsorRequests = 0, failure, revokeNetwork;
   const observations = { a: 0, b: 0 };
@@ -134,17 +136,43 @@ export async function productFixture(directory, scenario, diagnostics, network) 
     invariant(frozen.status === 200 && frozen.body.state === 'PENDING_FAST_CONFIRMATION' && providerAttempts === 0);
     const version = frozen.body, request = { id: version.id, scope, currentText: SYNTHETIC_CANARY, editRevision: 1 };
     invariant(runtime.session.vault.inspect().objects.some(object => runtime.session.vault.read(object.digest).equals(Buffer.from(SYNTHETIC_CANARY))));
-    if (scenario !== 'account-disconnected') invariant((await api('/managed/connect', { accessCode: account.accessCode })).status === 200);
+    if (!disconnected) invariant((await api('/managed/connect', { accessCode: account.accessCode })).status === 200);
     const confirmation = await api('/managed/anchor', request);
     let observed;
-    if (scenario.startsWith('confirmation-') || scenario === 'account-disconnected') {
-      invariant(confirmation.status === (scenario === 'account-disconnected' ? 200 : 400));
+    if (scenario.startsWith('confirmation-') || disconnected) {
+      invariant(confirmation.status === (disconnected ? 200 : 400));
       invariant(runtime.session.status().versions[0].state === 'PENDING_FAST_CONFIRMATION');
       invariant(runtime.session.runtime.snapshot().seals[version.id].authorization === null);
       invariant(providerAttempts === 0);
       invariant((await api('/release', request)).status === 400);
-      observed = scenario === 'account-disconnected' ? 'ACCOUNT_REQUIRED'
+      observed = disconnected ? 'ACCOUNT_REQUIRED'
         : scenario === 'confirmation-unavailable' ? 'CONFIRMATION_PENDING' : 'CONFIRMATION_REJECTED';
+      if (scenario === 'account-disconnected-cancel') {
+        const before = (await api('/receipts')).body;
+        invariant(before.length === 1 && before[0].recordIds.length === 2);
+        const cancelled = await api('/cancel', request);
+        invariant(cancelled.status === 200 && cancelled.body.state === 'CANCELLED');
+        invariant(Object.values(cancelled.body.actions).every(value => value === false) && !cancelled.body.managed.message);
+        const recordCount = runtime.session.vault.inspect().records.length;
+        for (const path of ['/cancel', '/managed/anchor', '/confirm', '/release', '/anchor-request']) {
+          invariant((await api(path, { ...request, transactionId })).status === 400);
+        }
+        invariant(runtime.session.vault.inspect().records.length === recordCount);
+        invariant((await api('/status')).body.protection.versions[0].state === 'CANCELLED');
+        const history = (await api('/receipts')).body;
+        invariant(history.length === 1 && history[0].recordIds.length === 3);
+        const preview = await api('/receipts/preview', { ids: [history[0].id] });
+        const exported = await api('/receipts/export', { previewId: preview.body.previewId });
+        invariant(preview.status === 200 && exported.status === 200);
+        const report = verifyPortable(Buffer.from(exported.body.content));
+        const target = report.records.find(record => record.recordDigest === version.recordDigest);
+        invariant(report.records.length === 3 && report.publicProofs.objects === 0);
+        invariant(target.localAssertions.length === 1 && target.localAssertions[0].kind === 'release-cancelled'
+          && target.localAssertions[0].assurance === 'CLIENT_ASSERTION_ONLY' && target.localAssertions[0].providerNonEgress === 'NOT_PROVEN');
+        invariant(target.releaseControl === 'UNKNOWN' && target.anchor === 'INDETERMINATE' && target.timestamp === 'LOCAL_CLAIMED');
+        invariant(observations.a === 0 && observations.b === 0 && providerAttempts === 0);
+        observed = 'OPERATION_CANCELLED';
+      }
     } else {
       invariant(confirmation.status === 200 && confirmation.body.state === 'SEALED_NOT_SENT');
       const released = await api('/release', request);
@@ -152,7 +180,7 @@ export async function productFixture(directory, scenario, diagnostics, network) 
       invariant(released.status === 200 && released.body.state === observed && providerAttempts === 1);
       invariant((await api('/release', request)).status === 400 && providerAttempts === 1);
     }
-    invariant(broadcasts === (scenario === 'account-disconnected' ? 0 : 1));
+    invariant(broadcasts === (disconnected ? 0 : 1));
     invariant(preparations === broadcasts && sponsorRequests === broadcasts);
     invariant(service.account(account.accessCode).remaining === initialRemaining - broadcasts);
     if (scenario === 'sealed-delayed-confirmation') invariant(observations.a === 2 && observations.b === 3);

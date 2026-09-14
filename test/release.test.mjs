@@ -42,6 +42,26 @@ test('edits, changed attachments, scope, confirmation digest and protocol fail c
   assert.equal(sent.length, 0);
   await assert.rejects(runtime.seal({ ...payload, attachments: [{ reference: 'file:///secret' }] }, 'tab-one'));
 });
+test('cancellation remains terminal after restart for every mode, including an unused confirmation grant', async t => {
+  for (const mode of ['Sealed', 'Always Protect', 'Continuous']) await t.test(mode, async t => {
+    const dir = await temporary(t); let dispatches = 0;
+    const dispatch = async () => { dispatches++; return 'SUBMISSION_OBSERVED'; };
+    let runtime = await new ReleaseRuntime(dir, dispatch).init();
+    const seal = await runtime.seal(payload, 'cancel-scope', mode);
+    const request = { id: seal.id, scope: seal.scope, expectedDigest: seal.digest, currentPayload: payload };
+    if (mode !== 'Continuous') await runtime.confirm(seal.id, seal.scope, seal.digest);
+    await runtime.cancel(seal.id, seal.scope, seal.digest);
+    runtime = await new ReleaseRuntime(dir, dispatch).init();
+    const baseline = runtime.snapshot();
+    assert.equal(baseline.seals[seal.id].cancelled, true); assert.equal(baseline.seals[seal.id].authorization, null);
+    await assert.rejects(runtime.cancel(seal.id, seal.scope, seal.digest));
+    await assert.rejects(runtime.confirm(seal.id, seal.scope, seal.digest));
+    await assert.rejects(runtime.release(request));
+    await assert.rejects(runtime.releaseContinuous(request));
+    await assert.rejects(runtime.retry(seal.id, seal.scope, 'missing', true));
+    assert.deepEqual(runtime.snapshot(), baseline); assert.equal(dispatches, 0);
+  });
+});
 for (const crashAt of ['before-consumption', 'after-consumption', 'after-egress']) {
   test(`restart after ${crashAt}; no automatic resend and explicit retry consumes new authorization`, async t => {
     const dir = await temporary(t), sent = [];

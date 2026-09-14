@@ -111,6 +111,7 @@ try {
   const scope = 'isolated-managed-browser-scope';
   protection = await new ChatGPTProtectionSession(await mkdtemp(join(root, 'managed-client-')), {
     enroll: () => ({ scope, destination: 'new-chat' }), assertEligible: value => assert.equal(value, scope),
+    eligibility: () => 'ELIGIBLE',
     dispatch: async attempt => { released.push(attempt.payload.text); return 'SUBMISSION_OBSERVED'; },
   }, { vaultKey: randomBytes(32), managed: client, fastTrust: { profile: FAST_CONFIRM_PROFILE },
     collectFast: async () => ({ synthetic: true }), verifyFast: () => ({ authorized: true,
@@ -151,8 +152,52 @@ try {
   assert.equal(released.length, 2);
   await click('disconnect-account'); await wait("document.querySelector('#account').textContent.includes('access code')");
   assert.equal(keyStore.accounts().length, 0);
+  await draft('cancelled disconnected prompt', 'Sealed'); await click('freeze');
+  await wait("!document.querySelector('#cancel').disabled && document.querySelector('#status').textContent.includes('Retry or cancel')");
+  const beforeCancel = { submissions: submitted.length, releases: released.length };
+  await click('request'); await wait("document.querySelector('#anchor').textContent.includes('recordDigest')");
+  await evaluate("document.querySelector('#transaction').value='A'.repeat(52);document.querySelector('#transaction').dispatchEvent(new Event('input'))");
+  await wait("!document.querySelector('#confirm').disabled");
+  await evaluate(`globalThis.originalFetch = fetch; globalThis.heldStatusReady = false; globalThis.heldStatusCompleted = false;
+    globalThis.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (args[0] === '/status' && !heldStatusReady) {
+        const snapshot = await response.json(); heldStatusReady = true;
+        await new Promise(resolve => { globalThis.resumeStatus = resolve; });
+        heldStatusCompleted = true; return { ok: true, json: async () => snapshot };
+      }
+      return response;
+    };`);
+  await wait('globalThis.heldStatusReady');
+  await click('cancel'); await wait("!document.querySelector('#freeze').disabled && document.querySelector('#status').textContent.startsWith('Version cancelled')");
+  await evaluate('globalThis.resumeStatus();globalThis.fetch=globalThis.originalFetch');
+  await wait('globalThis.heldStatusCompleted');
+  for (const control of ['cancel', 'managed-anchor', 'request', 'confirm', 'release']) {
+    assert.equal(await evaluate(`document.getElementById(${JSON.stringify(control)}).disabled`), true, control);
+  }
+  assert.equal(await evaluate("document.querySelector('#anchor').textContent"), '');
+  assert.doesNotMatch(await evaluate("document.querySelector('#receipt').textContent"), /Connect your anchoring account|Retry or cancel/);
+  const cancelled = protection.status().versions.at(-1);
+  const cancelPreview = protection.receipts.prepare({ ids: [cancelled.descriptorId] });
+  const cancellationExport = join(root, 'cancelled-evidence.json');
+  await writeFile(cancellationExport, protection.receipts.export(cancelPreview.previewId));
+  assert.equal(cancelPreview.records.length, 3);
+
+  await draft('cancelled by another local view', 'Sealed'); await click('freeze');
+  await wait("!document.querySelector('#cancel').disabled && document.querySelector('#status').textContent.includes('Retry or cancel')");
+  await protection.cancel({ id: protection.status().versions.at(-1).id, scope });
+  await click('refresh'); await wait("document.querySelector('#status').textContent.startsWith('Version cancelled') && document.querySelector('#cancel').disabled");
+  assert.deepEqual({ submissions: submitted.length, releases: released.length }, beforeCancel);
+  await call('Page.navigate', { url: recipient.url }); await wait("document.querySelector('#bundle') !== null");
+  await setFile('#bundle', cancellationExport); await click('verify');
+  await wait("document.querySelector('#status').textContent.startsWith('Local verification finished')");
+  const cancellationReport = JSON.parse(await evaluate("document.querySelector('#report').textContent"));
+  const cancelledTarget = cancellationReport.records.find(record => record.recordDigest === cancelled.recordDigest);
+  assert.equal(cancelledTarget.releaseControl, 'UNKNOWN'); assert.equal(cancelledTarget.anchor, 'INDETERMINATE');
+  assert.match(await evaluate("document.querySelector('#results').textContent"), /signed local client assertion/);
+  assert.match(await evaluate("document.querySelector('#results').textContent"), /does not independently establish provider non-egress/);
   assert.ok(requests.every(url => url.startsWith('http://127.0.0.1:') || url.startsWith('blob:http://127.0.0.1:')), `Unexpected remote requests: ${JSON.stringify(requests)}`);
-  console.log('PASS: isolated receipt/recipient flow and wallet-free managed browser flow; quota, unpaid and outage fallbacks preserve strict release. No remote requests.');
+  console.log('PASS: isolated receipt/recipient and managed browser flows, terminal cancellation, shared-view refresh and signed cancellation display. No remote requests.');
 } finally {
   socket?.close();
   if (chrome && chrome.exitCode === null) { const stopped = new Promise(resolve => chrome.once('exit', resolve)); chrome.kill('SIGKILL'); await stopped; }

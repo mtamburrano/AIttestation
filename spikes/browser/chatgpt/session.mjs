@@ -66,9 +66,21 @@ export class ChatGPTProtectionSession {
   }
   #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value }), { type: 'observation' }); }
   #version(id) { const value = this.#versions.get(id); if (!value) throw Error('Unknown version'); return value; }
+  #activeVersion(id) {
+    const version = this.#version(id);
+    if (version.state === 'CANCELLED') throw Error('Version was cancelled');
+    return version;
+  }
   #public(value) {
     const { payload: _payload, ...visible } = value;
-    return structuredClone(visible);
+    const active = value.state !== 'CANCELLED';
+    return structuredClone({ ...visible, actions: {
+      anchorRequest: active,
+      cancel: active && value.mode !== 'Continuous' && value.attempt === null,
+      anchor: active && value.anchor === 'PENDING',
+      release: active && value.mode === 'Sealed' && value.state === 'SEALED_NOT_SENT',
+      retry: active && value.mode !== 'Continuous' && ['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].includes(value.state),
+    } });
   }
 
   enroll({ tabId, destination }) {
@@ -97,11 +109,12 @@ export class ChatGPTProtectionSession {
   }
 
   anchorRequest(id) {
-    const version = this.#version(id), batch = inclusion([unb64(version.recordDigest, 32)], 0);
+    const version = this.#activeVersion(id), batch = inclusion([unb64(version.recordDigest, 32)], 0);
     return { recordDigest: version.recordDigest, batch, payload: b64(anchorPayload(unb64(batch.root, 32))) };
   }
 
   async #releaseVersion(version, payload, continuous = false) {
+    this.#activeVersion(version.id);
     this.#adapter.assertEligible(version.scope);
     const request = { id: version.id, scope: version.scope, expectedDigest: version.digest,
       currentPayload: payload, protocol: CHATGPT_RELEASE_PROTOCOL };
@@ -181,14 +194,16 @@ export class ChatGPTProtectionSession {
   confirmFast(request) { return this.#confirm(request, false); }
 
   #confirm({ id, transactionId, scope, currentText, attachments = [], editRevision }, managed) {
+    if (this.#versions.get(id)?.state === 'CANCELLED') {
+      return this.#serial(() => this.#activeVersion(id), { operationId: id });
+    }
     if (this.#version(id).mode !== 'Continuous') {
       this.updateDraft({ text: currentText, attachments, scope, editRevision });
     }
     return this.#serial(async () => {
       const started = performance.now();
-      const version = this.#version(id);
+      const version = this.#activeVersion(id);
       if (scope !== version.scope || scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
-      if (version.state === 'CANCELLED') throw Error('Version was cancelled');
       if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
       if (version.mode !== 'Continuous') {
         this.#assertCurrentDraft(version, validateProtectedTextPayload({ text: currentText, attachments }));
@@ -277,9 +292,12 @@ export class ChatGPTProtectionSession {
   }
 
   release({ id, scope, currentText, attachments = [], editRevision }) {
+    if (this.#versions.get(id)?.state === 'CANCELLED') {
+      return this.#serial(() => this.#activeVersion(id), { operationId: id });
+    }
     this.updateDraft({ text: currentText, attachments, scope, editRevision });
     return this.#serial(async () => {
-      const version = this.#version(id);
+      const version = this.#activeVersion(id);
       if (version.mode === 'Continuous') throw Error('Continuous releases during freeze and cannot be resent automatically');
       if (scope !== version.scope || scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
       const current = validateProtectedTextPayload({ text: currentText, attachments });
@@ -289,9 +307,12 @@ export class ChatGPTProtectionSession {
   }
 
   retry({ id, scope, currentText, attachments = [], editRevision, priorAttempt, explicit }) {
+    if (this.#versions.get(id)?.state === 'CANCELLED') {
+      return this.#serial(() => this.#activeVersion(id), { operationId: id });
+    }
     this.updateDraft({ text: currentText, attachments, scope, editRevision });
     return this.#serial(async () => {
-      const version = this.#version(id), current = validateProtectedTextPayload({ text: currentText, attachments });
+      const version = this.#activeVersion(id), current = validateProtectedTextPayload({ text: currentText, attachments });
       if (version.mode === 'Continuous' || scope !== version.scope || scope !== this.#scope
           || editRevision !== version.editRevision || digest(current) !== version.digest) throw Error('Stale or unsupported retry');
       this.#adapter.assertEligible(scope);
@@ -302,10 +323,12 @@ export class ChatGPTProtectionSession {
 
   cancel({ id, scope }) {
     return this.#serial(async () => {
-      const version = this.#version(id);
+      const version = this.#activeVersion(id);
       if (scope !== version.scope || version.attempt) throw Error('Stale cancellation');
       await this.runtime.cancel(id, scope, version.digest); version.state = 'CANCELLED';
-      this.#event({ kind: 'release-cancelled', version: id, mode: version.mode });
+      if (version.managed) delete version.managed.message;
+      version.message = 'Version cancelled. This version cannot be released. Its local evidence remains available.';
+      this.#event({ kind: 'release-cancelled', version: id, mode: version.mode, recordDigest: version.recordDigest });
       emit(this.#diagnostics, 'OPERATION_CANCELLED', { operationId: id });
       return this.#public(version);
     }, { operationId: id });
@@ -313,7 +336,7 @@ export class ChatGPTProtectionSession {
 
   upgradeConsensus({ id, envelope, trust }) {
     return this.#serial(async () => {
-      const version = this.#version(id);
+      const version = this.#activeVersion(id);
       if (version.anchor === 'CONSENSUS_VERIFIED') throw Error('Duplicate consensus upgrade');
       if (version.mode !== 'Continuous'
           && !version.assuranceHistory.some(value => value.profile === FAST_CONFIRM_PROFILE)) {

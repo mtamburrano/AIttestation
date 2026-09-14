@@ -72,6 +72,18 @@ account recovery, privacy boundaries and operator configuration. The default
 `managed-config.json` has a null origin; configure it before signing a connected
 build. The service database and sponsor executable are never bundled in the app.
 
+Cancellation is terminal for the frozen version. The session API returns `actions`
+for each version; views combine these state-based capabilities with current scope,
+draft and connection checks. Cancelling clears every action and stale account or
+retry guidance. The engine rejects further cancellation, anchor requests,
+confirmation, release, retries and consensus upgrades for that version. Starting
+a new version remains possible. Previously obtained anchor evidence stays intact;
+cancellation cannot recall an already submitted transaction or prove non-egress.
+The durable release state retains cancellation across restart without restoring
+authorization. The signed `release-cancelled` observation links its version ID to
+the frozen record digest for receipt grouping and selective export. See the
+[recipient contract](../../recipient/README.md) for its assertion limits and legacy handling.
+
 ## Least-authority Chrome adapter
 
 The consumer-facing Manifest V3 package is named **Attestamp for ChatGPT** and

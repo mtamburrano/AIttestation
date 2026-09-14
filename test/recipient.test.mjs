@@ -114,6 +114,58 @@ test('ordinary captured JSON cannot create release authority and each assurance 
   assert.equal(conflict.report.records.find(r => r.recordDigest === missing.recordDigest).releaseControl, 'UNKNOWN');
 });
 
+test('cancellation links require a signed frozen target and preserve unassociated legacy records through recovery', t => {
+  const { root, vault, groups, receipts, event, opened } = fixture(t);
+  const linked = event({ kind: 'release-cancelled', mode: 'Sealed', version: 'cancelled-version', recordDigest: groups[0].record.recordDigest });
+  const orphans = [
+    event({ kind: 'release-cancelled', mode: 'Sealed', version: 'legacy-version-with-no-digest' }),
+    event({ kind: 'release-cancelled', mode: 'Sealed', version: 'missing-target', recordDigest: randomBytes(32).toString('base64url') }),
+    event({ kind: 'release-cancelled', mode: 'Always Protect', version: 'mode-mismatch', recordDigest: groups[0].record.recordDigest }),
+    event({ kind: 'release-cancelled', mode: 'Sealed', version: 'text-is-not-frozen', recordDigest: groups[0].input.recordDigest }),
+  ];
+  const original = vault.inspect().records, history = receipts.list();
+  assert.ok(history.find(g => g.id === groups[0].record.manifest.eventId).recordIds.includes(linked.manifest.eventId));
+  for (const orphan of orphans) {
+    const group = history.find(g => g.id === orphan.manifest.eventId);
+    assert.equal(group.unassociatedCancellation, true); assert.deepEqual(group.recordIds, [orphan.manifest.eventId]);
+    assert.throws(() => receipts.redact({ id: group.id, text: 'invented source' }), /no source prompt/);
+    const preview = receipts.prepare({ ids: [group.id] }), bundle = parseCanonical(receipts.export(preview.previewId));
+    assert.deepEqual(bundle.disclosure.records, [orphan]);
+    assert.equal(preview.texts[0].unassociatedCancellation, true);
+    const assertion = preview.report.records[0].localAssertions[0];
+    assert.equal(assertion.association, 'UNASSOCIATED'); assert.equal(assertion.providerNonEgress, 'NOT_PROVEN');
+  }
+  const preview = receipts.prepare({ ids: [groups[0].record.manifest.eventId] });
+  const target = preview.report.records.find(r => r.recordDigest === groups[0].record.recordDigest);
+  assert.equal(target.localAssertions.filter(a => a.kind === 'release-cancelled').length, 1);
+  assert.equal(target.releaseControl, 'UNKNOWN', 'a selected release and cancellation do not establish latest state');
+  const metadata = receipts.prepare({ ids: [groups[0].record.manifest.eventId], includeEvidence: false });
+  assert.ok(metadata.report.records.every(r => r.localAssertions.length === 0));
+  assert.deepEqual(vault.inspect().records, original, 'reading or exporting never rewrites historical signed records');
+  const backup = vault.exportRecovery();
+  const restored = restoreRecovery(backup.package, backup.recoveryKey, join(root, 'cancel-recovery'), randomBytes(32)); opened.push(restored);
+  const recovered = new LocalReceipts(restored);
+  assert.deepEqual(recovered.list(), history);
+  const recoveredPreview = recovered.prepare({ ids: [groups[0].record.manifest.eventId, orphans[0].manifest.eventId] });
+  assert.equal(recoveredPreview.report.records.flatMap(r => r.localAssertions).filter(a => a.kind === 'release-cancelled').length, 2);
+});
+
+test('cancellation cannot target another signing key or pass when its signed evidence is changed', t => {
+  const { vault, groups, event } = fixture(t), other = fixture(t);
+  const cancellation = other.event({ kind: 'release-cancelled', mode: 'Sealed', version: 'foreign-signer',
+    recordDigest: groups[0].record.recordDigest });
+  const selected = parseCanonical(vault.exportDisclosure([groups[0].record.manifest.eventId]));
+  const foreign = parseCanonical(other.vault.exportDisclosure([cancellation.manifest.eventId]));
+  const bundle = portableBundle({ ...selected, records: [...selected.records, ...foreign.records], objects: [...selected.objects, ...foreign.objects] });
+  const report = verifyPortable(wire(bundle));
+  assert.deepEqual(report.records[0].localAssertions, []);
+  assert.equal(report.records[1].localAssertions[0].association, 'UNASSOCIATED');
+  const local = event({ kind: 'release-cancelled', mode: 'Sealed', version: 'local-version', recordDigest: groups[0].record.recordDigest });
+  const tampered = portableBundle(parseCanonical(vault.exportDisclosure([groups[0].record.manifest.eventId, local.manifest.eventId])));
+  tampered.disclosure.objects.find(o => o.digest === local.manifest.evidence[0].objectDigest).bytes = disclosureObject(Buffer.from('changed')).bytes;
+  assert.throws(() => verifyPortable(wire(tampered)), /Object mismatch/);
+});
+
 test('hostile bundles reject duplicate names, paths, extra objects, tampering, and parser/resource excess', t => {
   const { receipts, groups } = fixture(t);
   const preview = receipts.prepare({ ids: [groups[0].record.manifest.eventId] }), baseline = parseCanonical(receipts.export(preview.previewId));
