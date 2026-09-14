@@ -198,6 +198,11 @@ The verifier checks these independent relationships:
   that origin, and the upload ZIP contains the same extension bytes with only
   the manifest's development key removed. Store packaging omits resource forks,
   extended attributes, quarantine and ACL metadata. Archive inspection occurs in memory.
+  The panel-enabled extension uses exactly `nativeMessaging` and `sidePanel`,
+  only the ChatGPT host permission, packaged panel resources, and a fixed CSP.
+  External messaging, web-accessible panel resources and extra permissions reject.
+  The [panel contract](../browser/chatgpt/SEALED.md) documents its admission boundary
+  and local rendering/IPC checks; Store publication remains separate.
 - Extra channel files, stale staging, unsupported paths, links, hard links,
   special files, duplicate JSON/plist fields and ambiguous ZIP entries reject.
   The shared package-content gate rejects known private files and forbidden

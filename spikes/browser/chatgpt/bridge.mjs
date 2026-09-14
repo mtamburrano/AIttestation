@@ -1,13 +1,15 @@
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
 import { emit } from '../../release/diagnostics.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
+import { CHATGPT_PANEL_PROFILE, panelRequest, panelError } from './panel.mjs';
 
 export class ChromeBridgeController {
   #diagnostics;
   #adapter; #write; #pending = new Map(); #timeoutMs; #connected = true; #localBrowser; #localPlatform; #paired = false;
   #engine; #policy = null; #observations = 0;
+  #panelRequests = 0; #openDashboard;
 
-  constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform, diagnostics = null, engine = null } = {}) {
+  constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform, diagnostics = null, engine = null, openDashboard = null } = {}) {
     if (!adapter || typeof write !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20_000) {
       throw Error('Invalid Chrome bridge controller');
     }
@@ -18,6 +20,7 @@ export class ChromeBridgeController {
     this.#localBrowser = structuredClone(localBrowser); this.#localPlatform = structuredClone(localPlatform);
     this.#diagnostics = diagnostics;
     this.#engine = engine;
+    this.#openDashboard = openDashboard;
   }
 
   receive(message) {
@@ -30,12 +33,24 @@ export class ChromeBridgeController {
       const { runtimeEpoch } = this.#adapter.pair(hello);
       this.#adapter.synchronize(hello);
       this.#paired = true;
-      this.#write({ kind: 'PAP_READY', runtimeEpoch, browserSessionId: message.browserSessionId });
+      this.#write({ kind: 'PAP_READY', runtimeEpoch, browserSessionId: message.browserSessionId,
+        ...(this.#adapter.capabilities.privilegedPanel ? { panelProfile: CHATGPT_PANEL_PROFILE } : {}) });
       this.publishCapturePolicy();
       emit(this.#diagnostics, 'BRIDGE_HELLO');
       return;
     }
     if (!this.#paired) throw Error('Chrome bridge is not paired');
+    if (message.kind === 'PAP_PANEL_REQUEST') {
+      if (!this.#engine || !this.#adapter.capabilities.privilegedPanel || this.#panelRequests >= 8) throw Error('Panel unavailable');
+      this.#panelRequests++;
+      panelRequest(message, this.#engine, this.#openDashboard).then(result => {
+        if (this.#connected) this.#write({ kind: 'PAP_PANEL_RESULT', profile: CHATGPT_PANEL_PROFILE, requestId: message.requestId, ...result });
+      }).catch(error => {
+        if (this.#connected) this.#write({ kind: 'PAP_PANEL_RESULT', profile: CHATGPT_PANEL_PROFILE,
+          requestId: message.requestId, error: panelError(error) });
+      }).catch(() => {}).finally(() => { this.#panelRequests--; });
+      return;
+    }
     if (message.kind === 'PAP_CAPTURE') {
       if (!this.#engine || this.#observations >= 32 || Object.keys(message).sort().join(',') !== 'kind,observation,requestId'
           || !/^[a-f0-9-]{36}$/.test(message.requestId ?? '')) throw Error('Invalid capture delivery');

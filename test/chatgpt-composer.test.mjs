@@ -80,7 +80,7 @@ test('editor detection separates drafts and attachments from absent, disabled an
     for (const sendState of ['absent', 'enabled', 'disabled', 'ambiguous']) await t.test(`${textarea}/${draft.length}/${sendState}`, async () => {
       const page = pageFixture({ textarea, draft, sendState });
       assert.deepEqual(await page.inspect(), { destination: 'conversation:test-conversation',
-        surfaceSupported: true, composerEmpty: !draft, attachmentsPresent: false });
+        surfaceSupported: sendState !== 'ambiguous', composerEmpty: !draft, attachmentsPresent: false });
       if (draft || sendState === 'ambiguous') {
         const result = await page.send(pageCommand());
         assert.equal(result.exposure, 'NONE'); assert.equal(page.text, draft);

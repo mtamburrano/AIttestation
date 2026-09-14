@@ -21,6 +21,7 @@ export async function startPackagedChatGPT({
   collectFast, verifyFast, verifyArchive, attestPeer, managed = undefined, openBrowser = false,
   installation = undefined,
   diagnostics, controllerTimeoutMs,
+  openDashboard,
 } = {}) {
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
   let installedRelease = null, releaseCandidate = null;
@@ -66,6 +67,10 @@ export async function startPackagedChatGPT({
   try {
     bridge = await startChromeProtectionRuntime(supportDirectory, {
       fastTrust: trust, vault, managed,
+      openDashboard: () => {
+        if (!composer) throw Error('Dashboard unavailable');
+        return (openDashboard ?? openLocal)(composer.url);
+      },
       ...(collectFast === undefined ? {} : { collectFast }),
       ...(verifyFast === undefined ? {} : { verifyFast }),
       ...(verifyArchive === undefined ? {} : { verifyArchive }),

@@ -85,12 +85,12 @@ export class ResidentEngine {
     if (!target) reject('SCOPE_REVOKED');
     return target;
   }
-  state() {
+  state({ surfaceDetails = false } = {}) {
     const liveVersions = new Map(this.#session.status().versions.map(value => [value.id, value]));
     const durable = this.#session.runtime.snapshot();
     return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, adapterProfile: CHATGPT_ADAPTER_PROFILE,
       revision: this.#state.revision, available: !this.#closed && !this.#failed, preferences: this.#state.preferences,
-      capabilities: this.#adapter.capabilities, targets: this.#adapter.targets(),
+      capabilities: this.#adapter.capabilities, targets: this.#adapter.targets({ surfaceDetails }),
       scopes: this.#adapter.scopes().map(target => {
         const requestedMode = this.#requested(target.scope);
         const effectiveMode = this.#state.preferences.paused || requestedMode === 'Off' ? 'Off'
@@ -302,6 +302,8 @@ export class ResidentEngine {
         if (this.#state.preferences.paused || this.#requested(command.scope) === 'Off') reject('PROTECTION_PAUSED');
         this.#adapter.assertEligible(command.scope);
         if (this.#operationIds.has(command.operationId)) reject('OPERATION_ALREADY_EXISTS');
+        if (command.kind === 'PROTECT_AND_SEND' && this.#state.operations.some(value => value.scope === command.scope
+            && !value.observation && !value.settled && !value.stopped && !value.restored)) reject('OPERATION_IN_PROGRESS');
         if (this.#state.operations.length >= 512) {
           const index = this.#state.operations.findIndex(value => value.stopped || value.restored
             || ['SUBMISSION_OBSERVED', 'OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS', 'CANCELLED'].includes(value.state));

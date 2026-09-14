@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
 import { emit } from '../../release/diagnostics.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
+import { CHATGPT_PANEL_PROFILE } from './panel.mjs';
 
 export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/5';
 export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
@@ -69,6 +70,7 @@ export class ChatGPTChromeAdapter {
       observation: this.#connection?.captureProfile === CHATGPT_CAPTURE_PROFILE,
       captureProfile: CHATGPT_CAPTURE_PROFILE,
       strictAdmission: true,
+      privilegedPanel: this.#connection?.panelProfile === CHATGPT_PANEL_PROFILE,
     });
   }
 
@@ -85,7 +87,9 @@ export class ChatGPTChromeAdapter {
         || !macOSSupported(connection.platform.version)
         || connection.permissionState !== 'granted'
         || !Array.isArray(connection.permissions)
-        || connection.permissions.slice().sort().join(',') !== requiredPermissions.slice().sort().join(',')
+        || connection.panelProfile !== undefined && connection.panelProfile !== CHATGPT_PANEL_PROFILE
+        || connection.permissions.slice().sort().join(',') !== [...requiredPermissions,
+          ...(connection.panelProfile === CHATGPT_PANEL_PROFILE ? ['sidePanel'] : [])].sort().join(',')
         || connection.hostPermission !== `${CHATGPT_ORIGIN}/*`
         || typeof connection.browserSessionId !== 'string' || connection.browserSessionId.length < 16
         || connection.browserSessionId.length > 128;
@@ -150,12 +154,15 @@ export class ChatGPTChromeAdapter {
 
   onChange(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
   #changed() { for (const listener of this.#listeners) listener(); }
-  targets() {
+  targets({ surfaceDetails = false } = {}) {
     if (!this.#connection) return [];
     return this.#tabs.filter(tab => supportedURL(tab.url)).map(tab => ({
       adapterId: CHATGPT_ADAPTER_ID, adapterEpoch: this.#connection?.browserSessionId,
       tabId: tab.id, windowId: tab.windowId, tabEpoch: tab.tabEpoch, destination: tab.destination,
       eligible: [...this.#eligibleTabs(), ...this.#observableTabs()].some(value => value.id === tab.id),
+      ...(surfaceDetails ? { sealedEligible: this.#eligibleTabs().some(value => value.id === tab.id),
+        active: tab.active, composerEmpty: tab.composerEmpty, attachmentsPresent: tab.attachmentsPresent,
+        surfaceSupported: tab.surfaceSupported } : {}),
     }));
   }
   scopes() {

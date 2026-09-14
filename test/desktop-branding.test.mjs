@@ -66,19 +66,22 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     'spikes/recipient/local.mjs': ['pap-chatgpt-observation/2'],
     'spikes/browser/chatgpt/engine.mjs': ['pap-resident-command/1', 'pap-resident-event/1'],
     'spikes/browser/chatgpt/engine-store.mjs': ['pap-resident-state/1', 'pap-resident-state/1'],
+    'spikes/browser/chatgpt/panel.mjs': ['pap-chatgpt-panel/1'],
+    'spikes/browser/chatgpt/extension/sidepanel-model.js': ['PAP_PANEL_REQUEST', 'pap-chatgpt-panel/1', 'pap-resident-command/1'],
     'spikes/browser/chatgpt/product-app.js': ['pap-resident-command/1'],
     'spikes/anchor/algorand/cmd/fastobserve/main.go': ['pap-algod-observer-request/1', 'pap-algod-observer-retry/1'],
     'spikes/anchor/algorand/fast-confirm.mjs': ['PAP_ALGORAND_FAST_CONFIRM_V1', 'pap-algod-observer-request/1', 'pap-algod-observer-retry/1'],
     'spikes/browser/chatgpt/adapter.mjs': ['medilhopfckldjgdnchfkpmfmfnkadca', 'pap-chatgpt-chrome/5', 'pap-chatgpt-release/2'],
     'spikes/browser/chatgpt/bridge-runtime.mjs': ['PAP_BRIDGE_AUTH', 'PAP_BRIDGE_READY', 'PAP_HELLO', 'PAP_HELLO', 'PAP_STATE', 'pap-native-peer-validation/1'],
     'spikes/browser/chatgpt/bridge.mjs': ['PAP_CAPTURE', 'PAP_CAPTURE_POLICY', 'PAP_CAPTURE_RESULT', 'PAP_CAPTURE_RESULT',
-      'PAP_CHECK_RELEASE', 'PAP_HELLO', 'PAP_READY', 'PAP_RELEASE', 'PAP_RELEASE_CHECKED', 'PAP_STATE'],
+      'PAP_CHECK_RELEASE', 'PAP_HELLO', 'PAP_PANEL_REQUEST', 'PAP_PANEL_RESULT', 'PAP_PANEL_RESULT',
+      'PAP_READY', 'PAP_RELEASE', 'PAP_RELEASE_CHECKED', 'PAP_STATE'],
     'spikes/browser/chatgpt/extension/content-script.js': ['PAP_CAPTURE', 'PAP_CAPTURE_POLICY', 'PAP_CAPTURE_POLICY', 'PAP_CAPTURE_STATUS',
       'PAP_CHECK_RELEASE', 'PAP_INSPECT', 'PAP_RELEASE', 'PAP_SURFACE_CHANGED', 'pap-chatgpt-capture/1'],
     'spikes/browser/chatgpt/extension/service-worker.js': ['PAP_CAPTURE', 'PAP_CAPTURE', 'PAP_CAPTURE_POLICY', 'PAP_CAPTURE_POLICY',
       'PAP_CAPTURE_RESULT', 'PAP_CAPTURE_STATUS', 'PAP_CAPTURE_STATUS', 'PAP_CHECK_RELEASE', 'PAP_CHECK_RELEASE', 'PAP_HELLO', 'PAP_INSPECT',
-      'PAP_READY', 'PAP_RELEASE', 'PAP_RELEASE', 'PAP_RELEASE_CHECKED',
-      'PAP_STATE', 'PAP_SURFACE_CHANGED', 'ai.provenance.consumer', 'pap-chatgpt-capture/1', 'pap-chatgpt-chrome/5', 'pap-chatgpt-release/2'],
+      'PAP_PANEL_REQUEST', 'PAP_PANEL_REQUEST', 'PAP_PANEL_RESULT', 'PAP_READY', 'PAP_RELEASE', 'PAP_RELEASE', 'PAP_RELEASE_CHECKED',
+      'PAP_STATE', 'PAP_SURFACE_CHANGED', 'ai.provenance.consumer', 'pap-chatgpt-capture/1', 'pap-chatgpt-chrome/5', 'pap-chatgpt-panel/1', 'pap-chatgpt-release/2'],
     'spikes/browser/chatgpt/native-host.mjs': ['PAP_BRIDGE_AUTH', 'PAP_BRIDGE_READY', 'pap-chrome-native-bridge/3'],
   };
   assert.deepEqual(sources, expectedSources, 'Technical identities require an explicit protocol migration');
@@ -88,7 +91,13 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
       for (const key of ['name', 'short_name', 'description']) delete actual[key];
     }
     const migrated = structuredClone(expected);
-    if (file === 'spikes/browser/chatgpt/extension/manifest.json') migrated.version = '1.5.0';
+    if (file === 'spikes/browser/chatgpt/extension/manifest.json') {
+      migrated.version = '1.6.0';
+      migrated.permissions = ['nativeMessaging', 'sidePanel'];
+      migrated.action = { default_title: 'Open Attestamp' };
+      migrated.side_panel = { default_path: 'sidepanel.html' };
+      migrated.content_security_policy = { extension_pages: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" };
+    }
     if (file === 'spikes/distribution/fixtures/compatibility.json') {
       for (const fixture of migrated.cases) if (fixture.adapterProfile === 'pap-chatgpt-chrome/2') fixture.adapterProfile = 'pap-chatgpt-chrome/5';
       migrated.providerContract = 'chatgpt-web-text/2026-09-14';

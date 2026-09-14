@@ -3,6 +3,7 @@ const RELEASE_PROTOCOL = 'pap-chatgpt-release/2';
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/1';
+const PANEL_PROFILE = 'pap-chatgpt-panel/1';
 let policyRevision = 0;
 const documents = new Map();
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
@@ -15,11 +16,11 @@ function tabEpoch(id) {
 }
 const current = context => Boolean(context && connection === context && !context.closed);
 
-async function bounded(promise) {
+async function bounded(promise, timeout = 2_000) {
   let timer;
   try {
     return await Promise.race([promise, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Error('ADAPTER_REQUEST_TIMEOUT')), 2_000);
+      timer = setTimeout(() => reject(Error('ADAPTER_REQUEST_TIMEOUT')), timeout);
     })]);
   } finally { clearTimeout(timer); }
 }
@@ -42,7 +43,7 @@ async function inspectTabs() {
 }
 
 async function permissionState() {
-  const granted = await bounded(chrome.permissions.contains({ permissions: ['nativeMessaging'], origins: ['https://chatgpt.com/*'] }));
+  const granted = await bounded(chrome.permissions.contains({ permissions: ['nativeMessaging', 'sidePanel'], origins: ['https://chatgpt.com/*'] }));
   return granted ? 'granted' : 'revoked';
 }
 
@@ -51,13 +52,14 @@ async function stateMessage(kind) {
   return {
     kind, extensionId: chrome.runtime.id, adapterProfile: ADAPTER_PROFILE,
     captureProfile: CAPTURE_PROFILE,
+    panelProfile: PANEL_PROFILE,
     releaseProtocol: RELEASE_PROTOCOL, pageContract: PAGE_CONTRACT, browserSessionId,
     // JavaScript brand strings cannot establish the installed product/channel.
     // The signed native host replaces this fail-closed value with locally
     // verified Chrome Stable identity before adapter pairing.
     browser: { product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 },
     platform: { product: 'UNVERIFIED', arch: 'UNVERIFIED', version: '' },
-    permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*',
+    permissions: ['nativeMessaging', 'sidePanel'], hostPermission: 'https://chatgpt.com/*',
     permissionState: permissions, tabs,
   };
 }
@@ -168,6 +170,8 @@ function retire(context) {
   context.closed = true; clearTimeout(context.handshakeTimer); connection = undefined;
   for (const pending of context.captures.values()) pending.resolve({ state: 'RECORDING_UNAVAILABLE' });
   context.captures.clear(); broadcastCapturePolicy(context, true);
+  for (const pending of context.panels.values()) pending({ error: 'PANEL_DISCONNECTED' });
+  context.panels.clear();
   for (const release of context.releases.values()) release.check?.resolve(false);
   try { context.port.disconnect(); } catch {}
   scheduleReconnect();
@@ -205,7 +209,7 @@ function connect() {
   catch { scheduleReconnect(); return; }
   const context = { port, closed: false, ready: false, epoch: null, revision: 0, dirty: false,
     activeReleases: 0, publishing: false, urgent: false, attempts: new Set(), releases: new Map(), authorityRevision: 0,
-    policies: new Map(), states: new Map(), captures: new Map() };
+    policies: new Map(), states: new Map(), captures: new Map(), panels: new Map(), panelReady: false };
   connection = context;
   context.handshakeTimer = setTimeout(() => retire(context), 10_000);
   port.onMessage.addListener(message => {
@@ -214,6 +218,7 @@ function connect() {
       if (context.ready || message.browserSessionId !== browserSessionId
           || typeof message.runtimeEpoch !== 'string' || !message.runtimeEpoch.length) return retire(context);
       context.ready = true; context.epoch = message.runtimeEpoch;
+      context.panelReady = message.panelProfile === PANEL_PROFILE;
       clearTimeout(context.handshakeTimer); reconnectDelay = 1000; publishState(); return;
     }
     if (context.ready && message?.kind === 'PAP_RELEASE_CHECKED') {
@@ -230,6 +235,10 @@ function connect() {
     }
     if (context.ready && message?.kind === 'PAP_CAPTURE_RESULT') {
       context.captures.get(message.requestId)?.resolve(message.result); return;
+    }
+    if (context.ready && message?.kind === 'PAP_PANEL_RESULT') {
+      if (message.profile !== PANEL_PROFILE) return retire(context);
+      context.panels.get(message.requestId)?.(message); return;
     }
     if (!context.ready || message?.kind !== 'PAP_RELEASE') return retire(context);
     context.activeReleases++;
@@ -248,6 +257,9 @@ function connect() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.kind === 'PAP_PANEL_REQUEST') {
+    panelMessage(message, sender).then(respond).catch(() => respond({ error: 'PANEL_REQUEST_UNCONFIRMED' })); return true;
+  }
   if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message?.kind)) {
     captureMessage(message, sender).then(respond).catch(() => respond({ state: 'RECORDING_UNAVAILABLE' })); return true;
   }
@@ -263,6 +275,51 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     publishState();
   } catch {}
 });
+
+async function panelMessage(message, sender) {
+  const origin = `chrome-extension://${chrome.runtime.id}`, url = `${origin}/sidepanel.html`;
+  // Sender metadata belongs to Chrome, never to the submitted message. Checking
+  // the live context also rejects this HTML opened as a regular tab or iframe.
+  if (sender.id !== chrome.runtime.id || sender.tab || sender.origin !== origin || sender.url !== url
+      || sender.documentLifecycle !== 'active' || typeof sender.documentId !== 'string'
+      || !/^[a-f0-9-]{36}$/.test(sender.documentId) || message.profile !== PANEL_PROFILE
+      || !['STATE', 'COMMAND', 'OPEN_DASHBOARD'].includes(message.action)
+      || Object.keys(message).sort().join(',') !== ['kind', 'profile', 'action',
+        ...(message.action === 'COMMAND' ? ['command'] : [])].sort().join(',')) return { error: 'UNTRUSTED_PANEL' };
+  const context = connection;
+  if (!current(context) || !context.ready || !context.panelReady || context.panels.size >= 8) return { error: 'PANEL_UNAVAILABLE' };
+  const contexts = await bounded(chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'], documentIds: [sender.documentId],
+    documentUrls: [url], documentOrigins: [origin], incognito: false }));
+  if (contexts.length !== 1 || contexts[0].contextType !== 'SIDE_PANEL' || contexts[0].documentId !== sender.documentId
+      || contexts[0].documentUrl !== url || contexts[0].documentOrigin !== origin || contexts[0].incognito !== false
+      || !current(context) || context.panels.size >= 8 || await permissionState() !== 'granted') return { error: 'UNTRUSTED_PANEL' };
+  let command;
+  if (message.action === 'COMMAND') {
+    if (!['ENROLL_SCOPE', 'SET_PAUSE', 'SET_CONVERSATION_MODE', 'PROTECT_AND_SEND', 'CANCEL_OPERATION'].includes(message.command?.kind)) {
+      return { error: 'PANEL_REQUEST_REJECTED' };
+    }
+    command = { ...message.command };
+    if (command.kind === 'PROTECT_AND_SEND') {
+      if (typeof command.text !== 'string' || command.text.length > 256 * 1024 || !command.text.isWellFormed()
+          || new TextEncoder().encode(command.text).length > 256 * 1024 || Object.hasOwn(command, 'textBytes')) {
+        return { error: 'PANEL_REQUEST_REJECTED' };
+      }
+      command.textBytes = btoa(Array.from(new TextEncoder().encode(command.text), byte => String.fromCharCode(byte)).join(''));
+      delete command.text;
+    }
+    if (JSON.stringify(command).length > 360_000) return { error: 'PANEL_REQUEST_REJECTED' };
+  }
+  if (!current(context) || context.panels.size >= 8) return { error: 'PANEL_DISCONNECTED' };
+  const requestId = crypto.randomUUID();
+  const result = new Promise(resolve => context.panels.set(requestId, resolve));
+  try {
+    post(context, { kind: 'PAP_PANEL_REQUEST', profile: PANEL_PROFILE, requestId, action: message.action,
+      ...(command ? { command } : {}) });
+    return await bounded(result, 10_000);
+  } finally { context.panels.delete(requestId); }
+}
+
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 chrome.permissions.onRemoved.addListener(() => publishState(true));
 chrome.tabs.onActivated.addListener(() => publishState());
 chrome.tabs.onCreated.addListener(() => publishState());

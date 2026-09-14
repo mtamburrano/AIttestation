@@ -201,7 +201,12 @@ test('Chrome Web Store upload strips only the development key and includes valid
   assert.equal(typeof sourceManifest.key, 'string');
   assert.equal(uploadManifest.key, undefined);
   assert.deepEqual(uploadManifest.icons, sourceManifest.icons);
-  assert.deepEqual(uploadManifest.permissions, ['nativeMessaging']);
+  assert.deepEqual(uploadManifest.permissions, ['nativeMessaging', 'sidePanel']);
+  for (const file of ['sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel.css']) {
+    const uploaded = spawnSync('/usr/bin/unzip', ['-p', archive, file]);
+    assert.equal(uploaded.status, 0);
+    assert.deepEqual(uploaded.stdout, await readFile(join(import.meta.dirname, '../spikes/browser/chatgpt/extension', file)));
+  }
   assert.deepEqual(uploadManifest.host_permissions, ['https://chatgpt.com/*']);
   for (const icon of Object.values(sourceManifest.icons)) {
     assert.match(listing.stdout, new RegExp(`(?:^|\\n)${icon.replaceAll('.', '\\.')}(?:\\n|$)`));

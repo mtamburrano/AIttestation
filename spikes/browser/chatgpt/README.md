@@ -3,9 +3,10 @@
 This directory implements the first narrow browser contract: Apple-silicon macOS
 15.7 or later, Chrome Stable (fixture baseline 153), and `https://chatgpt.com`.
 Continuous observes explicit normal Send actions in consented ChatGPT conversations.
-Sealed text originates in the trusted local composer; its extension receives bytes
-only after the runtime records a release attempt and consumes the exact version's
-authorization. Attachments are unsupported. See [normal-send capture](CONTINUOUS.md)
+Sealed text originates in the privileged extension side panel; its content script
+receives bytes only after the runtime records a release attempt and consumes the
+exact version's authorization. Attachments are unsupported. See [panel Sealed](SEALED.md)
+for the one-action workflow and [normal-send capture](CONTINUOUS.md)
 for its supported inputs, gaps and retrospective assertion contract.
 
 The [resident engine contract](ENGINE.md) defines independent conversation scopes,
@@ -28,8 +29,9 @@ text cannot reuse a stale authorization.
   retains the historical Continuous dispatch path for compatibility and regressions.
 - Sealed persists exact bytes and fast-confirmation evidence, consumes one durable
   authorization, and only then calls the browser adapter.
-- Always Protect uses the identical Sealed path automatically inside one explicitly
-  enrolled healthy tab scope. It is not device-wide DLP.
+- Always Protect is the persistent scoped Sealed preference in the panel. Each
+  prompt still requires an explicit Protect and send action. The historical
+  development mode retains its existing receipt semantics.
 
 `PAP_ALGORAND_FAST_CONFIRM_V1` is verified locally by the fixed-purpose Go verifier.
 It checks the expected TestNet/genesis, exact bounded self-payment transaction and
@@ -99,15 +101,16 @@ The consumer-facing Manifest V3 package is named **Attestamp for ChatGPT** and
 uses **Attestamp** as its short name. It pairs with the Attestamp desktop app
 for the one supported ChatGPT path described below.
 
-The Manifest V3 extension has only `nativeMessaging` and the single
+The Manifest V3 extension has only `nativeMessaging`, `sidePanel` and the single
 `https://chatgpt.com/*` host permission. Its public manifest key pins the assigned
 Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
 that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
 access is disabled. The draft item is not yet a published or verified Web Store
 listing. Adapter profile version 5 requires an acknowledged runtime epoch and
 fresh engine checks before insertion and click. It rejects older extension
-contracts; extension version 1.5.0 uses page contract `chatgpt-web-text/2026-09-14`
-and separately negotiates `pap-chatgpt-capture/1` for normal-send observation.
+contracts; extension version 1.6.0 uses page contract `chatgpt-web-text/2026-09-14`
+and separately negotiates `pap-chatgpt-capture/1` for normal-send observation and
+`pap-chatgpt-panel/1` for privileged panel admission.
 Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and

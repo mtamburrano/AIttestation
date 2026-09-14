@@ -28,9 +28,11 @@ function attachmentsPresent() {
 function surface() {
   const editor = composers();
   const target = destination();
+  let unambiguous = true;
+  try { sendControl(); } catch { unambiguous = false; }
   return {
     destination: target ?? '',
-    surfaceSupported: target !== null && editor.length === 1,
+    surfaceSupported: target !== null && editor.length === 1 && unambiguous,
     composerEmpty: editor.length === 1 && textOf(editor[0]) === '',
     attachmentsPresent: attachmentsPresent(),
   };
@@ -106,7 +108,7 @@ function decodeExactText(encoded) {
   }
   const binary = atob(encoded), bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
   if (btoa(binary) !== encoded || bytes.length > MAX_TEXT_BYTES) throw Error('invalid text encoding');
-  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
 async function sha256Hex(bytes) {

@@ -20,15 +20,19 @@ export async function until(check) {
 
 // This fixture uses real product startup, vault, IPC framing, worker and content
 // scripts. Only page/browser/platform identity and anchoring are synthetic.
-export async function continuousFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false } = {}) {
+export async function continuousFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
+  collectFast, managed, enroll = true, defaultMode = 'Off', panelContexts = async () => [], openDashboard = async () => {},
+  dropPanelAck = false, dropReleaseReply = false } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
   let captureFault = false, keyFault = false;
   const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, diagnostics,
     installation: null, fastTrust: { profile: FAST_CONFIRM_PROFILE }, openBrowser: false,
-    managed: { status: () => ({ state: 'ACTIVE' }), submit: async () => { anchorCalls++; return { transactionId: 'A'.repeat(52) }; } },
-    collectFast: async () => { confirmed++; return { synthetic: true }; },
+    managed: managed ?? { status: () => ({ state: 'ACTIVE' }), submit: async () => { anchorCalls++; return { transactionId: 'A'.repeat(52) }; } },
+    collectFast: async () => { confirmed++; return collectFast ? collectFast() : { synthetic: true }; },
+    openDashboard,
+    controllerTimeoutMs: 250,
     verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
       assurance: FAST_CONFIRM_PROFILE, round: 42 }),
     verifyArchive: () => { throw Error('NO_ARCHIVE_FIXTURE'); },
@@ -53,6 +57,7 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
     inventory.set(id, tab);
     const sender = page => page.sender({ tab: { id, windowId: tab.windowId, url: page.location.href }, documentId: `synthetic-${id}` });
     const page = pageFixture({ textarea, url: tab.url,
+      authorize: (message, page) => worker.message(message, sender(page)),
       notify: (message, page) => worker?.chrome.runtime.onMessage.emit(message, sender(page)),
       capture: (message, page) => worker ? worker.message(message, sender(page)) : Promise.resolve({ state: 'RECORDING_UNAVAILABLE' }),
     });
@@ -62,6 +67,9 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
     try {
       for (const message of decoder.push(chunk)) {
         if (message.kind === 'PAP_RELEASE') releases.push(message);
+        if (dropPanelAck && message.kind === 'PAP_PANEL_RESULT' && message.ack?.operationId) {
+          dropPanelAck = false; continue;
+        }
         if (message.kind === 'PAP_CAPTURE_RESULT') {
           results.push(message);
           if (dropAck && message.result.kind === 'send-intent' && results.filter(value => value.result.kind === 'send-intent').length === 1) continue;
@@ -72,12 +80,14 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
   });
   try {
     worker = await workerFixture({ clock: { setTimeout, clearTimeout, performance }, permission: async () => allow,
+      contexts: panelContexts,
       query: async () => [...inventory.values()].map(tab => ({ ...tab, url: pages.get(tab.id).location.href })),
       inspect: (id, message) => pages.get(id).send(message),
       onConnect(value) {
         port = value;
         port.close = () => socket?.destroy();
         port.send = message => {
+          if (dropReleaseReply && message.profile === 'pap-chatgpt-release/2') return;
           if (message.kind === 'PAP_CAPTURE') { deliveries.push(structuredClone(message)); sources.push(message.observation.source); }
           input.write(encodeNativeFrame(message));
         };
@@ -87,9 +97,9 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
       rendezvousPath: runtime.rendezvousPath, input, output });
     socket = native; socket.on('error', error => { nativeFailure = error; });
     await until(() => runtime.browserState());
-    await command('SET_DEFAULT', { mode: 'Off' });
+    await command('SET_DEFAULT', { mode: defaultMode });
     const scopes = new Map();
-    for (const id of pages.keys()) {
+    for (const id of enroll ? pages.keys() : []) {
       const { eligible: _eligible, ...target } = runtime.engine.state().targets.find(value => value.tabId === id);
       scopes.set(id, (await command('ENROLL_SCOPE', { target })).scope);
     }

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Attestamp · Protect and send</title>
+  <link rel="stylesheet" href="sidepanel.css">
+  <script type="module" src="sidepanel.js"></script>
+</head>
+<body>
+  <header><span class="brand">ATTESTAMP</span><button id="dashboard" class="link">Dashboard ↗</button></header>
+  <main>
+    <h1>A private place<br>to start your prompt.</h1>
+    <div class="health"><span id="connection" role="status">Connecting to Attestamp…</span><button id="refresh" class="link">Refresh</button></div>
+    <label for="target">Send to this conversation</label>
+    <select id="target"><option value="">Choose a ChatGPT tab</option></select>
+    <p id="target-note" class="hint">The selected destination stays fixed for each submitted prompt.</p>
+    <section class="settings" aria-label="Conversation protection">
+      <label for="mode">Conversation mode</label>
+      <select id="mode"><option value="">Use integration default</option><option>Off</option><option>Continuous</option><option>Sealed</option></select>
+      <p id="effective" class="hint">Select a conversation to see its effective mode.</p>
+      <p class="hint">Sealed is Always Protect for this conversation: a saved preference to use this panel. It never resends an old prompt.</p>
+      <button id="pause" class="link">Pause all protection</button>
+    </section>
+    <label for="draft">Your prompt <span class="hint">· text only</span></label>
+    <textarea id="draft" rows="8" placeholder="Write your prompt here…" autocomplete="off" spellcheck="false" aria-describedby="boundary draft-note"></textarea>
+    <p id="draft-note" class="hint">Drafts stay in this panel until you choose Protect and send.</p>
+    <button id="send" class="primary" disabled>Protect and send</button>
+    <button id="new-draft" class="link">Start a new prompt</button>
+    <p id="error" class="error" role="alert"></p>
+    <aside id="boundary">Only prompts entered here use Sealed admission. Text or attachments entered directly in ChatGPT are already outside this protection.</aside>
+    <section aria-label="Recent protected prompts"><h2>Recent protected prompts</h2><div id="operations"><p class="hint">Operation status will appear here.</p></div></section>
+  </main>
+</body>
+</html>

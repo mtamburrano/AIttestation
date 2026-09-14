@@ -133,6 +133,7 @@ export async function startChromeProtectionRuntime(directory, {
   rendezvousPath = join(directory, 'browser-bridge.json'), socketPath = null,
   now = Date.now, attestPeer = attestNativePeer, peerValidatorPath,
   diagnostics = new LocalDiagnostics(),
+  openDashboard = null,
 } = {}) {
   if (!isAbsolute(directory) || !/^[a-p]{32}$/.test(extensionId) || typeof attestPeer !== 'function') {
     throw bridgeError('Invalid browser bridge configuration');
@@ -218,7 +219,7 @@ export async function startChromeProtectionRuntime(directory, {
               if (socket.destroyed) throw bridgeError('Browser bridge disconnected');
               socket.write(`${canonical(message)}\n`);
             }, { timeoutMs: controllerTimeoutMs, localBrowser: peerIdentity.browser,
-              localPlatform: peerIdentity.platform, diagnostics: connectionEvents, engine });
+              localPlatform: peerIdentity.platform, diagnostics: connectionEvents, engine, openDashboard });
             controller = connectionController;
             socket.write(`${canonical({ kind: 'PAP_BRIDGE_READY', profile: NATIVE_BRIDGE_PROFILE, runtimeEpoch })}\n`);
             // Consume the just-used token. A replacement is published for a

@@ -1,0 +1,25 @@
+:root { color-scheme: light; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #233c35; background: #f7f8f4; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 20px; }
+header, .health { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { font-size: 11px; letter-spacing: .18em; font-weight: 750; }
+h1 { font-size: 25px; line-height: 1.2; letter-spacing: -.7px; font-weight: 550; margin: 26px 0 20px; }
+h2 { font-size: 15px; margin: 24px 0 10px; }
+label { display: block; font-weight: 600; margin: 16px 0 6px; }
+select, textarea, button { font: inherit; }
+select, textarea { width: 100%; padding: 10px; border: 1px solid #b6c7bc; border-radius: 7px; background: #fff; color: inherit; }
+textarea { resize: vertical; min-height: 150px; }
+button { cursor: pointer; border: 0; border-radius: 6px; }
+button:disabled, select:disabled, textarea:disabled { opacity: .55; cursor: default; }
+.link { padding: 6px 0; background: transparent; color: #25624a; text-align: left; }
+.primary { width: 100%; padding: 13px; margin: 4px 0 6px; color: #fff; background: #1e5c45; font-weight: 600; }
+.hint { font-size: 12px; font-weight: 400; color: #566b60; margin: 7px 0; overflow-wrap: anywhere; }
+.health { font-size: 12px; padding: 10px 0; border-block: 1px solid #d9e1d7; }
+.settings { padding: 0 12px 8px; background: #edf1e9; border-radius: 7px; }
+.error { color: #923c27; font-size: 13px; }
+.error:empty { display: none; }
+aside { padding: 12px; background: #f1ece2; border-radius: 7px; color: #67593c; font-size: 12px; }
+.operation { padding: 12px 0; border-bottom: 1px solid #d9e1d7; overflow-wrap: anywhere; }
+.operation p { margin: 5px 0; }
+:focus-visible { outline: 2px solid #247458; outline-offset: 2px; }
+@media (max-width: 330px) { body { padding: 14px; } h1 { font-size: 23px; } }

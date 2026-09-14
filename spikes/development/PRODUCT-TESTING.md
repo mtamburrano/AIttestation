@@ -181,6 +181,16 @@ from evidence exports and never include the encrypted vault or its keys.
 
 ## Add a scenario
 
+The trusted panel scenarios `panel-protect-and-send`, `panel-cancel` and
+`panel-destination-change` use the actual panel model, worker, content script,
+native framing and encrypted engine. They hold confirmation while testing edits,
+double clicks, target changes and cancellation; no provider bytes precede the
+synthetic validated confirmation. Cancellation survives portable export.
+`npm run test:sidepanel-browser` additionally drives the actual panel controls
+and renders their narrow layout in a fresh headless Chrome profile, with synthetic
+Chrome APIs and external DNS blocked. See the [panel contract](../browser/chatgpt/SEALED.md)
+for boundary, permission and evidence limits.
+
 Add a fixed scenario name and expectations in `product-fixtures.mjs`. Reuse the
 existing product entrypoint/API, explicitly inject each external dependency and
 keep all resources under the supplied fresh fixture directory. New observations

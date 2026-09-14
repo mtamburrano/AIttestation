@@ -95,8 +95,10 @@ It commits exact text and a signed source-bound intent before acknowledging a
 save, then anchors asynchronously without creating a release seal or dispatch.
 See [the capture contract](CONTINUOUS.md) for input mappings, retries and gaps.
 The development view retains historical Continuous dispatch and Always Protect
-semantics. The privileged extension panel and resident Mac menu remain separate
-surface integrations.
+semantics. The [privileged extension panel](SEALED.md) now uses the same engine
+commands over its negotiated, authenticated bridge path. A pending Sealed command
+in a scope rejects a second concurrent admission. The resident Mac menu remains
+a separate surface integration.
 
 ## Persistence, recovery and compatibility
 

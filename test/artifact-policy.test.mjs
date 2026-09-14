@@ -173,6 +173,26 @@ test('Store identity, native origin, upload-key omission and extension-byte pari
   ]) { const f = await fixture(t); await change(f); rejected(await f.run(), 'STORE_PACKAGE'); }
 });
 
+test('panel permission, entrypoint and isolation policy reject even a consistently resealed package', async t => {
+  for (const change of [
+    manifest => manifest.permissions.push('tabs'),
+    manifest => { manifest.permissions = ['nativeMessaging']; },
+    manifest => { manifest.side_panel.default_path = 'content-script.js'; },
+    manifest => { manifest.content_security_policy.extension_pages += '; connect-src *'; },
+    manifest => { manifest.web_accessible_resources = [{ resources: ['sidepanel.html'], matches: ['https://chatgpt.com/*'] }]; },
+    manifest => { manifest.externally_connectable = { matches: ['https://chatgpt.com/*'] }; },
+  ]) {
+    const f = await fixture(t), path = `${extension}/manifest.json`, manifest = await f.readJSON(path);
+    change(manifest); await f.json(path, manifest);
+    f.source.files.find(item => item.path.endsWith('/extension/manifest.json')).sha256 = sha256(canonical(manifest));
+    f.policy.sourceDigest = f.source.sha256 = sha256(canonical(f.source.files));
+    const { key: _key, ...upload } = manifest, entries = structuredClone(f.storeEntries);
+    entries.find(([name]) => name === 'manifest.json')[1] = canonical(upload);
+    await f.write('Chrome-Web-Store-upload.zip', zip(entries)); await f.seal();
+    rejected(await f.run(), 'STORE_PACKAGE');
+  }
+});
+
 test('known secret filenames and renamed PEM, DER, JWK, token and approval data are rejected without leaking contents', async t => {
   const key = generateKeyPairSync('ed25519'), marker = 'NEVER-PRINT-THIS-PRIVATE-MARKER';
   for (const [path, bytes] of [
