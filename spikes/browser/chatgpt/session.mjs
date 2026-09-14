@@ -17,7 +17,7 @@ const wire = value => Buffer.from(canonical(value));
 export class ChatGPTProtectionSession {
   #adapter; #tail = Promise.resolve(); #scope = null; #versions = new Map(); #pending = new Map();
   #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault; #draft = null;
-  #managed; #diagnostics;
+  #managed; #diagnostics; #closed = false;
 
   constructor(directory, adapter, {
     vault = null, vaultKey = null, fastTrust, collectFast = collectFastEvidence, verifyFast = verifyFastConfirmation,
@@ -43,7 +43,13 @@ export class ChatGPTProtectionSession {
         const version = this.#version(attempt.sealId);
         this.#assertCurrentDraft(version, attempt.payload);
       } catch { return 'FAILED_BEFORE_EGRESS'; }
-      return this.#adapter.dispatch(attempt);
+      return this.#adapter.dispatch(attempt, () => {
+        if (this.#closed) return false;
+        this.#assertCurrentDraft(this.#version(attempt.sealId), attempt.payload);
+        const state = this.runtime.snapshot(), seal = state.seals[attempt.sealId];
+        return state.attempts[attempt.attemptId]?.state === 'DISPATCHING'
+          && seal?.priorAttempt === attempt.attemptId && seal.authorization === null && !seal.cancelled;
+      });
     }, this.fault, {
       store: this.store, confirm: seal => this.#confirmSeal(seal),
       validate: validateProtectedTextPayload, protocol: CHATGPT_RELEASE_PROTOCOL, diagnostics: this.#diagnostics,
@@ -334,5 +340,5 @@ export class ChatGPTProtectionSession {
     return { scope: this.#scope, eligibility, versions: [...this.#versions.values()].map(value => this.#public(value)) };
   }
   async drain() { await this.#tail; }
-  close() { if (this.#ownsVault) this.vault.close(); emit(this.#diagnostics, 'ENGINE_CLOSED'); }
+  close() { this.#closed = true; if (this.#ownsVault) this.vault.close(); emit(this.#diagnostics, 'ENGINE_CLOSED'); }
 }

@@ -15,7 +15,7 @@ const event = () => {
 };
 
 export async function workerFixture({ onConnect = () => {}, inspect = async () => testTab(),
-  query = async () => [testTab()], permission = async () => true } = {}) {
+  query = async () => [testTab()], permission = async () => true, clock = null } = {}) {
   const ports = [], timers = new Set();
   const chrome = {
     runtime: { id: CHATGPT_EXTENSION_ID, lastError: undefined, onMessage: event(),
@@ -31,11 +31,16 @@ export async function workerFixture({ onConnect = () => {}, inspect = async () =
     tabs: { query, sendMessage: inspect, onActivated: event(), onCreated: event(), onRemoved: event(), onUpdated: event() },
   };
   runInNewContext(await readFile(new URL('../spikes/browser/chatgpt/extension/service-worker.js', import.meta.url), 'utf8'), {
-    chrome, crypto: webcrypto, navigator: {}, URL,
-    setTimeout(callback, delay) { const timer = { callback, delay }; timers.add(timer); return timer; },
-    clearTimeout(timer) { timers.delete(timer); },
+    chrome, crypto: webcrypto, navigator: {}, URL, performance: clock?.performance ?? performance,
+    setTimeout(callback, delay) {
+      const timer = clock ? clock.setTimeout(() => { timers.delete(timer); callback(); }, delay) : { callback, delay };
+      timers.add(timer); return timer;
+    },
+    clearTimeout(timer) { if (clock) clock.clearTimeout(timer); timers.delete(timer); },
   });
   return { chrome, ports, timers,
+    message(message, sender) { return new Promise(resolve => chrome.runtime.onMessage.emit(message, sender, resolve)); },
+    close() { for (const port of ports) port.disconnect(); for (const timer of timers) clock?.clearTimeout(timer); timers.clear(); },
     async fire(delay) {
       await turn();
       const timer = [...timers].find(item => item.delay === delay);

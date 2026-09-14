@@ -35,6 +35,20 @@ export class ChromeBridgeController {
     if (message.kind === 'PAP_STATE') {
       this.#adapter.synchronize(message); emit(this.#diagnostics, 'BRIDGE_STATE'); return;
     }
+    if (message.kind === 'PAP_CHECK_RELEASE') {
+      if (typeof message.attemptId !== 'string' || typeof message.checkId !== 'string'
+          || !/^[a-f0-9-]{36}$/.test(message.checkId) || !['inject', 'click'].includes(message.phase)
+          || Object.keys(message).sort().join(',') !== 'attemptId,checkId,kind,phase') throw Error('Invalid release check');
+      const pending = this.#pending.get(message.attemptId);
+      const authorized = Boolean(pending && pending.nextCheck === message.phase
+        && performance.now() - pending.started < this.#timeoutMs && this.#adapter.isDispatchCurrent(message.attemptId));
+      if (pending) {
+        pending.nextCheck = authorized && message.phase === 'inject' ? 'click' : null;
+        emit(this.#diagnostics, authorized ? 'BRIDGE_CHECK_ACCEPTED' : 'BRIDGE_CHECK_REJECTED', pending.refs);
+      }
+      this.#write({ kind: 'PAP_RELEASE_CHECKED', attemptId: message.attemptId, checkId: message.checkId, authorized });
+      return;
+    }
     if (typeof message.attemptId === 'string') {
       const pending = this.#pending.get(message.attemptId);
       if (!pending) return;
@@ -67,7 +81,7 @@ export class ChromeBridgeController {
         emit(this.#diagnostics, 'BRIDGE_TIMEOUT', { ...refs, durationMs: performance.now() - started });
         const error = Error('Chrome adapter outcome unknown'); error.exposure = 'UNKNOWN'; reject(error);
       }, this.#timeoutMs);
-      this.#pending.set(command.attemptId, { resolve, reject, timer, started, refs, command: structuredClone(command) });
+      this.#pending.set(command.attemptId, { resolve, reject, timer, started, refs, nextCheck: 'inject', command: structuredClone(command) });
       try {
         emit(this.#diagnostics, 'BRIDGE_DISPATCH', refs);
         this.#write({ kind: 'PAP_RELEASE', ...structuredClone(command) });

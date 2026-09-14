@@ -50,6 +50,7 @@ npm run test:product -- --scenario bridge-timeout
 npm run test:product -- --scenario confirmation-unavailable
 npm run test:product -- --list
 node --test test/native-bridge-lifecycle.test.mjs
+npm run test:chatgpt
 ```
 
 | Scenario | Expected observed behavior |
@@ -68,6 +69,19 @@ new-epoch pairing without replaying an interrupted release. It also covers bound
 backoff, stale async callbacks and recoverable provider capability changes, with
 correlated content-free diagnostics. Every process, socket and encrypted vault
 belongs to that fresh test run; installed Chrome and macOS identity are not claimed.
+
+The composer regression in `test/chatgpt-composer.test.mjs` runs the actual content
+script and background worker against a synthetic DOM and Chrome API, connected to
+the real bridge controller, session, encrypted temporary vault and diagnostics.
+It covers empty/existing drafts independently of Send rendering, asynchronous and
+disabled Send, ambiguous controls, exact text and destination drift, permission
+loss, reload, disconnect, expired authorization and lost replies. Sealed and
+Always Protect each click once after two fresh engine checks; exposure failures
+persist as `OUTCOME_UNKNOWN` with no automatic resend. Tests use newly generated
+keys and fresh `/private/tmp/attestamp-composer-test-*` directories, removed by
+that test's cleanup. This is synthetic DOM evidence and does not establish live
+ChatGPT behavior or installed native peer identity. The native lifecycle and
+existing provider-path regressions remain part of `npm run test:chatgpt`.
 
 `PASS` means the expected scenario invariant held, including expected failures.
 Unexpected failures use fixed reason codes, preserve the bounded diagnostic report

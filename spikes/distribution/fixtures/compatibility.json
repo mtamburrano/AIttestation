@@ -2,12 +2,13 @@
   "profile": "pap-distribution-fixtures/1",
   "evidence": "Synthetic regression fixtures; installed release validation is separate",
   "cases": [
-    { "name": "current app and pinned Chrome", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/3", "chromeMajor": 153, "supported": true },
+    { "name": "current app and pinned Chrome", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/4", "chromeMajor": 153, "supported": true },
     { "name": "previous extension contract", "appSequence": 1, "adapterProfile": "pap-chatgpt-chrome/1", "chromeMajor": 153, "supported": false },
-    { "name": "previous Chrome outside the approved baseline", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/3", "chromeMajor": 152, "supported": false },
-    { "name": "unvalidated next Chrome", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/3", "chromeMajor": 154, "supported": false },
-    { "name": "extension without epoch-bound reconnect", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/2", "chromeMajor": 153, "supported": false }
+    { "name": "previous Chrome outside the approved baseline", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/4", "chromeMajor": 152, "supported": false },
+    { "name": "unvalidated next Chrome", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/4", "chromeMajor": 154, "supported": false },
+    { "name": "extension without epoch-bound reconnect", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/2", "chromeMajor": 153, "supported": false },
+    { "name": "extension without bounded dispatch checks", "appSequence": 2, "adapterProfile": "pap-chatgpt-chrome/3", "chromeMajor": 153, "supported": false }
   ],
   "vaultReaders": [1, 3],
-  "providerContract": "chatgpt-web-text/2026-09-10"
+  "providerContract": "chatgpt-web-text/2026-09-14"
 }

@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
 import { emit } from '../../release/diagnostics.mjs';
 
-export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/3';
-export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-10';
+export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/4';
+export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
 export const CHATGPT_RELEASE_PROTOCOL = 'pap-chatgpt-release/1';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
 export const CHATGPT_EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
@@ -40,6 +40,7 @@ export class ChatGPTChromeAdapter {
   #send; #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
   #enrollment = null; #generation = 0; #attempts = new Set();
   #diagnostics;
+  #dispatchChecks = new Map();
 
   constructor(send, { extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
     if (typeof send !== 'function' || typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
@@ -191,7 +192,12 @@ export class ChatGPTChromeAdapter {
     catch (error) { return error.code === 'CAPABILITY_UNAVAILABLE' ? 'TEMPORARILY_UNAVAILABLE' : 'REVOKED'; }
   }
 
-  async dispatch(attempt) {
+  isDispatchCurrent(attemptId) {
+    try { return this.#dispatchChecks.get(attemptId)?.() === true; }
+    catch { return false; }
+  }
+
+  async dispatch(attempt, isCurrent = () => true) {
     let snapshot;
     try {
       const health = this.#assertHealthy(attempt.scope);
@@ -218,12 +224,21 @@ export class ChatGPTChromeAdapter {
       attemptId: attempt.attemptId, payloadDigest: attempt.digest,
       textDigest: textDigest(snapshot.text), textBytes: Buffer.from(snapshot.text, 'utf8').toString('base64'),
     };
+    this.#dispatchChecks.set(attempt.attemptId, () => {
+      const tabs = this.#chatGPTTabs(), tab = tabs[0];
+      // The exact authorized insertion makes the composer nonempty. The page
+      // checks its bytes; this guard retains engine, scope and draft authority.
+      return this.#generation === snapshot.generation && this.#enrollment?.scope === attempt.scope
+        && this.#connection?.browserSessionId === command.browserSessionId && tabs.length === 1
+        && tab.id === snapshot.tabId && tab.url === snapshot.expectedUrl && tab.destination === snapshot.destination
+        && tab.active && tab.surfaceSupported && !tab.attachmentsPresent && isCurrent() === true;
+    });
     try {
       emit(this.#diagnostics, 'ADAPTER_DISPATCH', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
       response = await this.#send(command, { operationId: attempt.sealId });
     } catch (error) {
       return error?.exposure === 'NONE' ? 'FAILED_BEFORE_EGRESS' : 'OUTCOME_UNKNOWN';
-    }
+    } finally { this.#dispatchChecks.delete(attempt.attemptId); }
     if (!response || response.profile !== command.profile || response.runtimeEpoch !== command.runtimeEpoch
         || response.browserSessionId !== command.browserSessionId || response.scope !== command.scope
         || response.tabId !== command.tabId || response.expectedUrl !== command.expectedUrl

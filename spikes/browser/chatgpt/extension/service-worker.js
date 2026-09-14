@@ -1,6 +1,6 @@
-const ADAPTER_PROFILE = 'pap-chatgpt-chrome/3';
+const ADAPTER_PROFILE = 'pap-chatgpt-chrome/4';
 const RELEASE_PROTOCOL = 'pap-chatgpt-release/1';
-const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-10';
+const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
 let connection;
@@ -20,7 +20,7 @@ async function inspectTabs() {
   const tabs = await bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' }));
   return Promise.all(tabs.map(async tab => {
     let surface;
-    try { surface = await bounded(chrome.tabs.sendMessage(tab.id, { kind: 'PAP_INSPECT', pageContract: PAGE_CONTRACT })); }
+    try { surface = await bounded(chrome.tabs.sendMessage(tab.id, { kind: 'PAP_INSPECT', pageContract: PAGE_CONTRACT }, { frameId: 0 })); }
     catch { surface = { surfaceSupported: false, destination: '', composerEmpty: false, attachmentsPresent: false }; }
     return {
       id: tab.id, url: tab.url ?? '', active: tab.active === true,
@@ -66,10 +66,11 @@ async function handleRelease(message, context) {
       || message.runtimeEpoch !== context.epoch || typeof message.scope !== 'string'
       || !Number.isSafeInteger(message.tabId) || typeof message.expectedUrl !== 'string'
       || typeof message.destination !== 'string' || typeof message.attemptId !== 'string'
+      || !message.attemptId.length || message.attemptId.length > 128
       || !/^[a-f0-9]{64}$/.test(message.payloadDigest ?? '')
       || !/^[a-f0-9]{64}$/.test(message.textDigest ?? '') || typeof message.textBytes !== 'string'
       || context.attempts.has(message.attemptId) || context.attempts.size >= 4096) {
-    return releaseResponse(message, 'NONE', false);
+    return releaseResponse(message, context.attempts.has(message.attemptId) ? 'UNKNOWN' : 'NONE', false);
   }
   context.attempts.add(message.attemptId);
   const revision = context.revision;
@@ -82,13 +83,19 @@ async function handleRelease(message, context) {
   if (tabs[0].url !== message.expectedUrl || tabs[0].destination !== message.destination) {
     return releaseResponse(message, 'NONE', false);
   }
+  const release = { message, revision: context.authorityRevision, expires: performance.now() + 2000,
+    phase: 'inject', documentId: null, check: null };
+  context.releases.set(message.attemptId, release);
   try {
     const result = await bounded(chrome.tabs.sendMessage(message.tabId, {
       ...message, kind: 'PAP_RELEASE', pageContract: PAGE_CONTRACT,
-    }));
+    }, { frameId: 0 }));
+    if (result?.attemptId !== message.attemptId || result.textDigest !== message.textDigest) {
+      return releaseResponse(message, 'UNKNOWN', false);
+    }
     if (result?.exposure === 'NONE' && result.submitted === false) return releaseResponse(message, 'NONE', false);
     if (result?.exposure === 'DOM_INJECTED' && result.submitted === true
-        && result.observation === 'LOCAL_CLICK_DISPATCHED') {
+        && result.observation === 'LOCAL_CLICK_DISPATCHED' && release.phase === 'finished') {
       return releaseResponse(message, 'DOM_INJECTED', true, 'LOCAL_CLICK_DISPATCHED');
     }
     return releaseResponse(message, 'UNKNOWN', false);
@@ -96,7 +103,39 @@ async function handleRelease(message, context) {
     // Once a content-script request is sent, loss of the reply cannot establish
     // whether the page saw the bytes.
     return releaseResponse(message, 'UNKNOWN', false);
+  } finally {
+    context.releases.delete(message.attemptId); release.check?.resolve(false);
   }
+}
+
+function active(context, release) {
+  return current(context) && context.ready && context.releases.get(release.message.attemptId) === release
+    && context.authorityRevision === release.revision && performance.now() < release.expires;
+}
+
+async function checkRelease(message, sender, context) {
+  const release = context?.releases.get(message.attemptId);
+  if (!release || !active(context, release) || message.pageContract !== PAGE_CONTRACT
+      || Object.keys(message).sort().join(',') !== 'attemptId,kind,pageContract,phase'
+      || message.phase !== release.phase || !['inject', 'click'].includes(message.phase)
+      || sender.id !== chrome.runtime.id || sender.frameId !== 0 || sender.tab?.id !== release.message.tabId
+      || sender.url !== release.message.expectedUrl || sender.origin !== 'https://chatgpt.com'
+      || typeof sender.documentId !== 'string' || !sender.documentId.length || sender.documentId.length > 128
+      || release.documentId && release.documentId !== sender.documentId) return false;
+  release.documentId = sender.documentId; release.phase = 'checking';
+  try {
+    if (await permissionState() !== 'granted') return false;
+    const tabs = await bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' }));
+    if (!active(context, release) || tabs.length !== 1 || tabs[0].id !== release.message.tabId
+        || tabs[0].active !== true || tabs[0].url !== release.message.expectedUrl) return false;
+    const checkId = crypto.randomUUID();
+    const answer = new Promise(resolve => { release.check = { checkId, resolve }; });
+    post(context, { kind: 'PAP_CHECK_RELEASE', attemptId: message.attemptId, checkId, phase: message.phase });
+    if (!await bounded(answer) || !active(context, release)) return false;
+    release.phase = message.phase === 'inject' ? 'click' : 'finished';
+    return true;
+  } catch { return false; }
+  finally { release.check = null; }
 }
 
 function scheduleReconnect() {
@@ -108,6 +147,7 @@ function scheduleReconnect() {
 function retire(context) {
   if (!current(context)) return;
   context.closed = true; clearTimeout(context.handshakeTimer); connection = undefined;
+  for (const release of context.releases.values()) release.check?.resolve(false);
   try { context.port.disconnect(); } catch {}
   scheduleReconnect();
 }
@@ -133,6 +173,7 @@ async function publish(context) {
 function publishState(urgent = false) {
   const context = connection;
   if (!context) return;
+  if (urgent) context.authorityRevision++;
   context.revision++; context.dirty = true; context.urgent ||= urgent; publish(context);
 }
 
@@ -142,7 +183,7 @@ function connect() {
   try { port = chrome.runtime.connectNative(NATIVE_HOST); }
   catch { scheduleReconnect(); return; }
   const context = { port, closed: false, ready: false, epoch: null, revision: 0, dirty: false,
-    activeReleases: 0, publishing: false, urgent: false, attempts: new Set() };
+    activeReleases: 0, publishing: false, urgent: false, attempts: new Set(), releases: new Map(), authorityRevision: 0 };
   connection = context;
   context.handshakeTimer = setTimeout(() => retire(context), 10_000);
   port.onMessage.addListener(message => {
@@ -152,6 +193,11 @@ function connect() {
           || typeof message.runtimeEpoch !== 'string' || !message.runtimeEpoch.length) return retire(context);
       context.ready = true; context.epoch = message.runtimeEpoch;
       clearTimeout(context.handshakeTimer); reconnectDelay = 1000; publishState(); return;
+    }
+    if (context.ready && message?.kind === 'PAP_RELEASE_CHECKED') {
+      const check = context.releases.get(message.attemptId)?.check;
+      if (check?.checkId === message.checkId) check.resolve(message.authorized === true);
+      return;
     }
     if (!context.ready || message?.kind !== 'PAP_RELEASE') return retire(context);
     context.activeReleases++;
@@ -169,7 +215,10 @@ function connect() {
   stateMessage('PAP_HELLO').then(value => post(context, value)).catch(() => retire(context));
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.kind === 'PAP_CHECK_RELEASE') {
+    checkRelease(message, sender, connection).then(respond).catch(() => respond(false)); return true;
+  }
   if (message?.kind !== 'PAP_SURFACE_CHANGED' || Object.keys(message).length !== 1
       || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id)) return;
   try {
@@ -184,6 +233,6 @@ chrome.tabs.onActivated.addListener(() => publishState(true));
 chrome.tabs.onCreated.addListener(() => publishState(true));
 chrome.tabs.onRemoved.addListener(() => publishState(true));
 chrome.tabs.onUpdated.addListener((_id, change) => {
-  if (change.url || change.status === 'complete') publishState(true);
+  if (change.url || change.status === 'loading' || change.status === 'complete') publishState(true);
 });
 connect();

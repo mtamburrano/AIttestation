@@ -72,8 +72,9 @@ The Manifest V3 extension has only `nativeMessaging` and the single
 Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
 that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
 access is disabled. The draft item is not yet a published or verified Web Store
-listing. Adapter profile version 3 requires an acknowledged runtime epoch before
-dispatch and rejects older extension contracts.
+listing. Adapter profile version 4 requires an acknowledged runtime epoch and
+fresh engine checks before insertion and click. It rejects older extension
+contracts; extension version 1.3.0 uses page contract `chatgpt-web-text/2026-09-14`.
 Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and
@@ -83,14 +84,35 @@ uses only this runtime-side identity and fails closed unless the exact supported
 baseline matches; browser or platform fields sent over the bridge are not accepted.
 
 The background worker requires exactly one active ChatGPT tab and forwards only a
-versioned release command. The content script recognizes the pinned
-`#prompt-textarea` plus `data-testid="send-button"` contract, requires an empty
-composer and no attachment state, injects the already-authorized text, checks the
-exact URL, destination, transported SHA-256 text digest and DOM string, and clicks
-Send. The bridge carries the exact UTF-8 bytes as bounded base64 rather than a
-second ambient text source. It reports a local click observation—not provider
-receipt. Once text may have reached the provider DOM, loss of a reply becomes
-`OUTCOME_UNKNOWN`, never a safe retry.
+versioned release command to its top-level frame. Detection recognizes one
+supported `#prompt-textarea` independently of Send rendering, and reports draft
+and attachment state separately. A detected provider-side draft remains in place
+and cannot gain pre-disclosure protection. Dispatch still requires an empty
+composer, no attachments and an exact transported SHA-256 text digest.
+
+After one authorized insertion, the content script polls every 25 ms for at most
+one second for one visible, enabled `data-testid="send-button"`. The entire
+content request has a 1.5-second deadline, inside the worker's two-second reply
+budget. Expiry checks use a monotonic clock, including after delayed callbacks.
+Ambiguous controls, text/attachment/editor/destination drift, page suspension or
+lost visibility abort the attempt. Each click follows fresh exact URL,
+destination, editor identity, text and attachment checks with no intervening await.
+
+`PAP_CHECK_RELEASE` checks the already-consumed, still-pending engine attempt
+before insertion and again before click. The worker binds both checks to the
+same content document, top-level frame, tab, phase and native connection, and
+rechecks Chrome permissions and the active destination. Navigation, tab changes
+and disconnect invalidate the in-flight check even if capability later returns.
+The engine verifies the exact draft revision, scope and durable attempt; it
+cannot restore or create authorization through this check. `PAP_RELEASE_CHECKED`
+contains only the correlated check result. The durable release profile remains
+`pap-chatgpt-release/1`, and native peer checks and evidence formats are unchanged.
+
+The bridge carries exact UTF-8 bytes as bounded base64. Success records a local
+click observation; provider receipt remains unknown. Once text may have reached
+the provider DOM, readiness expiry, changed state and lost or mismatched replies
+produce `OUTCOME_UNKNOWN`. Late readiness and duplicate attempts never cause a
+blind resend or a second insertion.
 
 [`bridge-runtime.mjs`](bridge-runtime.mjs) creates a fresh owner-only Unix socket,
 256-bit token, runtime epoch, and atomically published short-lived rendezvous. The

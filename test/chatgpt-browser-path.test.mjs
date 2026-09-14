@@ -3,11 +3,10 @@ import assert from 'node:assert/strict';
 import { lstat, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHash, randomBytes, webcrypto } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createConnection } from 'node:net';
 import { PassThrough } from 'node:stream';
-import { runInNewContext } from 'node:vm';
 import { ChatGPTChromeAdapter, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT,
   CHATGPT_RELEASE_PROTOCOL } from '../spikes/browser/chatgpt/adapter.mjs';
 import { ChromeBridgeController } from '../spikes/browser/chatgpt/bridge.mjs';
@@ -324,7 +323,7 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
   assert.equal(manifest.name, 'Attestamp for ChatGPT');
   assert.equal(manifest.short_name, 'Attestamp');
-  assert.equal(manifest.version, '1.2.0');
+  assert.equal(manifest.version, '1.3.0');
   assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
   assert.match(manifest.description, /Attestamp desktop app/);
   assert.match(manifest.description, /one supported ChatGPT tab/);
@@ -342,90 +341,6 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const worker = await readFile(new URL('service-worker.js', root), 'utf8');
   assert.match(worker, /browser: \{ product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 \}/);
   assert.doesNotMatch(worker, /browser: \{ product: 'Google Chrome', channel: 'stable'/);
-});
-
-test('pinned ChatGPT content script injects exact authorized bytes and fails before exposure on unknown markup', async () => {
-  const source = await readFile(new URL('../spikes/browser/chatgpt/extension/content-script.js', import.meta.url), 'utf8');
-  function load({ supported = true, url = 'https://chatgpt.com/', rewrite = false } = {}) {
-    let listener, clicked = 0;
-    class Textarea {}
-    class Editor {
-      constructor() { this.textContent = ''; }
-      getAttribute(name) { return name === 'contenteditable' ? 'true' : null; }
-      replaceChildren(node) { this.textContent = node.value; }
-      dispatchEvent() { if (rewrite) this.textContent += 'provider rewrite'; }
-    }
-    const editor = new Editor(), send = { disabled: false, click: () => { clicked++; } };
-    const document = {
-      querySelectorAll(selector) {
-        if (selector === '#prompt-textarea') return supported ? [editor] : [];
-        if (selector === 'button[data-testid="send-button"]') return supported ? [send] : [];
-        if (selector === 'input[type=file]') return [];
-        return [];
-      },
-      querySelector: () => null,
-      createTextNode: value => ({ value }),
-    };
-    const pageUrl = new URL(url);
-    runInNewContext(source, {
-      location: { origin: pageUrl.origin, pathname: pageUrl.pathname, href: pageUrl.href }, document,
-      HTMLTextAreaElement: Textarea, InputEvent: class {}, TextEncoder, TextDecoder, atob, btoa, crypto: webcrypto,
-      chrome: { runtime: { onMessage: { addListener: callback => { listener = callback; } } } },
-    });
-    return { editor, clicked: () => clicked, send: message => new Promise(resolve => listener(message, {}, resolve)) };
-  }
-  const page = load(), text = 'exact e\u0301\r\n☕';
-  const textDigest = createHash('sha256').update(Buffer.from(text)).digest('hex');
-  const response = await page.send({ kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT,
-    expectedUrl: 'https://chatgpt.com/', destination: 'new-chat',
-    attemptId: 'attempt', textDigest, textBytes: Buffer.from(text).toString('base64') });
-  assert.equal(page.editor.textContent, text); assert.equal(page.clicked(), 1);
-  assert.equal(response.attemptId, 'attempt'); assert.equal(response.textDigest, textDigest);
-  assert.equal(response.exposure, 'DOM_INJECTED'); assert.equal(response.submitted, true);
-  assert.equal(response.observation, 'LOCAL_CLICK_DISPATCHED');
-  const unknown = load({ supported: false });
-  const rejected = await unknown.send({ kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT,
-    expectedUrl: 'https://chatgpt.com/', destination: 'new-chat', attemptId: 'unknown',
-    textDigest: createHash('sha256').update('never').digest('hex'), textBytes: Buffer.from('never').toString('base64') });
-  assert.equal(rejected.exposure, 'NONE'); assert.equal(rejected.submitted, false); assert.equal(unknown.clicked(), 0);
-  const corrupted = load();
-  const wrongDigest = await corrupted.send({ kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT,
-    expectedUrl: 'https://chatgpt.com/', destination: 'new-chat', attemptId: 'corrupt',
-    textDigest, textBytes: Buffer.from('different valid UTF-8').toString('base64') });
-  assert.equal(wrongDigest.exposure, 'NONE'); assert.equal(corrupted.editor.textContent, '');
-  const changedScope = load({ url: 'https://chatgpt.com/c/other' });
-  const wrongScope = await changedScope.send({ kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT,
-    expectedUrl: 'https://chatgpt.com/', destination: 'new-chat', attemptId: 'wrong-scope',
-    textDigest, textBytes: Buffer.from(text).toString('base64') });
-  assert.equal(wrongScope.exposure, 'NONE'); assert.equal(changedScope.editor.textContent, '');
-  const rewritten = load({ rewrite: true });
-  const partial = await rewritten.send({ kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT,
-    expectedUrl: 'https://chatgpt.com/', destination: 'new-chat', attemptId: 'partial-insertion',
-    textDigest, textBytes: Buffer.from(text).toString('base64') });
-  assert.equal(partial.exposure, 'DOM_INJECTED'); assert.equal(partial.submitted, false);
-  assert.equal(rewritten.clicked(), 0); assert.ok(rewritten.editor.textContent.startsWith(text));
-});
-
-test('provider drift observation reports only a fixed capability-change signal before another release', async () => {
-  const source = await readFile(new URL('../spikes/browser/chatgpt/extension/content-script.js', import.meta.url), 'utf8');
-  let observer, supported = true, listener; const messages = [], events = {};
-  const editor = { textContent: '', getAttribute: () => 'true' };
-  const document = { documentElement: {},
-    querySelectorAll: selector => selector === '#prompt-textarea' ? [editor]
-      : selector === 'button[data-testid="send-button"]' && supported ? [{}] : [],
-    querySelector: () => null, addEventListener: (name, callback) => { events[name] = callback; } };
-  runInNewContext(source, { document, HTMLTextAreaElement: class {},
-    location: { origin: 'https://chatgpt.com', pathname: '/c/private-test-id', href: 'https://chatgpt.com/c/private-test-id' },
-    MutationObserver: class { constructor(callback) { observer = callback; } observe() {} },
-    chrome: { runtime: { onMessage: { addListener: callback => { listener = callback; } },
-      sendMessage: async value => messages.push(structuredClone(value)) } } });
-  observer(); assert.equal(messages.length, 0, 'unchanged DOM does not produce telemetry');
-  supported = false; observer(); assert.deepEqual(JSON.parse(JSON.stringify(messages)), [{ kind: 'PAP_SURFACE_CHANGED' }]);
-  let state; listener({ kind: 'PAP_INSPECT', pageContract: CHATGPT_PAGE_CONTRACT }, {}, value => { state = value; });
-  assert.equal(state.surfaceSupported, false);
-  editor.textContent = 'secret evidence payload'; events.input();
-  assert.equal(messages.length, 2);
-  assert.doesNotMatch(JSON.stringify(messages), /secret|private-test-id|https|textContent/);
 });
 
 test('native bridge frames bounded messages and correlates only the exact release attempt', async () => {
