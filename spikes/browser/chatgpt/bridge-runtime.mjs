@@ -8,6 +8,8 @@ import { canonical, keys, parseCanonical, unb64 } from '../../vault/format.mjs';
 import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID } from './adapter.mjs';
 import { ChromeBridgeController } from './bridge.mjs';
 import { ChatGPTProtectionSession } from './session.mjs';
+import { ResidentEngine } from './engine.mjs';
+import { lockResidentEngine } from './engine-store.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord } from './native-host.mjs';
 import { LocalDiagnostics, emit } from '../../release/diagnostics.mjs';
 
@@ -158,13 +160,18 @@ export async function startChromeProtectionRuntime(directory, {
     }
     return controller.sendRelease(command, diagnosticRefs);
   }, { extensionId, diagnostics: events, runtimeEpoch });
-  const session = await new ChatGPTProtectionSession(directory, adapter, {
-    vault, vaultKey, fastTrust, managed, diagnostics: events,
-    ...(collectFast === undefined ? {} : { collectFast }),
-    ...(verifyFast === undefined ? {} : { verifyFast }),
-    ...(verifyArchive === undefined ? {} : { verifyArchive }),
-    ...(fault === undefined ? {} : { fault }),
-  }).init();
+  const unlock = lockResidentEngine(directory);
+  let session, engine;
+  try {
+    session = await new ChatGPTProtectionSession(directory, adapter, {
+      vault, vaultKey, fastTrust, managed, diagnostics: events,
+      ...(collectFast === undefined ? {} : { collectFast }),
+      ...(verifyFast === undefined ? {} : { verifyFast }),
+      ...(verifyArchive === undefined ? {} : { verifyArchive }),
+      ...(fault === undefined ? {} : { fault }),
+    }).init();
+    engine = await new ResidentEngine(directory, session, adapter, runtimeEpoch, events).init();
+  } catch (error) { session?.close(); unlock(); throw error; }
 
   const publishRendezvous = () => {
     const operation = publishTail.then(async () => {
@@ -260,13 +267,13 @@ export async function startChromeProtectionRuntime(directory, {
     refreshTimer.unref();
   } catch (error) {
     emit(events, 'BRIDGE_LISTEN_FAILED');
-    session.close();
+    engine.stop(); await engine.drain(); session.close(); unlock();
     try { await unlink(selectedSocket); } catch {}
     throw error;
   }
 
   return {
-    adapter, session, diagnostics, runtimeEpoch, rendezvousPath, socketPath: selectedSocket,
+    adapter, session, engine, diagnostics, runtimeEpoch, rendezvousPath, socketPath: selectedSocket,
     waitForPairing: () => paired,
     browserState: () => structuredClone(latestBrowserState),
     disableIntegration() {
@@ -275,14 +282,16 @@ export async function startChromeProtectionRuntime(directory, {
     },
     async close() {
       if (closed) return; closed = true; clearInterval(refreshTimer);
+      engine.stop();
       candidateSocket?.destroy(); activeSocket?.destroy(); controller?.disconnect(); controller = null;
-      await session.drain(); session.close(); await stop(server);
+      await engine.drain(); await session.drain(); session.close(); await stop(server);
       await publishTail;
       try { await unlink(selectedSocket); } catch {}
       try {
         const record = parseCanonical(await readFile(rendezvousPath), 16 * 1024);
         if (record.runtimeEpoch === runtimeEpoch) await unlink(rendezvousPath);
       } catch {}
+      unlock();
     },
   };
 }

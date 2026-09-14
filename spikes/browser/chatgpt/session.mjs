@@ -15,8 +15,9 @@ import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
 const wire = value => Buffer.from(canonical(value));
 
 export class ChatGPTProtectionSession {
-  #adapter; #tail = Promise.resolve(); #scope = null; #versions = new Map(); #pending = new Map();
-  #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault; #draft = null;
+  #adapter; #tails = new Map(); #scopes = new Set(); #versions = new Map(); #pending = new Map();
+  #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault; #drafts = new Map();
+  #generations = new Map(); #ended = new Set(); #authority = () => true;
   #managed; #diagnostics; #closed = false;
 
   constructor(directory, adapter, {
@@ -53,16 +54,22 @@ export class ChatGPTProtectionSession {
     }, this.fault, {
       store: this.store, confirm: seal => this.#confirmSeal(seal),
       validate: validateProtectedTextPayload, protocol: CHATGPT_RELEASE_PROTOCOL, diagnostics: this.#diagnostics,
+      revokeOnRestart: true,
     }).init();
     emit(this.#diagnostics, 'ENGINE_STARTED');
     return this;
   }
 
   #serial(operation, refs = {}) {
-    const next = this.#tail.then(operation).catch(error => {
-      emit(this.#diagnostics, 'OPERATION_REJECTED', refs); throw error;
+    const scope = refs.scope ?? this.#versions.get(refs.operationId)?.scope ?? 'engine';
+    const next = (this.#tails.get(scope) ?? Promise.resolve()).then(operation).catch(error => {
+      const { scope: _scope, ...diagnosticRefs } = refs;
+      emit(this.#diagnostics, 'OPERATION_REJECTED', diagnosticRefs); throw error;
     });
-    this.#tail = next.catch(() => {}); return next;
+    const settled = next.catch(() => {});
+    this.#tails.set(scope, settled);
+    settled.then(() => { if (this.#tails.get(scope) === settled) this.#tails.delete(scope); });
+    return next;
   }
   #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value }), { type: 'observation' }); }
   #version(id) { const value = this.#versions.get(id); if (!value) throw Error('Unknown version'); return value; }
@@ -72,7 +79,7 @@ export class ChatGPTProtectionSession {
     return version;
   }
   #public(value) {
-    const { payload: _payload, ...visible } = value;
+    const { payload: _payload, authorityGeneration: _authorityGeneration, ...visible } = value;
     const active = value.state !== 'CANCELLED';
     return structuredClone({ ...visible, actions: {
       anchorRequest: active,
@@ -84,28 +91,46 @@ export class ChatGPTProtectionSession {
   }
 
   enroll({ tabId, destination }) {
-    if (this.#scope || this.#versions.size) throw Error('Start a new runtime session to change the eligible scope');
-    const enrollment = this.#adapter.enroll({ tabId, destination }); this.#scope = enrollment.scope;
+    const enrollment = this.#adapter.enroll({ tabId, destination }); this.#scopes.add(enrollment.scope);
     return structuredClone(enrollment);
   }
 
   updateDraft({ text, attachments = [], scope, editRevision }) {
-    if (scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
+    if (!this.#scopes.has(scope)) throw Error('UNSUPPORTED_PATH: scope changed');
     if (!Number.isSafeInteger(editRevision) || editRevision < 0) throw Error('Invalid trusted-composer edit revision');
     const payload = validateProtectedTextPayload({ text, attachments }), payloadDigest = digest(payload);
-    if (this.#draft && (editRevision < this.#draft.editRevision
-        || (editRevision === this.#draft.editRevision && payloadDigest !== this.#draft.payloadDigest))) {
+    const draft = this.#drafts.get(scope);
+    if (draft && (editRevision < draft.editRevision
+        || (editRevision === draft.editRevision && payloadDigest !== draft.payloadDigest))) {
       throw Error('Stale or conflicting trusted-composer edit revision');
     }
-    this.#draft = { scope, editRevision, payloadDigest };
+    this.#drafts.set(scope, { scope, editRevision, payloadDigest });
     return { editRevision, payloadDigest };
   }
 
   #assertCurrentDraft(version, payload) {
-    if (!this.#draft || this.#draft.scope !== version.scope || this.#draft.editRevision !== version.editRevision
-        || this.#draft.payloadDigest !== version.digest || digest(validateProtectedTextPayload(payload)) !== version.digest) {
+    this.#assertAuthority(version);
+    const draft = this.#drafts.get(version.scope);
+    if (!draft || draft.editRevision !== version.editRevision
+        || draft.payloadDigest !== version.digest || digest(validateProtectedTextPayload(payload)) !== version.digest) {
       throw Error('Stale trusted-composer version');
     }
+  }
+
+  setAuthorityCheck(check) { this.#authority = check; }
+  #assertAuthority(version) {
+    if (this.#closed || this.#ended.has(version.id) || version.authorityGeneration !== (this.#generations.get(version.scope) ?? 0)
+        || this.#authority(version) !== true) throw Error('Operation authority ended; a new action is required');
+  }
+  interruptScope(scope) {
+    this.#generations.set(scope, (this.#generations.get(scope) ?? 0) + 1);
+    return Promise.allSettled([...this.#versions.values()].filter(value => value.scope === scope)
+      .map(value => this.interruptVersion(value.id)));
+  }
+  interruptVersion(id) {
+    const version = this.#version(id); this.#ended.add(id);
+    if (version.state === 'CANCELLED' || version.attempt || this.runtime.snapshot().seals[id]?.priorAttempt) return Promise.resolve();
+    return this.cancel({ id, scope: version.scope });
   }
 
   anchorRequest(id) {
@@ -115,6 +140,7 @@ export class ChatGPTProtectionSession {
 
   async #releaseVersion(version, payload, continuous = false) {
     this.#activeVersion(version.id);
+    this.#assertCurrentDraft(version, payload);
     this.#adapter.assertEligible(version.scope);
     const request = { id: version.id, scope: version.scope, expectedDigest: version.digest,
       currentPayload: payload, protocol: CHATGPT_RELEASE_PROTOCOL };
@@ -128,8 +154,10 @@ export class ChatGPTProtectionSession {
 
   freeze({ text, attachments = [], mode, scope, editRevision }) {
     const draft = this.updateDraft({ text, attachments, scope, editRevision });
+    const authorityGeneration = this.#generations.get(scope) ?? 0;
     return this.#serial(async () => {
-      if (scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
+      if (!this.#scopes.has(scope)) throw Error('UNSUPPORTED_PATH: scope changed');
+      this.#assertAuthority({ scope, mode, authorityGeneration });
       this.#adapter.assertEligible(scope);
       if (!['Continuous', 'Sealed', 'Always Protect'].includes(mode)) throw Error('Unsupported protection mode');
       const payload = validateProtectedTextPayload({ text, attachments });
@@ -147,7 +175,7 @@ export class ChatGPTProtectionSession {
       });
       const seal = await this.runtime.seal(payload, scope, mode);
       const version = {
-        ...seal, payload, mode, editRevision, descriptorId: descriptor.manifest.eventId,
+        ...seal, payload, mode, editRevision, authorityGeneration, descriptorId: descriptor.manifest.eventId,
         recordDigest: descriptor.recordDigest, state: mode === 'Continuous' ? 'PENDING_ANCHOR' : 'PENDING_FAST_CONFIRMATION',
         anchor: 'PENDING', timestamp: 'INDETERMINATE', attempt: null, assuranceHistory: [],
       };
@@ -156,7 +184,7 @@ export class ChatGPTProtectionSession {
       emit(this.#diagnostics, 'OPERATION_FROZEN', { operationId: version.id, captureId: captured.manifest.eventId });
       if (mode === 'Continuous') await this.#releaseVersion(version, payload, true);
       return this.#public(version);
-    });
+    }, { scope });
   }
 
   async #validateFast(version, evidence) {
@@ -177,6 +205,7 @@ export class ChatGPTProtectionSession {
     const version = this.#version(seal.id), evidence = this.#pending.get(seal.id);
     if (!evidence) throw Error('PENDING_FAST_CONFIRMATION: exact-version evidence required');
     const accepted = await this.#validateFast(version, evidence);
+    this.#assertCurrentDraft(version, version.payload);
     return {
       profile: FAST_CONFIRM_PROFILE, digest: seal.digest, result: accepted.report.anchor,
       timestamp: accepted.report.timestamp, round: accepted.report.round,
@@ -203,7 +232,7 @@ export class ChatGPTProtectionSession {
     return this.#serial(async () => {
       const started = performance.now();
       const version = this.#activeVersion(id);
-      if (scope !== version.scope || scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
+      if (scope !== version.scope || !this.#scopes.has(scope)) throw Error('UNSUPPORTED_PATH: scope changed');
       if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
       if (version.mode !== 'Continuous') {
         this.#assertCurrentDraft(version, validateProtectedTextPayload({ text: currentText, attachments }));
@@ -299,7 +328,7 @@ export class ChatGPTProtectionSession {
     return this.#serial(async () => {
       const version = this.#activeVersion(id);
       if (version.mode === 'Continuous') throw Error('Continuous releases during freeze and cannot be resent automatically');
-      if (scope !== version.scope || scope !== this.#scope) throw Error('UNSUPPORTED_PATH: scope changed');
+      if (scope !== version.scope || !this.#scopes.has(scope)) throw Error('UNSUPPORTED_PATH: scope changed');
       const current = validateProtectedTextPayload({ text: currentText, attachments });
       if (editRevision !== version.editRevision || digest(current) !== version.digest) throw Error('Stale version');
       await this.#releaseVersion(version, current); return this.#public(version);
@@ -313,7 +342,7 @@ export class ChatGPTProtectionSession {
     this.updateDraft({ text: currentText, attachments, scope, editRevision });
     return this.#serial(async () => {
       const version = this.#activeVersion(id), current = validateProtectedTextPayload({ text: currentText, attachments });
-      if (version.mode === 'Continuous' || scope !== version.scope || scope !== this.#scope
+      if (version.mode === 'Continuous' || scope !== version.scope || !this.#scopes.has(scope)
           || editRevision !== version.editRevision || digest(current) !== version.digest) throw Error('Stale or unsupported retry');
       this.#adapter.assertEligible(scope);
       await this.runtime.retry(id, scope, priorAttempt, explicit);
@@ -360,9 +389,12 @@ export class ChatGPTProtectionSession {
   }
 
   status() {
-    const eligibility = this.#scope ? this.#adapter.eligibility(this.#scope) : 'UNENROLLED';
-    return { scope: this.#scope, eligibility, versions: [...this.#versions.values()].map(value => this.#public(value)) };
+    const scopes = [...this.#scopes].map(scope => ({ scope, eligibility: this.#adapter.eligibility(scope),
+      editRevision: this.#drafts.get(scope)?.editRevision ?? 0 }));
+    const only = scopes.length === 1 ? scopes[0] : null;
+    return { scope: only?.scope ?? null, eligibility: only?.eligibility ?? 'UNENROLLED', scopes,
+      versions: [...this.#versions.values()].map(value => this.#public(value)) };
   }
-  async drain() { await this.#tail; }
+  async drain() { while (this.#tails.size) await Promise.all(this.#tails.values()); }
   close() { this.#closed = true; if (this.#ownsVault) this.vault.close(); emit(this.#diagnostics, 'ENGINE_CLOSED'); }
 }

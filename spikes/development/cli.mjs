@@ -49,7 +49,7 @@ export async function stopDevelopment() {
     }
     let alreadyExited = false;
     try {
-      const response = await fetch(new URL('/close', url), { method: 'POST', redirect: 'error',
+      const response = await fetch(new URL('/engine/exit', url), { method: 'POST', redirect: 'error',
         signal: AbortSignal.timeout(5000), headers: { Origin: url.origin,
           Authorization: `Bearer ${url.hash.slice(1)}`, 'Content-Type': 'application/json' }, body: '{}' });
       if (!response.ok) throw Error('PRIVATE_RUNTIME_STOP_REJECTED');

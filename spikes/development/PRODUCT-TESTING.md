@@ -40,7 +40,8 @@ macOS peer identity, native Keychain, live provider or Algorand assurance.
 Reports always say `SYNTHETIC_FIXTURE` and `liveEvidence: NOT_TESTED`.
 
 The scenarios use the existing trusted-composer product API. They do not establish
-normal ChatGPT Send, a side-panel journey or multi-tab acceptance. Those behaviors
+normal ChatGPT Send or a side-panel journey. The engine and synthetic multi-tab
+scenarios cover independent scopes, while installed multi-tab acceptance remains separate. Those behaviors
 need scenarios alongside their implementations.
 
 ## Target a failure
@@ -57,6 +58,7 @@ npm run test:chatgpt
 
 | Scenario | Expected observed behavior |
 | --- | --- |
+| `resident-view-and-scopes` | Closing/reopening a view, replay and unrelated document changes retain one pinned operation and one provider attempt |
 | `sealed-success` | One synthetic submission, after confirmation and durable authorization consumption |
 | `sealed-delayed-confirmation` | Both operators become observable after bounded retries; one reservation, sponsor broadcast and provider attempt |
 | `confirmation-unavailable` | Confirmation remains pending; no dispatch or authorization |
@@ -76,6 +78,13 @@ legacy unassociated records, recovery, missing bytes and mismatched signing keys
 cancellation copy in a fresh headless Chrome profile against local fixtures,
 including cancellation initiated by another local view. It makes no live provider
 or TestNet requests and does not use the retained test installation.
+
+`node --test test/resident-engine.test.mjs` exercises the resident command contract,
+concurrent revisions, duplicate delivery versus repeated text, per-document scopes,
+policy precedence, pause/cancel/reconnect, singleton ownership and encrypted restart
+without grants. It also interrupts outcome persistence after consumption and checks
+that the restored operation remains unknown without a resend. All vaults, locks,
+sockets and API servers are created in fresh temporary directories with memory keys.
 
 The separate native lifecycle regression executes the actual extension worker
 against a synthetic Chrome API and real relay child processes. It holds browser

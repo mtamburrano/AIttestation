@@ -57,6 +57,7 @@ export class ChromeBridgeController {
       if (message.profile !== command.profile || message.runtimeEpoch !== command.runtimeEpoch
           || message.browserSessionId !== command.browserSessionId || message.scope !== command.scope
           || message.tabId !== command.tabId || message.expectedUrl !== command.expectedUrl
+          || message.windowId !== command.windowId || message.tabEpoch !== command.tabEpoch
           || message.destination !== command.destination || message.payloadDigest !== command.payloadDigest
           || message.textDigest !== command.textDigest) {
         const error = Error('Chrome adapter response did not match the exact release attempt');

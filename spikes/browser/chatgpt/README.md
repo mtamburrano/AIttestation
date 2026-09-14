@@ -6,7 +6,11 @@ Prompt text originates in the trusted local composer. The extension receives byt
 only after the local runtime has durably recorded a release attempt and consumed
 the exact version's authorization. Attachments are unsupported.
 
-## Boundaries and modes
+The [resident engine contract](ENGINE.md) defines independent conversation scopes,
+versioned commands, preferences, operation lifetime and restart behavior. The local
+composer is a labelled development view of that engine.
+
+## Boundaries and development modes
 
 [`runtime-main.mjs`](runtime-main.mjs) is the fixed packaged entrypoint. It opens
 or creates the app-bound Keychain vault, starts the authenticated native bridge,
@@ -95,9 +99,9 @@ The Manifest V3 extension has only `nativeMessaging` and the single
 Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
 that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
 access is disabled. The draft item is not yet a published or verified Web Store
-listing. Adapter profile version 4 requires an acknowledged runtime epoch and
+listing. Adapter profile version 5 requires an acknowledged runtime epoch and
 fresh engine checks before insertion and click. It rejects older extension
-contracts; extension version 1.3.0 uses page contract `chatgpt-web-text/2026-09-14`.
+contracts; extension version 1.4.0 uses page contract `chatgpt-web-text/2026-09-14`.
 Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and
@@ -106,8 +110,9 @@ and local OS/architecture from that same live process chain. The local controlle
 uses only this runtime-side identity and fails closed unless the exact supported
 baseline matches; browser or platform fields sent over the bridge are not accepted.
 
-The background worker requires exactly one active ChatGPT tab and forwards only a
-versioned release command to its top-level frame. Detection recognizes one
+The background worker pins each release to one enrolled tab, window and document
+among up to 32 ChatGPT targets, and forwards its versioned command to that exact
+top-level frame. Detection recognizes one
 supported `#prompt-textarea` independently of Send rendering, and reports draft
 and attachment state separately. A detected provider-side draft remains in place
 and cannot gain pre-disclosure protection. Dispatch still requires an empty
@@ -124,12 +129,13 @@ destination, editor identity, text and attachment checks with no intervening awa
 `PAP_CHECK_RELEASE` checks the already-consumed, still-pending engine attempt
 before insertion and again before click. The worker binds both checks to the
 same content document, top-level frame, tab, phase and native connection, and
-rechecks Chrome permissions and the active destination. Navigation, tab changes
-and disconnect invalidate the in-flight check even if capability later returns.
+rechecks Chrome permissions and the active destination. Navigation or reload of the selected document and disconnect invalidate the
+in-flight check even if capability later returns. Unrelated tabs remain independent.
 The engine verifies the exact draft revision, scope and durable attempt; it
 cannot restore or create authorization through this check. `PAP_RELEASE_CHECKED`
-contains only the correlated check result. The durable release profile remains
-`pap-chatgpt-release/1`, and native peer checks and evidence formats are unchanged.
+contains only the correlated check result. Dispatch uses `pap-chatgpt-release/2` with window and document-epoch correlation.
+Native peer checks and evidence/export formats are unchanged; older release
+records remain historical evidence.
 
 The bridge carries exact UTF-8 bytes as bounded base64. Success records a local
 click observation; provider receipt remains unknown. Once text may have reached
@@ -166,13 +172,14 @@ originating port. Reconnection never queues or replays a release.
 Eligibility is revoked on destination/scope change, browser/runtime restart,
 permission loss, protocol mismatch or transport loss. Edit-revision mismatches
 still reject stale versions. Temporary markup loss, an unavailable content script,
-a nonempty composer, attachments, tab inactivity or an additional ChatGPT tab
+a nonempty composer, attachments or inactivity of the selected tab
 produce `TEMPORARILY_UNAVAILABLE` while retaining the enrolled scope. They block
 admission and release until the same pinned destination is healthy again. Tab URL
 changes, tab removal or an observed different destination invalidate that scope;
 an unknown destination during failed surface inspection cannot establish a change.
-This adapter still admits only one tab; independent concurrent scopes require
-the engine's separate conversation contexts.
+Each enrolled tab has an independent context. The resident engine ends affected
+pending authority on capability loss; a recovered surface permits a fresh action,
+not automatic continuation of an interrupted send.
 Unknown and interrupted attempts are never resent automatically; an explicit retry
 creates a new attempt and consumes a new authorization.
 

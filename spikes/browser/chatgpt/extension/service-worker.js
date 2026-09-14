@@ -1,10 +1,15 @@
-const ADAPTER_PROFILE = 'pap-chatgpt-chrome/4';
-const RELEASE_PROTOCOL = 'pap-chatgpt-release/1';
+const ADAPTER_PROFILE = 'pap-chatgpt-chrome/5';
+const RELEASE_PROTOCOL = 'pap-chatgpt-release/2';
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
 let connection;
 let reconnectDelay = 1000, reconnectTimer;
+const tabEpochs = new Map();
+function tabEpoch(id) {
+  if (!tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
+  return tabEpochs.get(id);
+}
 const current = context => connection === context && !context.closed;
 
 async function bounded(promise) {
@@ -18,12 +23,15 @@ async function bounded(promise) {
 
 async function inspectTabs() {
   const tabs = await bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' }));
+  if (tabs.length > 32) throw Error('TAB_LIMIT');
+  for (const id of tabEpochs.keys()) if (!tabs.some(tab => tab.id === id)) tabEpochs.delete(id);
   return Promise.all(tabs.map(async tab => {
+    const epoch = tabEpoch(tab.id);
     let surface;
     try { surface = await bounded(chrome.tabs.sendMessage(tab.id, { kind: 'PAP_INSPECT', pageContract: PAGE_CONTRACT }, { frameId: 0 })); }
     catch { surface = { surfaceSupported: false, destination: '', composerEmpty: false, attachmentsPresent: false }; }
     return {
-      id: tab.id, url: tab.url ?? '', active: tab.active === true,
+      id: tab.id, windowId: tab.windowId, tabEpoch: epoch, url: tab.url ?? '', active: tab.active === true,
       destination: typeof surface?.destination === 'string' ? surface.destination : '', surfaceSupported: surface?.surfaceSupported === true,
       composerEmpty: surface?.composerEmpty === true, attachmentsPresent: surface?.attachmentsPresent === true,
     };
@@ -54,6 +62,7 @@ function releaseResponse(message, exposure, submitted, observation) {
   return {
     profile: RELEASE_PROTOCOL, runtimeEpoch: message.runtimeEpoch,
     browserSessionId, scope: message.scope, tabId: message.tabId,
+    windowId: message.windowId, tabEpoch: message.tabEpoch,
     expectedUrl: message.expectedUrl, destination: message.destination,
     attemptId: message.attemptId, payloadDigest: message.payloadDigest,
     textDigest: message.textDigest, exposure, submitted,
@@ -64,7 +73,8 @@ function releaseResponse(message, exposure, submitted, observation) {
 async function handleRelease(message, context) {
   if (!current(context) || !context.ready || message.profile !== RELEASE_PROTOCOL || message.browserSessionId !== browserSessionId
       || message.runtimeEpoch !== context.epoch || typeof message.scope !== 'string'
-      || !Number.isSafeInteger(message.tabId) || typeof message.expectedUrl !== 'string'
+      || !Number.isSafeInteger(message.tabId) || !Number.isSafeInteger(message.windowId)
+      || message.tabEpoch !== tabEpoch(message.tabId) || typeof message.expectedUrl !== 'string'
       || typeof message.destination !== 'string' || typeof message.attemptId !== 'string'
       || !message.attemptId.length || message.attemptId.length > 128
       || !/^[a-f0-9]{64}$/.test(message.payloadDigest ?? '')
@@ -73,14 +83,17 @@ async function handleRelease(message, context) {
     return releaseResponse(message, context.attempts.has(message.attemptId) ? 'UNKNOWN' : 'NONE', false);
   }
   context.attempts.add(message.attemptId);
-  const revision = context.revision;
+  const revision = context.authorityRevision;
   if (await permissionState() !== 'granted') return releaseResponse(message, 'NONE', false);
   const tabs = await inspectTabs();
-  if (!current(context) || context.revision !== revision || tabs.length !== 1 || tabs[0].id !== message.tabId || !tabs[0].active
-      || !tabs[0].surfaceSupported || !tabs[0].composerEmpty || tabs[0].attachmentsPresent) {
+  const tab = tabs.find(value => value.id === message.tabId);
+  if (!current(context) || context.authorityRevision !== revision || !tab || !tab.active
+      || tab.windowId !== message.windowId || tab.tabEpoch !== message.tabEpoch
+      || tabEpoch(message.tabId) !== message.tabEpoch
+      || !tab.surfaceSupported || !tab.composerEmpty || tab.attachmentsPresent) {
     return releaseResponse(message, 'NONE', false);
   }
-  if (tabs[0].url !== message.expectedUrl || tabs[0].destination !== message.destination) {
+  if (tab.url !== message.expectedUrl || tab.destination !== message.destination) {
     return releaseResponse(message, 'NONE', false);
   }
   const release = { message, revision: context.authorityRevision, expires: performance.now() + 2000,
@@ -110,7 +123,8 @@ async function handleRelease(message, context) {
 
 function active(context, release) {
   return current(context) && context.ready && context.releases.get(release.message.attemptId) === release
-    && context.authorityRevision === release.revision && performance.now() < release.expires;
+    && context.authorityRevision === release.revision && tabEpochs.get(release.message.tabId) === release.message.tabEpoch
+    && performance.now() < release.expires;
 }
 
 async function checkRelease(message, sender, context) {
@@ -126,8 +140,9 @@ async function checkRelease(message, sender, context) {
   try {
     if (await permissionState() !== 'granted') return false;
     const tabs = await bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' }));
-    if (!active(context, release) || tabs.length !== 1 || tabs[0].id !== release.message.tabId
-        || tabs[0].active !== true || tabs[0].url !== release.message.expectedUrl) return false;
+    const tab = tabs.find(value => value.id === release.message.tabId);
+    if (!active(context, release) || !tab || tab.active !== true || tab.url !== release.message.expectedUrl
+        || tab.windowId !== release.message.windowId || tabEpoch(tab.id) !== release.message.tabEpoch) return false;
     const checkId = crypto.randomUUID();
     const answer = new Promise(resolve => { release.check = { checkId, resolve }; });
     post(context, { kind: 'PAP_CHECK_RELEASE', attemptId: message.attemptId, checkId, phase: message.phase });
@@ -229,10 +244,18 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   } catch {}
 });
 chrome.permissions.onRemoved.addListener(() => publishState(true));
-chrome.tabs.onActivated.addListener(() => publishState(true));
-chrome.tabs.onCreated.addListener(() => publishState(true));
-chrome.tabs.onRemoved.addListener(() => publishState(true));
-chrome.tabs.onUpdated.addListener((_id, change) => {
-  if (change.url || change.status === 'loading' || change.status === 'complete') publishState(true);
+chrome.tabs.onActivated.addListener(() => publishState());
+chrome.tabs.onCreated.addListener(() => publishState());
+chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); publishState(); });
+chrome.tabs.onUpdated.addListener((id, change) => {
+  if (change.url || change.status === 'loading') {
+    if (tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
+    for (const release of connection?.releases.values() ?? []) {
+      if (release.message.tabId === id) release.check?.resolve(false);
+    }
+    // Publish navigation immediately without revoking unrelated tab authority.
+    if (connection) connection.urgent = true;
+    publishState();
+  } else if (change.status === 'complete') publishState();
 });
 connect();

@@ -100,9 +100,13 @@ export async function startPackagedChatGPT({
       },
     } : null;
     if (installation) bridge.waitForPairing().then(() => installation.record('paired')).catch(() => {});
-    composer = await startProductComposer(bridge, { onClose: async () => {
-      await bridge.close(); if (ownedVault) vault.close();
-    } });
+    let closing;
+    const close = () => closing ??= (async () => {
+      // Revoke authority before draining; closing a browser view never calls this.
+      bridge.engine.stop();
+      await composer?.close(); await bridge.close(); if (ownedVault) vault.close();
+    })();
+    composer = await startProductComposer(bridge, { onExit: close });
     if (openBrowser) {
       const browser = spawn('/usr/bin/open', ['-b', 'com.google.Chrome', composer.url], {
         env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore', detached: true,
@@ -112,7 +116,7 @@ export async function startPackagedChatGPT({
     }
     return {
       ...bridge, composerURL: composer.url,
-      async close() { await composer.close(); },
+      close,
     };
   } catch (error) {
     try { await composer?.close(); } catch {}

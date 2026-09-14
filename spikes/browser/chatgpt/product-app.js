@@ -1,10 +1,21 @@
-const secret = location.hash.slice(1); history.replaceState(null, '', '/');
+const secret = location.hash.slice(1) || sessionStorage.getItem('attestamp-view-token') || '';
+if (/^[A-Za-z0-9_-]{43}$/.test(secret)) sessionStorage.setItem('attestamp-view-token', secret);
+history.replaceState(null, '', '/');
 const $ = id => document.getElementById(id);
 let detected = null, scope = null, selected = null, editRevision = 0, busy = false;
 let previewId = null;
 let diagnosticPreviewId = null;
 let installationConfigured = false, releaseChannel = null, updateAvailable = false;
 let capabilityUnavailable = false;
+let engineState = null, selectedOperation = null, refreshSequence = 0;
+let targetChosen = sessionStorage.getItem('attestamp-view-target') !== null, viewTarget = null;
+try { viewTarget = JSON.parse(sessionStorage.getItem('attestamp-view-target')); } catch { targetChosen = true; }
+function selectViewTarget(target) {
+  targetChosen = true;
+  viewTarget = target ? { tabId: target.tabId, windowId: target.windowId,
+    tabEpoch: target.tabEpoch, adapterEpoch: target.adapterEpoch } : null;
+  sessionStorage.setItem('attestamp-view-target', JSON.stringify(viewTarget));
+}
 
 async function api(path, data = {}) {
   const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${secret}` }, body: JSON.stringify(data) });
@@ -96,9 +107,11 @@ action('download-update', async () => {
 });
 
 async function receipt(value) {
+  renderReceipt(value); await loadReceipts();
+}
+function renderReceipt(value) {
   const message = value.message ?? value.managed?.message;
   $('receipt').textContent = `${value.mode}\nState: ${value.state}\nAnchor: ${value.anchor}\nTimestamp: ${value.timestamp}\nVersion: ${value.id}\nEdit revision: ${value.editRevision}${message ? `\n${message}` : ''}`;
-  await loadReceipts();
 }
 
 function invalidatePreview() { previewId = null; $('disclosure-preview').textContent = 'Selection changed. Preview before saving.'; controls(); }
@@ -143,38 +156,75 @@ function action(id, operation) {
 }
 
 async function refresh() {
+  const sequence = ++refreshSequence;
   const selectedId = selected?.id;
-  const state = await api('/status');
+  const selectedWasCancelled = selected?.state === 'CANCELLED';
+  const [state, engine] = await Promise.all([api('/status'), api('/engine/state').catch(() => null)]);
+  if (sequence !== refreshSequence) return;
+  engineState = engine;
+  if (engine) {
+    const list = $('target');
+    list.replaceChildren(new Option('Select a target', ''));
+    for (const target of engine.targets) list.append(new Option(`Window ${target.windowId}, tab ${target.tabId}: ${target.destination}`, String(target.tabId)));
+    if (!targetChosen && engine.targets.length === 1) selectViewTarget(engine.targets[0]);
+    const target = engine.targets.find(value => viewTarget && Object.keys(viewTarget).every(key => value[key] === viewTarget[key]));
+    list.value = target ? String(target.tabId) : '';
+    const enrolled = engine.scopes.find(value => value.tabId === target?.tabId && value.tabEpoch === target?.tabEpoch);
+    if (scope === null && enrolled) {
+      scope = enrolled.scope; editRevision = Math.max(editRevision, enrolled.editRevision);
+      $('scope').textContent = `Enrolled scope: ${scope}\nDestination: ${enrolled.destination}`;
+      const operation = engine.operations.filter(value => value.scope === scope).at(-1);
+      if (!selected && operation) { selectedOperation = operation.id; selected = operation.result ?? null; }
+    }
+    if (selectedOperation) {
+      const operation = engine.operations.find(value => value.id === selectedOperation);
+      if (operation?.result && selected?.state !== 'CANCELLED') selected = operation.result;
+    }
+  }
   if (selected && selected.id === selectedId) {
     const current = state.protection.versions.find(version => version.id === selected.id);
-    const becameCancelled = current?.state === 'CANCELLED' && selected.state !== 'CANCELLED';
+    const becameCancelled = (current?.state === 'CANCELLED' || selected.state === 'CANCELLED') && !selectedWasCancelled;
     // A delayed status reply cannot reopen controls after this view observed cancellation.
-    if (selected.state !== 'CANCELLED') selected = current ?? null;
+    if (selected.state !== 'CANCELLED') selected = current ?? (engine ? selected : null);
     if (becameCancelled) {
       await receipt(selected); $('anchor').textContent = ''; $('status').textContent = selected.message;
     }
   }
-  capabilityUnavailable = state.protection.eligibility === 'TEMPORARILY_UNAVAILABLE';
+  if (selected) renderReceipt(selected);
+  const eligibility = state.protection.scopes?.find(value => value.scope === scope)?.eligibility ?? state.protection.eligibility;
+  const modeState = engine?.scopes.find(value => value.scope === scope);
+  $('engine-mode').textContent = engine?.preferences.paused ? 'Globally paused. History remains available.'
+    : modeState ? `Requested mode: ${modeState.requestedMode}. Effective mode: ${modeState.effectiveMode}.`
+      : 'Select an enrolled target to inspect its effective mode.';
+  capabilityUnavailable = eligibility === 'TEMPORARILY_UNAVAILABLE';
   const tabs = state.browser?.tabs ?? [];
-  detected = tabs.length === 1 && tabs[0].active && tabs[0].surfaceSupported
-    && tabs[0].composerEmpty && !tabs[0].attachmentsPresent ? tabs[0] : null;
+  const target = tabs.find(value => String(value.id) === $('target').value);
+  detected = target?.active && target.surfaceSupported && target.composerEmpty && !target.attachmentsPresent ? target : null;
   $('pairing').textContent = detected
     ? `Detected tab ${detected.id}: ${detected.destination}`
-    : 'No single active, empty, supported ChatGPT tab is paired.';
-  if (state.protection.eligibility === 'REVOKED') {
+    : 'Select an active, empty, supported ChatGPT target.';
+  if (eligibility === 'REVOKED') {
     scope = null; detected = null; selected = null;
     $('scope').textContent = 'Protection eligibility revoked. Existing receipts remain available.';
-    $('pairing').textContent = 'The supported browser or provider state changed. Reopen the app and pair again.';
+    $('pairing').textContent = 'This target changed. Select and enroll its current document before starting another operation.';
   } else if (capabilityUnavailable) {
     $('pairing').textContent = 'ChatGPT is temporarily unavailable for protected sending. Return to the enrolled tab with an empty composer, then refresh.';
   }
 }
 
+$('target').onchange = () => {
+  selectViewTarget(engineState?.targets.find(value => String(value.tabId) === $('target').value));
+  scope = null; selected = null; selectedOperation = null; editRevision = 0;
+  $('draft').value = ''; refresh().then(controls);
+};
+
 action('refresh', refresh);
 action('enroll', async () => {
   if (!detected) throw Error('Refresh and select one supported tab first');
-  const result = await api('/enroll', { tabId: detected.id, destination: detected.destination });
-  scope = result.scope; $('scope').textContent = `Enrolled scope: ${scope}\nDestination: ${result.destination}`;
+  if (!engineState) throw Error('Resident engine unavailable');
+  const { eligible: _eligible, ...target } = engineState.targets.find(value => value.tabId === detected.id);
+  const result = await engineCommand('ENROLL_SCOPE', { target });
+  scope = result.scope; $('scope').textContent = `Enrolled scope: ${scope}\nDestination: ${target.destination}`;
   $('status').textContent = 'Scope enrolled. Compose locally and freeze one exact version.';
 });
 
@@ -189,13 +239,25 @@ $('transaction').addEventListener('input', controls);
 $('mode').addEventListener('change', () => { selected = null; controls(); });
 
 action('freeze', async () => {
-  selected = await api('/freeze', { text: $('draft').value, attachments: [], mode: $('mode').value, scope, editRevision });
+  const result = await engineCommand('DEVELOPMENT_FREEZE', { operationId: crypto.randomUUID(),
+    text: $('draft').value, mode: $('mode').value, scope, editRevision });
+  selectedOperation = result.operationId;
+  for (;;) {
+    const state = await api('/engine/state'), operation = state.operations.find(value => value.id === selectedOperation);
+    if (!operation) throw Error('Operation unavailable. Refresh engine state.');
+    if (operation.settled) { selected = operation.result; break; }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  if (!selected) throw Error('Operation needs attention. Refresh engine state.');
   await receipt(selected);
-  $('status').textContent = selected.mode === 'Continuous'
-    ? `${selected.state}. Released without a pre-disclosure anchor claim.`
-    : 'PENDING_FAST_CONFIRMATION. Nothing has been released.';
-  await anchorManaged();
+  showAnchorStatus();
 });
+
+async function engineCommand(kind, data) {
+  const state = await api('/engine/state');
+  return api('/engine/command', { profile: 'pap-resident-command/1', runtimeEpoch: state.runtimeEpoch,
+    adapterProfile: state.adapterProfile, commandId: crypto.randomUUID(), expectedRevision: state.revision, kind, ...data });
+}
 
 function accountStatus(value) {
   const messages = {
@@ -220,6 +282,9 @@ async function anchorManaged() {
   selected = await api('/managed/anchor', { id: frozen.id, scope,
     currentText: frozen.mode === 'Continuous' ? undefined : $('draft').value, attachments: [], editRevision });
   await receipt(selected);
+  showAnchorStatus();
+}
+function showAnchorStatus() {
   $('status').textContent = selected.managed?.message
     ? `${selected.managed.message} ${selected.mode === 'Continuous' ? 'Local evidence remains; anchoring is pending.' : 'Nothing has been released. Retry or cancel this version.'}`
     : selected.mode === 'Always Protect' ? `${selected.state}. Confirmed exact version was released automatically.`
@@ -256,7 +321,7 @@ action('cancel', async () => {
 
 action('close', async () => {
   clearInterval(pairingTimer); await api('/close'); scope = null; selected = null; detected = null;
-  $('status').textContent = 'Local runtime closed.';
+  $('status').textContent = 'View closed. Attestamp is still running. You can close this browser tab.';
 });
 const pairingTimer = setInterval(() => {
   if (!busy) refresh().then(controls).catch(() => {

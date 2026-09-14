@@ -56,13 +56,15 @@ export function validatePayload(payload) {
 export class ReleaseRuntime {
   #diagnostics;
   #state; #file; #dir; #tail = Promise.resolve(); #dispatch; #fault; #store; #confirm; #validate; #protocol;
+  #revokeOnRestart;
   constructor(directory, dispatch, fault = () => {}, {
-    store, confirm, validate = validatePayload, protocol = 'release-fixture/1', diagnostics = null,
+    store, confirm, validate = validatePayload, protocol = 'release-fixture/1', diagnostics = null, revokeOnRestart = false,
   } = {}) {
     this.#dir = directory; this.#file = join(directory, 'release-test-journal.json');
     this.#dispatch = dispatch; this.#fault = fault;
     this.#store = store; this.#confirm = confirm; this.#validate = validate; this.#protocol = protocol;
     this.#diagnostics = diagnostics;
+    this.#revokeOnRestart = revokeOnRestart;
   }
   async init() {
     try { this.#state = this.#store ? await this.#store.load() : JSON.parse(await readFile(this.#file, 'utf8')); }
@@ -70,6 +72,7 @@ export class ReleaseRuntime {
     for (const a of Object.values(this.#state.attempts)) {
       if (a.state === 'DISPATCHING') a.state = 'OUTCOME_UNKNOWN';
     }
+    if (this.#revokeOnRestart) for (const seal of Object.values(this.#state.seals)) seal.authorization = null;
     await this.#persist(this.#state);
     return this;
   }

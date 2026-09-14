@@ -3,13 +3,14 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Vault } from '../spikes/vault/vault.mjs';
 import { canonical, parseCanonical, unpack } from '../spikes/vault/format.mjs';
 import { LocalReceipts } from '../spikes/recipient/local.mjs';
 import { startProductComposer } from '../spikes/browser/chatgpt/product-server.mjs';
 import { startRecipient } from '../spikes/recipient/server.mjs';
+import { ResidentEngine } from '../spikes/browser/chatgpt/engine.mjs';
 import { ChatGPTProtectionSession } from '../spikes/browser/chatgpt/session.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { ManagedSponsorship, DEFAULT_LIMITS } from '../spikes/managed/service.mjs';
@@ -21,7 +22,7 @@ import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs
 // Every vault, browser profile, key and download is created by this run. Only
 // loopback fixture servers are available; no real browser/provider account opens.
 const root = await mkdtemp(join(tmpdir(), 'provenance-recipient-browser-test-'));
-let chrome, socket, composer, recipient, vault, managedServer, managedService, protection;
+let chrome, socket, composer, recipient, vault, managedServer, managedService, protection, resident;
 try {
   vault = new Vault(join(root, 'vault'), randomBytes(32), undefined, { create: true });
   const malicious = '<img src="https://never.example/tracker" onerror="globalThis.ACTIVE_CONTENT=true"><script>globalThis.ACTIVE_CONTENT=true</script> PRIVATE ORIGINAL';
@@ -108,16 +109,24 @@ try {
   managedServer = await startManagedServer(managedService);
   const account = managedService.provision({ paidThrough: now + 86400000 });
   const client = new ManagedAnchoringClient({ origin: managedServer.origin, keyStore, allowLoopbackForTests: true });
-  const scope = 'isolated-managed-browser-scope';
-  protection = await new ChatGPTProtectionSession(await mkdtemp(join(root, 'managed-client-')), {
-    enroll: () => ({ scope, destination: 'new-chat' }), assertEligible: value => assert.equal(value, scope),
-    eligibility: () => 'ELIGIBLE',
+  const scope = randomUUID(), engineDirectory = await mkdtemp(join(root, 'managed-client-'));
+  const target = { adapterId: 'chrome-chatgpt', adapterEpoch: 'synthetic-browser-session',
+    tabId: 17, windowId: 1, tabEpoch: 'synthetic-document', destination: 'new-chat' };
+  let enrolled = false;
+  const adapter = { capabilities: { observation: false, strictAdmission: true },
+    targets: () => [{ ...target, eligible: true }],
+    scopes: () => enrolled ? [{ ...target, scope, eligibility: 'ELIGIBLE' }] : [],
+    onChange: () => () => {},
+    enroll: () => { enrolled = true; return { scope, destination: 'new-chat' }; },
+    assertEligible: value => { assert.equal(value, scope); return true; }, eligibility: () => 'ELIGIBLE',
     dispatch: async attempt => { released.push(attempt.payload.text); return 'SUBMISSION_OBSERVED'; },
-  }, { vaultKey: randomBytes(32), managed: client, fastTrust: { profile: FAST_CONFIRM_PROFILE },
+  };
+  protection = await new ChatGPTProtectionSession(engineDirectory, adapter, { vaultKey: randomBytes(32), managed: client, fastTrust: { profile: FAST_CONFIRM_PROFILE },
     collectFast: async () => ({ synthetic: true }), verifyFast: () => ({ authorized: true,
       anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED', assurance: FAST_CONFIRM_PROFILE, round: 42 }),
   }).init();
-  composer = await startProductComposer({ session: protection, browserState: () => ({ tabs: [{
+  resident = await new ResidentEngine(engineDirectory, protection, adapter, randomUUID()).init();
+  composer = await startProductComposer({ engine: resident, session: protection, browserState: () => ({ tabs: [{
     id: 17, active: true, surfaceSupported: true, composerEmpty: true, attachmentsPresent: false, destination: 'new-chat',
   }] }) });
   await call('Page.navigate', { url: composer.url });
@@ -136,6 +145,9 @@ try {
   assert.equal(await evaluate("document.querySelector('#transaction').value"), '', 'managed path requires no transaction entry');
   await click('release'); await wait("!document.querySelector('#freeze').disabled && document.querySelector('#status').textContent.includes('SUBMISSION_OBSERVED')");
   assert.deepEqual(released, ['managed browser exact text']);
+  await call('Page.reload');
+  await wait("document.querySelector('#receipt')?.textContent.includes('SUBMISSION_OBSERVED') && !document.querySelector('#freeze').disabled");
+  assert.deepEqual(released, ['managed browser exact text'], 'reopening the view reconstructs state without a second send');
   await draft('quota fallback', 'Always Protect'); await click('freeze');
   await wait("!document.querySelector('#freeze').disabled && document.querySelector('#status').textContent.includes('allowance is used up')");
   assert.equal(released.length, 1);
@@ -202,5 +214,5 @@ try {
   socket?.close();
   if (chrome && chrome.exitCode === null) { const stopped = new Promise(resolve => chrome.once('exit', resolve)); chrome.kill('SIGKILL'); await stopped; }
   await composer?.close(); await recipient?.close(); await managedServer?.close(); managedService?.close();
-  protection?.close(); vault?.close(); await rm(root, { recursive: true, force: true });
+  resident?.stop(); await resident?.drain(); protection?.close(); vault?.close(); await rm(root, { recursive: true, force: true });
 }

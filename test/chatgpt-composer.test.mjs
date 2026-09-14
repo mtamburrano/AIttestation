@@ -7,6 +7,7 @@ import { workerFixture, testTab } from './chrome-worker-fixture.mjs';
 import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID } from '../spikes/browser/chatgpt/adapter.mjs';
 import { ChromeBridgeController } from '../spikes/browser/chatgpt/bridge.mjs';
 import { ChatGPTProtectionSession } from '../spikes/browser/chatgpt/session.mjs';
+import { ResidentEngine } from '../spikes/browser/chatgpt/engine.mjs';
 import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
 import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs';
 
@@ -18,7 +19,8 @@ async function until(check) {
   assert.fail('Synthetic composer fixture timed out');
 }
 
-async function integratedFixture(t, { sendState = 'absent', change = () => {}, loseReply = false, onCheck = () => {}, timeoutMs = 5000 } = {}) {
+async function integratedFixture(t, { sendState = 'absent', change = () => {}, loseReply = false, onCheck = () => {}, timeoutMs = 5000,
+  otherTabs = [], resident = false } = {}) {
   const root = await mkdtemp('/private/tmp/attestamp-composer-test-'), diagnostics = new LocalDiagnostics({ mode: 'SYNTHETIC_FIXTURE' });
   let port, worker, controller, session, pageRelease, permission = true;
   const releases = [];
@@ -33,22 +35,24 @@ async function integratedFixture(t, { sendState = 'absent', change = () => {}, l
     verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
       assurance: FAST_CONFIRM_PROFILE, round: 42 }),
   }).init();
+  const engine = resident ? await new ResidentEngine(root, session, adapter, 'synthetic-runtime-epoch', diagnostics).init() : null;
   const page = pageFixture({ sendState,
     notify: (message, page) => worker.chrome.runtime.onMessage.emit(message, page.sender()),
     authorize: async (message, page) => { await onCheck(message, context); return worker.message(message, page.sender()); },
     onInput: () => change(context),
   });
-  const context = { root, diagnostics, adapter, controller, session, page, releases,
+  const context = { root, diagnostics, adapter, controller, session, page, releases, otherTabs,
     revokePermission() { permission = false; worker.chrome.permissions.onRemoved.emit(); },
     get worker() { return worker; }, get port() { return port; }, get pageRelease() { return pageRelease; } };
   worker = await workerFixture({ clock: { setTimeout, clearTimeout, performance }, permission: async () => permission,
-    query: async () => [testTab({ url: page.location.href })],
+    query: async () => [testTab({ url: page.location.href }), ...context.otherTabs],
     onConnect(value) {
       port = value; port.close = () => controller.disconnect();
       port.send = message => { if (message.kind === 'PAP_RELEASE') assert.fail('Wrong direction'); controller.receive(message); };
     },
     inspect: (_tabId, message, options) => {
       assert.equal(options.frameId, 0);
+      if (_tabId !== 17) { assert.equal(message.kind, 'PAP_INSPECT'); return context.otherTabs.find(tab => tab.id === _tabId); }
       if (message.kind !== 'PAP_RELEASE') return page.send(message);
       releases.push(message);
       const durable = session.runtime.snapshot(), attempt = durable.attempts[message.attemptId];
@@ -57,7 +61,7 @@ async function integratedFixture(t, { sendState = 'absent', change = () => {}, l
       return loseReply ? pageRelease.then(() => new Promise(() => {})) : pageRelease;
     },
   });
-  t.after(async () => { worker.close(); await pageRelease; session.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { worker.close(); await pageRelease; engine?.stop(); await engine?.drain(); session.close(); await rm(root, { recursive: true, force: true }); });
   await until(() => port.messages.some(message => message.kind === 'PAP_HELLO'));
   context.scope = session.enroll({ tabId: 17, destination: testTab().destination }).scope;
   context.run = async (mode = 'Sealed') => {
@@ -251,9 +255,6 @@ test('settle failures and lost replies remain durably unknown and never resend',
       session.updateDraft({ text: page.text, scope, editRevision: 3 }); page.buttons = [page.button];
     } },
     'permission loss': { change: context => { context.revokePermission(); context.page.buttons = [context.page.button]; } },
-    'tab switched and restored': { change: ({ worker, page }) => {
-      worker.chrome.tabs.onActivated.emit(); worker.chrome.tabs.onActivated.emit(); page.buttons = [page.button];
-    } },
     'same URL reload started': { change: ({ worker, page }) => {
       worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' }); page.buttons = [page.button];
     } },
@@ -275,6 +276,20 @@ test('settle failures and lost replies remain durably unknown and never resend',
     assert.ok(context.diagnostics.preview().report.events.some(event => event.code === 'OUTCOME_UNKNOWN'
       && event.operationId === context.diagnostics.id('operationId', version.id)));
   });
+});
+
+test('unrelated tab lifecycle and focus notifications preserve the pinned authorized dispatch', async t => {
+  const context = await integratedFixture(t, { resident: true,
+    otherTabs: [testTab({ id: 18, windowId: 2, active: false })], change: ({ worker, page, otherTabs }) => {
+    otherTabs[0].url = 'https://chatgpt.com/c/other'; otherTabs[0].destination = 'conversation:other';
+    worker.chrome.tabs.onActivated.emit({ tabId: 18 });
+    worker.chrome.tabs.onUpdated.emit(18, { status: 'loading' });
+    worker.chrome.tabs.onCreated.emit({ id: 19 });
+    worker.chrome.tabs.onRemoved.emit(19); page.buttons = [page.button];
+  } });
+  const { result } = await context.run();
+  assert.equal(result.state, 'SUBMISSION_OBSERVED');
+  assert.equal(context.page.clicks(), 1); assert.equal(context.releases[0].tabId, 17);
 });
 
 test('release checks are tied to their exact content document, phase and pending engine attempt', async t => {

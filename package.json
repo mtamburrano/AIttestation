@@ -9,7 +9,7 @@
     "test:private-dev": "node --test test/private-development.test.mjs",
     "test:product": "node spikes/development/product-test.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:chatgpt": "node --test test/chatgpt-browser-path.test.mjs test/chatgpt-composer.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
+    "test:chatgpt": "node --test test/resident-engine.test.mjs test/chatgpt-browser-path.test.mjs test/chatgpt-composer.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
     "test:browser": "node test/browser.mjs",
     "test:algorand": "cd spikes/anchor/algorand && make build test && cd ../../.. && node test/algorand-archive.mjs",
     "demo:release": "node spikes/release/demo.mjs",

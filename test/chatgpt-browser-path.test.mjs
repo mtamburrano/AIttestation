@@ -42,7 +42,7 @@ const connection = (overrides = {}) => ({
   permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*',
   permissionState: 'granted', ...overrides,
 });
-const tab = (overrides = {}) => ({ id: 17, url: 'https://chatgpt.com/', active: true,
+const tab = (overrides = {}) => ({ id: 17, windowId: 1, tabEpoch: 'test-document-epoch', url: 'https://chatgpt.com/', active: true,
   destination: 'new-chat', surfaceSupported: true, composerEmpty: true, attachmentsPresent: false, ...overrides });
 const sync = (adapter, tabs = [tab()], overrides = {}) => adapter.synchronize({
   browserSessionId, permissionState: 'granted', adapterProfile: CHATGPT_ADAPTER_PROFILE,
@@ -58,6 +58,7 @@ const observedResponse = (command, exposure = 'DOM_INJECTED', submitted = true,
   observation = 'LOCAL_CLICK_DISPATCHED') => ({
   profile: command.profile, runtimeEpoch: command.runtimeEpoch,
   browserSessionId: command.browserSessionId, scope: command.scope, tabId: command.tabId,
+  windowId: command.windowId, tabEpoch: command.tabEpoch,
   expectedUrl: command.expectedUrl, destination: command.destination,
   attemptId: command.attemptId, payloadDigest: command.payloadDigest,
   textDigest: command.textDigest, exposure, submitted, observation,
@@ -300,9 +301,9 @@ test('stale edit, scope/tab ambiguity, restart, permission, adapter and provider
       assert.equal(session.status().eligibility, 'REVOKED');
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
-    'multiple ChatGPT tabs': async ({ adapter, session, scope, version }) => {
-      sync(adapter, [tab(), tab({ id: 18, active: false })]);
-      assert.equal(session.status().eligibility, 'TEMPORARILY_UNAVAILABLE');
+    'same URL in a replacement document': async ({ adapter, session, scope, version }) => {
+      sync(adapter, [tab({ tabEpoch: 'replacement-document' })]);
+      assert.equal(session.status().eligibility, 'REVOKED');
       return session.release({ id: version.id, scope, currentText: 'locked', editRevision: 1 });
     },
     'runtime restart': async ({ adapter, session, scope, version }) => {
@@ -381,10 +382,10 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
   assert.equal(manifest.name, 'Attestamp for ChatGPT');
   assert.equal(manifest.short_name, 'Attestamp');
-  assert.equal(manifest.version, '1.3.0');
+  assert.equal(manifest.version, '1.4.0');
   assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
   assert.match(manifest.description, /Attestamp desktop app/);
-  assert.match(manifest.description, /one supported ChatGPT tab/);
+  assert.match(manifest.description, /selected supported ChatGPT tab/);
   assert.deepEqual(manifest.permissions.slice().sort(), ['nativeMessaging']);
   assert.equal(manifest.incognito, 'not_allowed');
   assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*']);

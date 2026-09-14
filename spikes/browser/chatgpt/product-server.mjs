@@ -33,7 +33,7 @@ async function requestBody(request, limit = BODY_LIMIT) {
   return value;
 }
 
-export async function startProductComposer(runtime, { onClose = () => {} } = {}) {
+export async function startProductComposer(runtime, { onClose = () => {}, onExit = null } = {}) {
   if (!runtime?.session || typeof runtime.browserState !== 'function') throw Error('Product runtime required');
   const secret = randomBytes(32).toString('base64url');
   let origin, closed = false;
@@ -81,6 +81,13 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
       }
       switch (request.url) {
         case '/status': value = { browser: runtime.browserState(), protection: runtime.session.status() }; break;
+        case '/engine/state':
+          if (Object.keys(data).length) throw Error('Invalid state request');
+          value = runtime.engine.state(); break;
+        case '/engine/command': value = await runtime.engine.command(data, { surface: 'development' }); break;
+        case '/engine/exit':
+          if (Object.keys(data).length || !onExit) throw Error('Engine exit unavailable');
+          reply(response, 200, { exiting: true }); setImmediate(() => onExit()); return;
         case '/managed/status': value = await runtime.session.managedStatus(); break;
         case '/managed/connect': value = await runtime.session.connectManaged(data); break;
         case '/managed/disconnect': value = runtime.session.disconnectManaged(); break;
@@ -100,7 +107,7 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
           id: data.id, envelope: Buffer.from(data.envelope, 'base64'), trust: data.trust,
         }); break;
         case '/close':
-          reply(response, 200, { closed: true }); setImmediate(() => close()); return;
+          value = { closed: true, engine: 'RUNNING' }; break;
         default: throw Error('Unsupported local composer operation');
       }
       reply(response, 200, value);

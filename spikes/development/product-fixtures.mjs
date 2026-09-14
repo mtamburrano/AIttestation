@@ -1,7 +1,8 @@
 import { PassThrough } from 'node:stream';
 import { join } from 'node:path';
 import { readFile, readdir } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { ENGINE_COMMAND_PROFILE } from '../browser/chatgpt/engine.mjs';
 import { startPackagedChatGPT } from '../browser/chatgpt/runtime-main.mjs';
 import { CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT, CHATGPT_RELEASE_PROTOCOL,
   CHATGPT_EXTENSION_ID, CHROME_BASELINE_MAJOR } from '../browser/chatgpt/adapter.mjs';
@@ -14,7 +15,7 @@ import { MemoryKeyStore } from '../vault/key-lifecycle.mjs';
 import { verifyPortable } from '../recipient/portable.mjs';
 
 export const PRODUCT_SCENARIOS = Object.freeze(['sealed-success', 'sealed-delayed-confirmation', 'confirmation-unavailable',
-  'confirmation-rejected', 'bridge-timeout', 'bridge-response-mismatch', 'account-disconnected', 'account-disconnected-cancel']);
+  'confirmation-rejected', 'bridge-timeout', 'bridge-response-mismatch', 'account-disconnected', 'account-disconnected-cancel', 'resident-view-and-scopes']);
 export const SYNTHETIC_CANARY = 'SYNTHETIC_PRIVATE_PROMPT_e\u0301☕_https://private.invalid/c/secret?token=SECRET_CANARY_<div>PRIVATE_DOM</div>';
 const transactionId = 'A'.repeat(52), sponsorOrigin = 'https://synthetic-sponsor.invalid';
 const trust = Object.freeze({ profile: FAST_CONFIRM_PROFILE, network: MANAGED_NETWORK, genesis: 'synthetic-genesis',
@@ -125,20 +126,47 @@ export async function productFixture(directory, scenario, diagnostics, network) 
     input.write(encodeNativeFrame({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
       adapterProfile: CHATGPT_ADAPTER_PROFILE, releaseProtocol: CHATGPT_RELEASE_PROTOCOL, pageContract: CHATGPT_PAGE_CONTRACT,
       browserSessionId: 'synthetic-browser-session', permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*',
-      permissionState: 'granted', tabs: [{ id: 17, url: 'https://chatgpt.com/c/synthetic-private-conversation',
+      permissionState: 'granted', tabs: [{ id: 17, windowId: 1, tabEpoch: 'synthetic-document-epoch', url: 'https://chatgpt.com/c/synthetic-private-conversation',
         active: true, destination: 'synthetic-private-conversation', surfaceSupported: true, composerEmpty: true, attachmentsPresent: false }] }));
     await deadline(runtime.waitForPairing());
     input.write(encodeNativeFrame({ ...runtime.browserState(), kind: 'PAP_STATE' }));
     invariant((await api('/diagnostics/preview', {}, false)).status === 400);
     invariant((await api('/enroll', { tabId: 17, destination: 'synthetic-private-conversation' })).status === 200);
     const scope = runtime.session.status().scope;
+    let version, observed;
+    if (scenario === 'resident-view-and-scopes') {
+      const state = runtime.browserState(), original = state.tabs[0];
+      input.write(encodeNativeFrame({ ...state, kind: 'PAP_STATE', tabs: [original,
+        { ...original, id: 18, windowId: 2, tabEpoch: 'synthetic-other-document' }] }));
+      for (let i = 0; runtime.adapter.targets().length !== 2 && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      invariant(runtime.adapter.targets().length === 2);
+      const other = await api('/enroll', { tabId: 18, destination: original.destination });
+      invariant(other.status === 200 && other.body.scope !== scope);
+      invariant((await api('/managed/connect', { accessCode: account.accessCode })).status === 200);
+      const snapshot = (await api('/engine/state')).body;
+      const command = { profile: ENGINE_COMMAND_PROFILE, runtimeEpoch: snapshot.runtimeEpoch, adapterProfile: CHATGPT_ADAPTER_PROFILE,
+        commandId: randomUUID(), expectedRevision: snapshot.revision, kind: 'PROTECT_AND_SEND',
+        operationId: randomUUID(), scope, text: SYNTHETIC_CANARY, editRevision: 1 };
+      const accepted = await api('/engine/command', command); invariant(accepted.status === 200);
+      invariant((await api('/close')).body.engine === 'RUNNING');
+      invariant((await api('/engine/command', command)).body.operationId === accepted.body.operationId);
+      runtime.session.updateDraft({ scope: other.body.scope, text: 'UNRELATED_SYNTHETIC_DRAFT', editRevision: 9 });
+      input.write(encodeNativeFrame({ ...state, kind: 'PAP_STATE', tabs: [original,
+        { ...original, id: 18, windowId: 2, tabEpoch: 'synthetic-reloaded-document' }] }));
+      await deadline(runtime.engine.drain());
+      const reopened = (await api('/engine/state')).body;
+      invariant(reopened.operations.length === 1 && reopened.operations[0].state === 'SUBMISSION_OBSERVED');
+      invariant(reopened.operations[0].target.tabId === 17 && providerAttempts === 1);
+      version = reopened.operations[0].result; observed = 'SUBMISSION_OBSERVED';
+      invariant(runtime.adapter.eligibility(scope) === 'ELIGIBLE');
+      invariant((await api('/engine/command', { ...command, text: 'CONFLICTING_SYNTHETIC_REPLAY' })).status === 400);
+    } else {
     const frozen = await api('/freeze', { text: SYNTHETIC_CANARY, mode: 'Sealed', scope, editRevision: 1 });
     invariant(frozen.status === 200 && frozen.body.state === 'PENDING_FAST_CONFIRMATION' && providerAttempts === 0);
-    const version = frozen.body, request = { id: version.id, scope, currentText: SYNTHETIC_CANARY, editRevision: 1 };
+    version = frozen.body; const request = { id: version.id, scope, currentText: SYNTHETIC_CANARY, editRevision: 1 };
     invariant(runtime.session.vault.inspect().objects.some(object => runtime.session.vault.read(object.digest).equals(Buffer.from(SYNTHETIC_CANARY))));
     if (!disconnected) invariant((await api('/managed/connect', { accessCode: account.accessCode })).status === 200);
     const confirmation = await api('/managed/anchor', request);
-    let observed;
     if (scenario.startsWith('confirmation-') || disconnected) {
       invariant(confirmation.status === (disconnected ? 200 : 400));
       invariant(runtime.session.status().versions[0].state === 'PENDING_FAST_CONFIRMATION');
@@ -179,6 +207,7 @@ export async function productFixture(directory, scenario, diagnostics, network) 
       observed = scenario.startsWith('sealed-') ? 'SUBMISSION_OBSERVED' : 'OUTCOME_UNKNOWN';
       invariant(released.status === 200 && released.body.state === observed && providerAttempts === 1);
       invariant((await api('/release', request)).status === 400 && providerAttempts === 1);
+    }
     }
     invariant(broadcasts === (disconnected ? 0 : 1));
     invariant(preparations === broadcasts && sponsorRequests === broadcasts);

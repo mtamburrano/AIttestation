@@ -165,8 +165,7 @@ test('capability loss preserves enrollment while identity and destination loss r
   const state = tabs => ({ ...hello(), kind: 'PAP_STATE', tabs });
   for (const tabs of [[testTab({ active: false })], [testTab({ surfaceSupported: false })],
     [testTab({ destination: '', surfaceSupported: false, composerEmpty: false })],
-    [testTab({ composerEmpty: false })], [testTab({ attachmentsPresent: true })],
-    [testTab(), testTab({ id: 18, active: false, url: 'https://chatgpt.com/c/other', destination: 'conversation:other' })]]) {
+    [testTab({ composerEmpty: false })], [testTab({ attachmentsPresent: true })]]) {
     controller.receive(state(tabs)); assert.equal(adapter.eligibility(scope), 'TEMPORARILY_UNAVAILABLE');
     assert.throws(() => adapter.assertEligible(scope), { code: 'CAPABILITY_UNAVAILABLE' });
     controller.receive(state([testTab()])); assert.equal(adapter.eligibility(scope), 'ELIGIBLE');
@@ -179,8 +178,8 @@ test('capability loss preserves enrollment while identity and destination loss r
   assert.equal(adapter.eligibility(fresh), 'REVOKED');
   assert.throws(() => adapter.enroll({ tabId: 17, destination: testTab().destination }));
   const events = diagnostics.preview().report.events;
-  assert.equal(events.filter(event => event.code === 'CAPABILITY_UNAVAILABLE').length, 6);
-  assert.equal(events.filter(event => event.code === 'CAPABILITY_RESTORED').length, 6);
+  assert.equal(events.filter(event => event.code === 'CAPABILITY_UNAVAILABLE').length, 5);
+  assert.equal(events.filter(event => event.code === 'CAPABILITY_RESTORED').length, 5);
   assert.ok(events.every(event => event.epochId === diagnostics.id('epochId', 'test-epoch')));
 });
 
@@ -229,7 +228,7 @@ test('running extension recovers from normal engine stop/start without reviving 
   await until(() => runtime.browserState() !== null);
   assert.notEqual(runtime.runtimeEpoch, firstEpoch);
   assert.equal(runtime.browserState().browserSessionId, browserSessionId);
-  assert.deepEqual(runtime.session.status(), { scope: null, eligibility: 'UNENROLLED', versions: [] });
+  assert.deepEqual(runtime.session.status(), { scope: null, eligibility: 'UNENROLLED', scopes: [], versions: [] });
   lateReply({ exposure: 'DOM_INJECTED', submitted: true, observation: 'LOCAL_CLICK_DISPATCHED' }); await turn();
   assert.equal(submissions, 1); assert.ok(worker.ports[1].messages.every(message => !message.attemptId));
   assert.throws(() => runtime.session.release(request), /scope changed/);
