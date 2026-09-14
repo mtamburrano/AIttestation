@@ -10,6 +10,7 @@ import { CHATGPT_ADAPTER_PROFILE, CHATGPT_RELEASE_PROTOCOL, CHATGPT_PAGE_CONTRAC
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
+import { ManagedAnchoringClient } from '../spikes/managed/client.mjs';
 
 const tab = (id = 17, overrides = {}) => ({ id, windowId: id, tabEpoch: `document-${id}`, active: true,
   url: 'https://chatgpt.com/c/synthetic-conversation', destination: 'conversation:synthetic-conversation',
@@ -29,7 +30,7 @@ async function until(check) {
   assert.fail('Isolated engine fixture timed out');
 }
 
-async function fixture(t, { collectFast, fault, tabs = [tab()], managed = null } = {}) {
+async function fixture(t, { collectFast, fault, dispatchOutcome = () => 'SUBMISSION_OBSERVED', tabs = [tab()], managed = null } = {}) {
   const root = await mkdtemp('/private/tmp/attestamp-engine-test-'), keyStore = new MemoryKeyStore();
   const attempts = [], confirmations = [], cleanups = [];
   const options = { supportDirectory: root, keyStore, installation: null, fastTrust: { profile: FAST_CONFIRM_PROFILE },
@@ -48,9 +49,12 @@ async function fixture(t, { collectFast, fault, tabs = [tab()], managed = null }
   const installDispatch = () => {
     runtime.adapter.dispatch = async (attempt, isCurrent) => {
       if (fault) await fault(attempt, runtime);
-      if (!isCurrent()) return 'FAILED_BEFORE_EGRESS';
+      // Like the adapter's dispatch guard, a throwing authority check rejects
+      // before this fixture can reach its synthetic provider.
+      try { if (!isCurrent()) return 'FAILED_BEFORE_EGRESS'; }
+      catch { return 'FAILED_BEFORE_EGRESS'; }
       assert.equal(runtime.session.runtime.snapshot().seals[attempt.sealId].authorization, null);
-      attempts.push(attempt); return 'SUBMISSION_OBSERVED';
+      attempts.push(attempt); return dispatchOutcome(attempt, runtime);
     };
   };
   installDispatch();
@@ -121,6 +125,132 @@ test('concurrent commands serialize revisions; delivery retries and repeated equ
   const outcomes = await Promise.allSettled([a, b].map(value => f.engine.command(value, { surface: 'development' })));
   assert.equal(outcomes.filter(value => value.status === 'fulfilled').length, 1);
   assert.match(outcomes[1].reason.message, /STALE_ENGINE_REVISION/);
+});
+
+async function assertCancellationRejectedWithoutWrites(f, operationId) {
+  const state = f.engine.state(), records = f.runtime.session.vault.inspect().records;
+  const durable = f.runtime.session.runtime.snapshot();
+  await assert.rejects(command(f.engine, 'CANCEL_OPERATION', { operationId }), { code: 'OPERATION_UNAVAILABLE' });
+  await f.engine.drain();
+  assert.deepEqual(f.engine.state(), state, 'a rejected cancellation must not change state or revision');
+  assert.deepEqual(f.runtime.session.vault.inspect().records, records, 'a rejected cancellation must not append evidence');
+  assert.deepEqual(f.runtime.session.runtime.snapshot(), durable);
+}
+
+test('terminal cancellation rejects a new command while identical delivery remains read-only', async t => {
+  let submissions = 0;
+  const managed = new ManagedAnchoringClient({ origin: 'https://unused-synthetic.invalid', keyStore: new MemoryKeyStore(),
+    request: async () => { submissions++; assert.fail('DISCONNECTED_FIXTURE_MUST_NOT_SUBMIT'); } });
+  const f = await fixture(t, { managed });
+  const scope = await f.enroll(), input = submit(scope);
+  await command(f.engine, 'PROTECT_AND_SEND', input); await f.engine.drain();
+  assert.equal(f.engine.state().operations[0].state, 'PENDING_FAST_CONFIRMATION');
+  assert.equal(f.engine.state().operations[0].result.managed.state, 'ACCOUNT_REQUIRED');
+  const cancel = envelope(f.engine, 'CANCEL_OPERATION', { operationId: input.operationId });
+  const acknowledgements = await Promise.all([1, 2].map(() => f.engine.command(cancel, { surface: 'development' })));
+  assert.deepEqual(acknowledgements[0], acknowledgements[1]); await f.engine.drain();
+  const state = f.engine.state(), records = f.runtime.session.vault.inspect().records;
+  assert.equal(state.operations[0].state, 'CANCELLED');
+  assert.ok(Object.values(state.operations[0].result.actions).every(value => value === false));
+  assert.deepEqual(await f.engine.command(cancel, { surface: 'development' }), acknowledgements[0]);
+  await f.engine.drain();
+  assert.deepEqual(f.engine.state(), state); assert.deepEqual(f.runtime.session.vault.inspect().records, records);
+  await assertCancellationRejectedWithoutWrites(f, input.operationId);
+  assert.equal(submissions, 0); assert.equal(f.confirmations.length, 0); assert.equal(f.attempts.length, 0);
+  assert.deepEqual(f.runtime.session.runtime.snapshot().attempts, {});
+  const version = state.operations[0].result;
+  const preview = f.runtime.session.receipts.prepare({ ids: [version.descriptorId] });
+  const report = verifyPortable(f.runtime.session.receipts.export(preview.previewId));
+  const target = report.records.find(record => record.recordDigest === version.recordDigest);
+  assert.equal(target.localAssertions.length, 1);
+  assert.equal(target.localAssertions[0].kind, 'release-cancelled');
+  assert.equal(target.localAssertions[0].assurance, 'CLIENT_ASSERTION_ONLY');
+  assert.equal(target.localAssertions[0].providerNonEgress, 'NOT_PROVEN');
+  assert.equal(target.releaseControl, 'UNKNOWN'); assert.equal(target.anchor, 'INDETERMINATE');
+  assert.equal(target.timestamp, 'LOCAL_CLAIMED');
+});
+
+test('cancellation consults the live version and durable seal before an engine snapshot catches up', async t => {
+  for (const boundary of ['session', 'release journal']) await t.test(boundary, async t => {
+    const managed = new ManagedAnchoringClient({ origin: 'https://unused-synthetic.invalid', keyStore: new MemoryKeyStore(),
+      request: async () => assert.fail('DISCONNECTED_FIXTURE_MUST_NOT_SUBMIT') });
+    const f = await fixture(t, { managed });
+    const scope = await f.enroll(), input = submit(scope);
+    await command(f.engine, 'PROTECT_AND_SEND', input); await f.engine.drain();
+    const version = f.engine.state().operations[0].result;
+    if (boundary === 'session') await f.runtime.session.cancel({ id: version.id, scope });
+    else await f.runtime.session.runtime.cancel(version.id, scope, version.digest);
+    assert.equal(f.engine.state().operations[0].stopped, false);
+    assert.equal(f.runtime.session.runtime.snapshot().seals[version.id].cancelled, true);
+    await assertCancellationRejectedWithoutWrites(f, input.operationId);
+    assert.equal(f.confirmations.length, 0); assert.equal(f.attempts.length, 0);
+  });
+});
+
+test('completed release outcomes reject a fresh cancel without changing evidence or stopped state', async t => {
+  for (const outcome of ['SUBMISSION_OBSERVED', 'OUTCOME_UNKNOWN']) await t.test(outcome, async t => {
+    let submissions = 0;
+    const f = await fixture(t, { dispatchOutcome: () => outcome,
+      managed: { status: () => ({ state: 'ACTIVE' }), submit: async () => {
+        submissions++; return { transactionId: 'A'.repeat(52) };
+      } } });
+    const scope = await f.enroll(), input = submit(scope);
+    await command(f.engine, 'PROTECT_AND_SEND', input); await f.engine.drain();
+    assert.equal(f.engine.state().operations[0].state, outcome);
+    assert.equal(f.engine.state().operations[0].stopped, false);
+    await assertCancellationRejectedWithoutWrites(f, input.operationId);
+    assert.equal(submissions, 1); assert.equal(f.confirmations.length, 1); assert.equal(f.attempts.length, 1);
+  });
+});
+
+test('cancellation still ends admitted work before capture completes or while confirmation is pending', async t => {
+  for (const phase of ['capture', 'confirmation']) await t.test(phase, async t => {
+    const wait = deferred(); let waiting = false;
+    const pause = () => { waiting = true; return wait.promise; };
+    const f = await fixture(t, phase === 'confirmation' ? { collectFast: pause } : {});
+    f.cleanups.push(() => wait.resolve({ synthetic: true }));
+    if (phase === 'capture') {
+      const freeze = f.runtime.session.freeze.bind(f.runtime.session);
+      f.runtime.session.freeze = async request => { await pause(); return freeze(request); };
+    }
+    const scope = await f.enroll(), input = submit(scope);
+    await command(f.engine, 'PROTECT_AND_SEND', input); await until(() => waiting);
+    const cancel = envelope(f.engine, 'CANCEL_OPERATION', { operationId: input.operationId });
+    const ack = await f.engine.command(cancel, { surface: 'development' });
+    const state = f.engine.state(), records = f.runtime.session.vault.inspect().records;
+    assert.equal(state.operations[0].stopped, true);
+    assert.deepEqual(await f.engine.command(cancel, { surface: 'development' }), ack);
+    await assert.rejects(command(f.engine, 'CANCEL_OPERATION', { operationId: input.operationId }), { code: 'OPERATION_UNAVAILABLE' });
+    assert.deepEqual(f.engine.state(), state); assert.deepEqual(f.runtime.session.vault.inspect().records, records);
+    wait.resolve({ synthetic: true }); await f.engine.drain();
+    assert.equal(f.engine.state().operations[0].state, 'CANCELLED');
+    assert.equal(f.attempts.length, 0);
+    assert.ok(Object.values(f.runtime.session.runtime.snapshot().seals).every(seal => seal.authorization === null));
+    await assertCancellationRejectedWithoutWrites(f, input.operationId);
+  });
+});
+
+test('cancellation interrupts an active consumed attempt without rewriting possible exposure as cancellation', async t => {
+  for (const phase of ['before egress', 'after egress']) await t.test(phase, async t => {
+    const wait = deferred(); let waiting = false;
+    const pause = async () => { waiting = true; await wait.promise; return 'OUTCOME_UNKNOWN'; };
+    const f = await fixture(t, phase === 'before egress' ? { fault: pause } : { dispatchOutcome: pause });
+    f.cleanups.push(() => wait.resolve());
+    const scope = await f.enroll(), input = submit(scope);
+    await command(f.engine, 'PROTECT_AND_SEND', input); await until(() => waiting);
+    const version = f.engine.state().operations[0].result;
+    const durable = f.runtime.session.runtime.snapshot();
+    assert.equal(durable.attempts[durable.seals[version.id].priorAttempt].state, 'DISPATCHING');
+    assert.equal(version.attempt, null, 'the durable attempt precedes the live outcome');
+    await command(f.engine, 'CANCEL_OPERATION', { operationId: input.operationId });
+    wait.resolve(); await f.engine.drain();
+    assert.equal(f.engine.state().operations[0].state, phase === 'before egress' ? 'FAILED_BEFORE_EGRESS' : 'OUTCOME_UNKNOWN');
+    assert.equal(f.attempts.length, phase === 'before egress' ? 0 : 1);
+    const preview = f.runtime.session.receipts.prepare({ ids: [version.descriptorId] });
+    const report = verifyPortable(f.runtime.session.receipts.export(preview.previewId));
+    assert.ok(report.records.every(record => !record.localAssertions?.some(value => value.kind === 'release-cancelled')));
+    await assertCancellationRejectedWithoutWrites(f, input.operationId);
+  });
 });
 
 test('duplicate-conversation windows retain independent drafts and navigation never retargets another operation', async t => {
@@ -250,6 +380,7 @@ test('an outcome write interrupted after consumption stays unknown across view r
   assert.equal(f.attempts.length, 1); assert.equal(f.engine.state().operations[0].state, 'OUTCOME_UNKNOWN');
   assert.equal(f.engine.state().operations[0].result.state, 'OUTCOME_UNKNOWN');
   assert.deepEqual(await f.engine.command(input, { surface: 'development' }), ack);
+  await assertCancellationRejectedWithoutWrites(f, input.operationId);
   store.save = save; await f.restart();
   assert.equal(f.engine.state().operations[0].state, 'OUTCOME_UNKNOWN');
   assert.equal(f.attempts.length, 1);

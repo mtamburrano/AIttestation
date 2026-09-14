@@ -47,6 +47,14 @@ without merging the two signed prompt records. Acknowledgment means the operatio
 was durably admitted; its subsequent state indicates capture and release outcome.
 No view must remain connected for those stages to finish.
 
+A new cancellation command checks the operation, live version and durable release
+journal before changing state or recording evidence. Stopped, cancelled or restored
+operations and completed release attempts reject it. Replay of the identical
+accepted command still returns its original acknowledgment without a write. Pending capture and
+confirmation remain cancellable. Interrupting an active consumed attempt ends
+future controlled release but retains its eventual observed, failed or unknown
+outcome; it cannot claim that possible exposure was undone.
+
 There are at most 32 current browser targets, 256 persistent conversation
 preferences, 512 recent engine operations and 4,096 command deliveries per engine
 lifetime. Finished recent operations may leave the engine summary while their

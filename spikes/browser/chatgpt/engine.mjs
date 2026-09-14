@@ -244,7 +244,17 @@ export class ResidentEngine {
       }
       case 'CANCEL_OPERATION': {
         operation = this.#state.operations.find(value => value.id === command.operationId);
-        if (!operation || operation.restored) reject('OPERATION_UNAVAILABLE');
+        if (!operation || operation.restored || operation.stopped) reject('OPERATION_UNAVAILABLE');
+        if (operation.versionId) {
+          const version = this.#session.status().versions.find(value => value.id === operation.versionId);
+          const durable = this.#session.runtime.snapshot(), seal = durable.seals[operation.versionId];
+          const attempt = seal && durable.attempts[seal.priorAttempt];
+          // Live outcomes and the release journal can precede engine snapshots.
+          // Only a still-running consumed attempt can be interrupted; its
+          // eventual outcome must retain any possible exposure.
+          if (!version || !seal || version.state === 'CANCELLED' || seal.cancelled || version.attempt
+              || (seal.priorAttempt && (attempt?.state !== 'DISPATCHING' || operation.settled))) reject('OPERATION_UNAVAILABLE');
+        } else if (operation.settled) reject('OPERATION_UNAVAILABLE');
         operation.stopped = true;
         if (operation.versionId) this.#track(this.#session.interruptVersion(operation.versionId).then(() => this.#syncOperations()));
         break;
