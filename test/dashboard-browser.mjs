@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { continuousFixture, until } from './continuous-fixture.mjs';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
+import { disclosureRegressions } from './dashboard-disclosure-browser.mjs';
 
 // Real local UI, fresh browser profile/vault and synthetic provider and sponsor.
 const root = await mkdtemp('/private/tmp/attestamp-dashboard-browser-test-');
@@ -75,6 +76,7 @@ try {
   assert.equal(await evaluate('document.title'), 'Attestamp · Your prompts');
   assert.doesNotMatch(await evaluate('document.body.innerText'), /SYNTHETIC_DASHBOARD_CANARY/);
   await click('pause'); await wait("document.querySelector('#effective-state').textContent === 'Paused for all conversations'");
+  await disclosureRegressions({ call, evaluate, wait, click, root });
   await evaluate("document.querySelector('#prompts input').click()"); await click('preview-export');
   await wait("!document.querySelector('#save-export').disabled");
   assert.match(await evaluate("document.querySelector('#preview-texts').textContent"), /SYNTHETIC_DASHBOARD_CANARY/);

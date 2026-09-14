@@ -4,7 +4,7 @@ if (/^[A-Za-z0-9_-]{43}$/.test(token)) sessionStorage.setItem('attestamp-dashboa
 const section = new URL(location.href).searchParams.get('section');
 history.replaceState(null, '', '/dashboard');
 if (['history', 'settings', 'integrations'].includes(section)) $(section).scrollIntoView();
-let state, busy = false, closed = false, previewId = null, supportId = null, recovery = null, recoveryTimer, updateAvailable = false;
+let state, busy = false, closed = false, acceptedPreview = null, selectionRevision = 0, supportId = null, recovery = null, recoveryTimer, updateAvailable = false;
 const selected = new Set();
 const states = {
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
@@ -34,7 +34,7 @@ function controls() {
   for (const button of document.querySelectorAll('button')) button.disabled = busy || closed;
   for (const id of ['enable', 'disable', 'prepare-remove']) $(id).disabled ||= !state?.integration.manageable;
   for (const id of ['pause', 'apply-default']) $(id).disabled ||= !state?.available;
-  $('save-export').disabled ||= !previewId; $('save-support').disabled ||= !supportId;
+  $('save-export').disabled ||= !acceptedPreview || !currentSelection(acceptedPreview.selection); $('save-support').disabled ||= !supportId;
   $('store').disabled ||= !state?.integration.storeAvailable;
   $('check-update').disabled ||= !state?.integration.updatesAvailable;
   $('download-update').disabled ||= !state?.integration.updatesAvailable || !updateAvailable;
@@ -53,7 +53,17 @@ async function command(kind, data = {}) {
     expectedRevision: state.revision, adapterProfile: state.adapterProfile, commandId: crypto.randomUUID(), kind, ...data });
   await refresh();
 }
-function invalidatePreview() { previewId = null; $('preview').hidden = true; controls(); }
+function currentSelection(selection) {
+  return !closed && selection.revision === selectionRevision
+    && selection.includeEvidence === $('include-evidence').checked
+    && selection.ids.length === selected.size && selection.ids.every(id => selected.has(id));
+}
+function invalidatePreview() {
+  // Changing back to the original controls must not revive an outstanding request.
+  selectionRevision++; acceptedPreview = null; $('preview').hidden = true;
+  for (const id of ['disclosure-notice', 'preview-texts', 'preview-summary', 'preview-details']) $(id).replaceChildren();
+  controls();
+}
 function choice(id, text) {
   const label = node('label', ''), input = document.createElement('input'); input.type = 'checkbox'; input.value = id; input.checked = selected.has(id);
   input.onchange = () => { if (input.checked) selected.add(id); else selected.delete(id); invalidatePreview(); };
@@ -140,14 +150,23 @@ function download(bytes, name, type = 'application/json') {
 }
 $('include-evidence').onchange = invalidatePreview;
 action('preview-export', async () => {
-  previewId = null;
-  const preview = await api('/receipts/preview', { ids: [...selected], includeEvidence: $('include-evidence').checked });
-  previewId = preview.previewId; $('preview').hidden = false; $('disclosure-notice').textContent = preview.disclosureNotice;
+  invalidatePreview();
+  const selection = Object.freeze({ revision: selectionRevision, ids: Object.freeze([...selected]), includeEvidence: $('include-evidence').checked });
+  const preview = await api('/receipts/preview', { ids: selection.ids, includeEvidence: selection.includeEvidence });
+  if (!currentSelection(selection)) return;
+  acceptedPreview = Object.freeze({ previewId: preview.previewId, selection });
+  $('preview').hidden = false; $('disclosure-notice').textContent = preview.disclosureNotice;
   $('preview-texts').replaceChildren(...preview.texts.map(value => node('pre', value.preview ?? 'Exact bytes excluded')));
-  $('preview-summary').textContent = `${selected.size} selected receipts. ${preview.evidenceObjects} evidence objects; ${preview.publicProofObjects} portable proof objects. ${preview.exportBytes} bytes. Signed metadata and links are included.`;
+  $('preview-summary').textContent = `${selection.ids.length} selected receipts. ${preview.evidenceObjects} evidence objects; ${preview.publicProofObjects} portable proof objects. ${preview.exportBytes} bytes. Signed metadata and links are included.`;
   $('preview-details').textContent = JSON.stringify(preview, null, 2);
 });
-action('save-export', async () => { const result = await api('/receipts/export', { previewId }); download(result.content, 'attestamp-evidence.json'); $('message').textContent = 'Reviewed evidence export saved.'; });
+action('save-export', async () => {
+  const preview = acceptedPreview;
+  if (!preview || !currentSelection(preview.selection)) { invalidatePreview(); return; }
+  const result = await api('/receipts/export', { previewId: preview.previewId });
+  if (acceptedPreview !== preview || !currentSelection(preview.selection)) return;
+  download(result.content, 'attestamp-evidence.json'); $('message').textContent = 'Reviewed evidence export saved.';
+});
 action('verifier', () => api('/dashboard/verifier'));
 action('store', () => api('/installation/store'));
 action('check-update', async () => {
@@ -175,9 +194,9 @@ action('preview-support', async () => { supportId = null; const preview = await 
 action('save-support', async () => { const result = await api('/diagnostics/export', { previewId: supportId }); download(result.content, 'attestamp-support.json'); });
 action('development', async () => { location.href = `/#${token}`; });
 action('close', async () => {
-  await api('/close'); closed = true; clearInterval(timer); clearRecovery();
+  await api('/close'); closed = true; clearInterval(timer); invalidatePreview(); clearRecovery();
   $('message').textContent = 'Dashboard closed. Attestamp is still running. You can close this browser tab.';
 });
 const timer = setInterval(() => { if (!busy && !closed) void refresh(); }, 2000);
-addEventListener('beforeunload', () => { clearInterval(timer); clearRecovery(); });
+addEventListener('beforeunload', () => { closed = true; clearInterval(timer); invalidatePreview(); clearRecovery(); });
 void refresh();

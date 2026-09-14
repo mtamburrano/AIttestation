@@ -51,6 +51,10 @@ view. Cancellation and delivery uncertainty remain visible without automatic ret
 
 Local save, pending anchor, local source corroboration and retained portable proof
 have distinct labels. Prompt text appears only in an explicit disclosure preview.
+Each preview and Save action is bound to one immutable receipt selection and
+Include exact evidence choice. Changing either clears the preview and invalidates
+outstanding responses, even if the original choice is restored before they arrive.
+An unchanged selection survives status refreshes and exports the reviewed snapshot.
 Exports reuse the existing portable format and independent verifier. Recovery
 uses the existing encrypted snapshot and a separately downloaded binary key.
 Prepared copies expire after one minute or view closure. Existing recovery tools
@@ -66,8 +70,10 @@ explicit feedback and tells the user to close the remaining browser tab.
   harness with synthetic dependencies and explicit loopback-only networking.
 - `npm run test:dashboard-browser`: actual dashboard rendering and controls in a
   fresh headless Chrome profile; includes close/reopen, pause, account loss, export,
-  reversible integration, hostile text and narrow-screen layout. It saves a
-  synthetic screenshot in a new temporary directory.
+  reversible integration, hostile text and narrow-screen layout. Deterministic
+  response gates cover receipt/evidence changes during preview and export, later
+  refreshes and unchanged-selection downloads with and without exact evidence.
+  It saves a synthetic screenshot in a new temporary directory.
 - `npm run test:recipient-browser`: additional legacy development/export flows.
   Its pre-existing post-reload quota scenario currently fails on the unchanged
   baseline. The dashboard browser check independently covers free verifier
