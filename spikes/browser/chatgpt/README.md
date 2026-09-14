@@ -39,9 +39,20 @@ three GET-only reads per operator (pending transaction, exact round block, and
 SHA-256 transaction proof). It requires HTTPS, disables environment proxies,
 rejects redirects and origin/path/query escapes, bounds connect/TLS/header/body
 work, and has an 18-second process budget inside the collector's hard 20-second
-two-source budget. The two operators are launched concurrently. Timeout, source
-error, pool error, expiry, disagreement, or malformed proof returns no
-authorization. Protected releases stay pending; they never fall back to Continuous.
+two-source budget. The two operators are launched concurrently. An operator's
+pending-transaction HTTP 404 with a valid error body, or an intact signed
+transaction still in the pool with no pool error, permits another observation.
+Backoff is 100, 200, 400, 800, then at most 1,000 ms, inside that same deadline;
+a successful operator is retained. Retry outcomes use the additive
+`pap-algod-observer-retry/1` profile and exit status 2, bound to the requested
+transaction ID. The request and evidence profiles remain unchanged.
+
+Retries never call sponsorship or broadcast. Once an operator reports a confirmed
+round, a failed block/proof read is terminal for that attempt; partial evidence is
+not discarded and retried. Other HTTP errors, observer failures, pool rejection,
+expiry, disagreement and malformed proof provide no authorization. Protected
+releases stay pending; they never fall back to Continuous. Correlated local
+diagnostics record only fixed transient, expiry and outcome codes.
 
 ## Managed account and sponsorship
 

@@ -12,7 +12,7 @@ import { ManagedAnchoringClient } from '../managed/client.mjs';
 import { MANAGED_NETWORK } from '../managed/protocol.mjs';
 import { MemoryKeyStore } from '../vault/key-lifecycle.mjs';
 
-export const PRODUCT_SCENARIOS = Object.freeze(['sealed-success', 'confirmation-unavailable',
+export const PRODUCT_SCENARIOS = Object.freeze(['sealed-success', 'sealed-delayed-confirmation', 'confirmation-unavailable',
   'confirmation-rejected', 'bridge-timeout', 'bridge-response-mismatch', 'account-disconnected']);
 export const SYNTHETIC_CANARY = 'SYNTHETIC_PRIVATE_PROMPT_e\u0301☕_https://private.invalid/c/secret?token=SECRET_CANARY_<div>PRIVATE_DOM</div>';
 const transactionId = 'A'.repeat(52), sponsorOrigin = 'https://synthetic-sponsor.invalid';
@@ -44,9 +44,11 @@ export async function productFixture(directory, scenario, diagnostics, network) 
   invariant(PRODUCT_SCENARIOS.includes(scenario), 'UNKNOWN_SCENARIO');
   invariant(typeof network?.allowRuntime === 'function', 'FIXTURE_NETWORK_FORBIDDEN');
   const keyStore = new MemoryKeyStore(), input = new PassThrough(), output = new PassThrough();
-  let runtime, socket, payload, providerAttempts = 0, broadcasts = 0, failure, revokeNetwork;
+  let runtime, socket, payload, providerAttempts = 0, broadcasts = 0, preparations = 0, sponsorRequests = 0, failure, revokeNetwork;
+  const observations = { a: 0, b: 0 };
   const service = new ManagedSponsorship(join(directory, 'synthetic-ledger'), { sponsor: {
     async prepare(value) {
+      preparations++;
       payload = value;
       return { network: MANAGED_NETWORK, transactionId, feeMicroAlgos: 1000,
         signedTransaction: Buffer.from('SYNTHETIC_TRANSACTION_NO_NETWORK').toString('base64') };
@@ -54,26 +56,32 @@ export async function productFixture(directory, scenario, diagnostics, network) 
     async broadcast() { broadcasts++; },
   } });
   const account = service.provision({ paidThrough: Date.now() + 60_000 });
+  const initialRemaining = service.account(account.accessCode).remaining;
   const managed = new ManagedAnchoringClient({ origin: sponsorOrigin, keyStore,
     request: async (origin, path, token, body) => {
       invariant(origin === sponsorOrigin, 'FIXTURE_NETWORK_FORBIDDEN');
       if (path === '/v1/account' && body === undefined) return service.account(token);
-      if (path === '/v1/anchors') return service.anchor(token, body);
+      if (path === '/v1/anchors') { sponsorRequests++; return service.anchor(token, body); }
       invariant(false, 'FIXTURE_NETWORK_FORBIDDEN');
     } });
-  const observe = async () => {
-    if (scenario === 'confirmation-unavailable') throw Object.assign(Error(SYNTHETIC_CANARY), { code: 'PENDING_FAST_CONFIRMATION' });
-    return { profile: 'synthetic-confirmation/1', network: MANAGED_NETWORK, genesis: 'synthetic-genesis',
-      consensus: 'synthetic', transaction: 'synthetic', signedTxnInBlock: 'synthetic', fullHeader: 'synthetic', transactionProof: 'synthetic',
+  const observe = async (operator, request) => {
+    invariant(request.transactionId === transactionId);
+    const attempt = observations[operator.id]++;
+    if (scenario === 'confirmation-unavailable') throw Object.assign(Error(SYNTHETIC_CANARY), { code: 'ALGOD_NOT_YET_OBSERVABLE' });
+    if (scenario === 'sealed-delayed-confirmation' && attempt < (operator.id === 'a' ? 1 : 2)) {
+      throw Object.assign(Error(SYNTHETIC_CANARY), { code: operator.id === 'a' ? 'ALGOD_NOT_YET_OBSERVABLE' : 'ALGOD_NOT_YET_CONFIRMED' });
+    }
+    return { profile: FAST_CONFIRM_PROFILE, network: MANAGED_NETWORK, genesis: 'synthetic-genesis',
+      consensus: 'synthetic', transaction: 'synthetic', signedTxnInBlock: 'synthetic', fullHeader: 'synthetic', transactionProof: { synthetic: true },
       transactionId, confirmedRound: 42, blockHeaderHash: 'synthetic', sourceClaimedTime: 'synthetic',
       poolError: '', error: '', expired: false };
   };
   try {
     runtime = await startPackagedChatGPT({ supportDirectory: join(directory, 'engine'), keyStore, fastTrust: trust,
       managed, installation: null, diagnostics, openBrowser: false, controllerTimeoutMs: 50,
-      collectFast: request => collectFastEvidence({ ...request, observe, waitMs: 250 }),
+      collectFast: request => collectFastEvidence({ ...request, observe, waitMs: scenario === 'sealed-delayed-confirmation' ? 1500 : 250 }),
       verifyFast: (evidence, _trust, expected) => {
-        invariant(evidence.profile === 'synthetic-confirmation/1' && expected === payload);
+        invariant(evidence.profile === FAST_CONFIRM_PROFILE && evidence.transaction === 'synthetic' && expected === payload);
         if (scenario === 'confirmation-rejected') throw Object.assign(Error(SYNTHETIC_CANARY), { code: 'INVALID_FAST_CONFIRMATION' });
         return { authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
           assurance: FAST_CONFIRM_PROFILE, round: 42, reason: 'SYNTHETIC_FIXTURE_ONLY' };
@@ -140,11 +148,15 @@ export async function productFixture(directory, scenario, diagnostics, network) 
     } else {
       invariant(confirmation.status === 200 && confirmation.body.state === 'SEALED_NOT_SENT');
       const released = await api('/release', request);
-      observed = scenario === 'sealed-success' ? 'SUBMISSION_OBSERVED' : 'OUTCOME_UNKNOWN';
+      observed = scenario.startsWith('sealed-') ? 'SUBMISSION_OBSERVED' : 'OUTCOME_UNKNOWN';
       invariant(released.status === 200 && released.body.state === observed && providerAttempts === 1);
       invariant((await api('/release', request)).status === 400 && providerAttempts === 1);
     }
     invariant(broadcasts === (scenario === 'account-disconnected' ? 0 : 1));
+    invariant(preparations === broadcasts && sponsorRequests === broadcasts);
+    invariant(service.account(account.accessCode).remaining === initialRemaining - broadcasts);
+    if (scenario === 'sealed-delayed-confirmation') invariant(observations.a === 2 && observations.b === 3);
+    if (scenario === 'confirmation-rejected') invariant(observations.a === 1 && observations.b === 1);
     if (failure) throw failure;
     const selected = diagnostics.id('operationId', version.id);
     const preview = await api('/diagnostics/preview', { operationIds: [selected] });

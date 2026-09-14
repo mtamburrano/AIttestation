@@ -307,10 +307,11 @@ test('later State-Proof verification upgrades assurance without rewriting fast r
 
 test('collector queries both configured operators concurrently and maps only bounded corroboration evidence', async () => {
   const starts = []; let tick = 0;
-  const evidence = await collectFastEvidence({ trust: fastTrust, now: () => [0, 12][tick++], observe: async operator => {
+  const transactionId = 'A'.repeat(52);
+  const evidence = await collectFastEvidence({ trust: fastTrust, transactionId, now: () => tick++ ? 12 : 0, observe: async operator => {
     starts.push(operator.id);
     return { profile: FAST_CONFIRM_PROFILE, network: 'testnet-v1.0', genesis: 'test-genesis', consensus: 'consensus',
-      transactionId: 'tx', confirmedRound: 7, blockHeaderHash: 'header', sourceClaimedTime: '2026-09-10T12:00:00Z',
+      transactionId, confirmedRound: 7, blockHeaderHash: 'header', sourceClaimedTime: '2026-09-10T12:00:00Z',
       poolError: '', error: '', expired: false, transaction: 'tx-bytes', signedTxnInBlock: 'stib', fullHeader: 'header-bytes',
       transactionProof: { hashtype: 'sha256' } };
   }});

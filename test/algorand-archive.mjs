@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { parseCanonical, canonical } from '../spikes/vault/format.mjs';
 import { verifyDisclosure } from '../spikes/vault/records.mjs';
 import { verifyAnchor } from '../spikes/anchor/verifier.mjs';
-import { FAST_CONFIRM_PROFILE, verifyFastConfirmation } from '../spikes/anchor/algorand/fast-confirm.mjs';
+import { FAST_CONFIRM_PROFILE, collectFastEvidence, verifyFastConfirmation } from '../spikes/anchor/algorand/fast-confirm.mjs';
 
 const root = new URL('../spikes/anchor/algorand/proof/testdata/', import.meta.url);
 const bundle = readFileSync(new URL('anchor-envelope.json', root));
@@ -48,4 +48,18 @@ assert.equal(fast.anchor, 'SOURCE_CORROBORATED'); assert.equal(fast.timestamp, '
 assert.equal(fast.authorized, true); assert.equal(fast.round, archive.round);
 const conflict = structuredClone(evidence); conflict.sources[1].confirmedRound++;
 assert.throws(() => verifyFastConfirmation(conflict, fastTrust, expectedPayload), /not authorized/);
+const observations = { 'operator-a': 0, 'operator-b': 0 };
+const collected = await collectFastEvidence({ trust: fastTrust, transactionId: archive.transactionId, waitMs: 1500,
+  observe: async operator => {
+    if (observations[operator.id]++ === 0) throw Object.assign(Error('isolated pending fixture'), { code: 'ALGOD_NOT_YET_CONFIRMED' });
+    return { ...evidence, ...evidence.sources[operators.findIndex(value => value.id === operator.id)] };
+  } });
+assert.equal(verifyFastConfirmation(collected, fastTrust, expectedPayload).authorized, true);
+assert.deepEqual(observations, { 'operator-a': 2, 'operator-b': 2 });
+const wrongPayload = Buffer.from(expectedPayload); wrongPayload[4] ^= 1;
+assert.throws(() => verifyFastConfirmation(collected, fastTrust, wrongPayload), /not authorized/);
+const badSignature = structuredClone(collected);
+const signedBytes = Buffer.from(badSignature.signedTxnInBlock, 'base64'); signedBytes[15] ^= 1;
+badSignature.signedTxnInBlock = signedBytes.toString('base64');
+assert.throws(() => verifyFastConfirmation(badSignature, fastTrust, expectedPayload), /not authorized/);
 console.log(`PASS: fast two-operator inclusion at round ${fast.round}, then archived State-Proof upgrade; forged, conflicting, or missing roots fail closed.`);

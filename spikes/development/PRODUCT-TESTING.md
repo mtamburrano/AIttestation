@@ -48,6 +48,7 @@ need scenarios alongside their implementations.
 ```sh
 npm run test:product -- --scenario bridge-timeout
 npm run test:product -- --scenario confirmation-unavailable
+npm run test:product -- --scenario sealed-delayed-confirmation
 npm run test:product -- --list
 node --test test/native-bridge-lifecycle.test.mjs
 npm run test:chatgpt
@@ -56,6 +57,7 @@ npm run test:chatgpt
 | Scenario | Expected observed behavior |
 | --- | --- |
 | `sealed-success` | One synthetic submission, after confirmation and durable authorization consumption |
+| `sealed-delayed-confirmation` | Both operators become observable after bounded retries; one reservation, sponsor broadcast and provider attempt |
 | `confirmation-unavailable` | Confirmation remains pending; no dispatch or authorization |
 | `confirmation-rejected` | Invalid confirmation rejected; no dispatch or authorization |
 | `bridge-timeout` | One attempt, unknown outcome, no automatic resend |
@@ -69,6 +71,18 @@ new-epoch pairing without replaying an interrupted release. It also covers bound
 backoff, stale async callbacks and recoverable provider capability changes, with
 correlated content-free diagnostics. Every process, socket and encrypted vault
 belongs to that fresh test run; installed Chrome and macOS identity are not claimed.
+
+`node --test test/fast-confirmation.test.mjs` covers the real collector and observer
+process boundary with static recorded evidence, injected observations and fresh
+temporary helper processes. It exercises either/both delayed operators, permanent
+absence, cancellation, process/output limits, invalid configuration and conflicting
+evidence. `npm run test:chatgpt` includes it. `npm run test:algorand` additionally
+checks the Go observer's response classification with isolated transports and TLS
+fixtures, plus the real cryptographic verifier against recorded public evidence.
+The product runner checks correlated retry/timeout diagnostics and verifies that
+retries use one original transaction, one reservation and one sponsor request.
+These tests do not submit TestNet transactions, send provider prompts or touch the
+retained private test installation.
 
 The composer regression in `test/chatgpt-composer.test.mjs` runs the actual content
 script and background worker against a synthetic DOM and Chrome API, connected to

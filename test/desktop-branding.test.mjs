@@ -61,6 +61,8 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
   // Keep the historical baseline frozen. Enumerate epoch-handshake and bounded
   // dispatch-check migrations independently of production constants.
   const expectedSources = { ...baseline.sources,
+    'spikes/anchor/algorand/cmd/fastobserve/main.go': ['pap-algod-observer-request/1', 'pap-algod-observer-retry/1'],
+    'spikes/anchor/algorand/fast-confirm.mjs': ['PAP_ALGORAND_FAST_CONFIRM_V1', 'pap-algod-observer-request/1', 'pap-algod-observer-retry/1'],
     'spikes/browser/chatgpt/adapter.mjs': ['medilhopfckldjgdnchfkpmfmfnkadca', 'pap-chatgpt-chrome/4', 'pap-chatgpt-release/1'],
     'spikes/browser/chatgpt/bridge-runtime.mjs': ['PAP_BRIDGE_AUTH', 'PAP_BRIDGE_READY', 'PAP_HELLO', 'PAP_HELLO', 'PAP_STATE', 'pap-native-peer-validation/1'],
     'spikes/browser/chatgpt/bridge.mjs': ['PAP_CHECK_RELEASE', 'PAP_HELLO', 'PAP_READY', 'PAP_RELEASE', 'PAP_RELEASE_CHECKED', 'PAP_STATE'],

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,19 +18,31 @@ import (
 	"time"
 
 	"github.com/algorand/go-algorand-sdk/v2/client/v2/algod"
+	"github.com/algorand/go-algorand-sdk/v2/client/v2/common"
 	"github.com/algorand/go-algorand-sdk/v2/client/v2/common/models"
+	sdkcrypto "github.com/algorand/go-algorand-sdk/v2/crypto"
 	"github.com/algorand/go-algorand-sdk/v2/encoding/msgpack"
+	"github.com/algorand/go-algorand-sdk/v2/types"
 	"provenance.local/algorand/proof"
 )
 
 const (
 	requestProfile    = "pap-algod-observer-request/1"
+	retryProfile      = "pap-algod-observer-retry/1"
 	requestLimit      = 16 << 10
 	responseBodyLimit = 16 << 20
 	observationBudget = 18 * time.Second
 )
 
 var transactionIDPattern = regexp.MustCompile(`^[A-Z2-7]{52}$`)
+
+type retryObservation struct {
+	Profile       string `json:"profile"`
+	TransactionID string `json:"transactionId"`
+	Reason        string `json:"reason"`
+}
+
+func (r retryObservation) Error() string { return r.Reason }
 
 type observerRequest struct {
 	Profile       string             `json:"profile"`
@@ -101,6 +115,10 @@ func (t allowlistedTransport) RoundTrip(request *http.Request) (*http.Response, 
 		response.Body.Close()
 		return nil, fmt.Errorf("algod redirects are not accepted")
 	}
+	if response.StatusCode > 200 && response.StatusCode < 300 {
+		response.Body.Close()
+		return nil, fmt.Errorf("unexpected algod response status")
+	}
 	if response.ContentLength > t.maximumBody {
 		response.Body.Close()
 		return nil, fmt.Errorf("algod response exceeded the byte limit")
@@ -172,12 +190,34 @@ func observe(ctx context.Context, request observerRequest, base http.RoundTrippe
 	if err != nil {
 		return observation{}, err
 	}
-	pending, signed, err := pendingClient.PendingTransactionInformation(request.TransactionID).Do(ctx)
+	pendingBytes, err := (*common.Client)(pendingClient).GetRaw(ctx, "/v2/transactions/pending/"+request.TransactionID,
+		algod.PendingTransactionInformationParams{Format: "msgpack"}, nil)
 	if err != nil {
+		var missing common.NotFound
+		var response models.ErrorResponse
+		if errors.As(err, &missing) && proof.DecodeJSON([]byte(missing.Message), &response) == nil && response.Message != "" {
+			return observation{}, retryObservation{retryProfile, request.TransactionID, "ALGOD_NOT_YET_OBSERVABLE"}
+		}
 		return observation{}, fmt.Errorf("algod pending-transaction observation failed: %w", err)
 	}
-	if pending.PoolError != "" || pending.ConfirmedRound == 0 {
-		return observation{}, fmt.Errorf("algod has not supplied an unambiguous confirmed round")
+	// The SDK's REST decoder ignores trailing bytes and unknown fields. Bound
+	// and decode the complete response before it can authorize another attempt.
+	var pending models.PendingTransactionInfoResponse
+	if err = proof.DecodeMessagePack(pendingBytes, &pending); err != nil {
+		return observation{}, fmt.Errorf("malformed algod pending-transaction observation: %w", err)
+	}
+	signed := pending.Transaction
+	// Only an intact transaction still in the pool may be retried. A pool
+	// rejection or conflicting signed identity must never become a later success.
+	transactionBytes := msgpack.Encode(signed.Txn)
+	if pending.PoolError != "" || sdkcrypto.GetTxID(signed.Txn) != request.TransactionID ||
+		signed.Txn.GenesisID != proof.Network || base64.StdEncoding.EncodeToString(signed.Txn.GenesisHash[:]) != proof.Genesis ||
+		signed.AuthAddr != (types.Address{}) ||
+		!ed25519.Verify(ed25519.PublicKey(signed.Txn.Sender[:]), append([]byte("TX"), transactionBytes...), signed.Sig[:]) {
+		return observation{}, fmt.Errorf("algod pending transaction is rejected or conflicts with its signed identity")
+	}
+	if pending.ConfirmedRound == 0 {
+		return observation{}, retryObservation{retryProfile, request.TransactionID, "ALGOD_NOT_YET_CONFIRMED"}
 	}
 
 	client, err := clientFor(endpoint, request.TransactionID, pending.ConfirmedRound, base)
@@ -225,6 +265,12 @@ func run(input io.Reader, output io.Writer, base http.RoundTripper) error {
 	defer cancel()
 	result, err := observe(ctx, request, base)
 	if err != nil {
+		var retry retryObservation
+		if errors.As(err, &retry) {
+			if _, writeErr := output.Write(append(proof.Encode(retry), '\n')); writeErr != nil {
+				return writeErr
+			}
+		}
 		return err
 	}
 	_, err = output.Write(append(proof.Encode(result), '\n'))
@@ -233,6 +279,10 @@ func run(input io.Reader, output io.Writer, base http.RoundTripper) error {
 
 func main() {
 	if err := run(os.Stdin, os.Stdout, productionTransport()); err != nil {
+		var retry retryObservation
+		if errors.As(err, &retry) {
+			os.Exit(2)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

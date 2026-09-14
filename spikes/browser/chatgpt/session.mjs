@@ -232,7 +232,8 @@ export class ChatGPTProtectionSession {
       const collect = () => {
         const waitMs = FAST_CONFIRM_WAIT_MS - (managed ? Math.ceil(performance.now() - started) : 0);
         if (waitMs < 1) throw Object.assign(Error('PENDING_FAST_CONFIRMATION: confirmation wait budget expired'), { code: 'PENDING_FAST_CONFIRMATION' });
-        return this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId, waitMs });
+        return this.#collectFast({ trust: structuredClone(this.#fastTrust), transactionId, waitMs,
+          diagnostics: { record: code => emit(this.#diagnostics, code, confirmationRefs) } });
       };
       try {
         if (version.mode !== 'Continuous') {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/algorand/go-algorand-sdk/v2/client/v2/common/models"
+	sdkcrypto "github.com/algorand/go-algorand-sdk/v2/crypto"
 	"github.com/algorand/go-algorand-sdk/v2/encoding/msgpack"
 	"github.com/algorand/go-algorand-sdk/v2/types"
 	"provenance.local/algorand/proof"
@@ -184,5 +186,131 @@ func TestObserverRequiresCanonicalHTTPSAndProductionTLS(t *testing.T) {
 	if transport.Proxy != nil || transport.TLSClientConfig == nil || transport.TLSClientConfig.MinVersion < tls.VersionTLS12 ||
 		transport.ResponseHeaderTimeout <= 0 || transport.TLSHandshakeTimeout <= 0 {
 		t.Fatal("production observer transport is not explicitly bounded TLS")
+	}
+}
+
+func TestOnlyExplicitPendingStatesProduceRetryResults(t *testing.T) {
+	archive := recordedArchive(t)
+	pending, _, _ := fixtureResponses(t, archive)
+	var unconfirmed models.PendingTransactionInfoResponse
+	if err := msgpack.Decode(pending, &unconfirmed); err != nil {
+		t.Fatal(err)
+	}
+	unconfirmed.ConfirmedRound = 0
+	for _, item := range []struct {
+		name   string
+		status int
+		body   []byte
+		reason string
+	}{
+		{"not found", 404, []byte(`{"message":"not in this node's pool"}`), "ALGOD_NOT_YET_OBSERVABLE"},
+		{"unconfirmed", 200, msgpack.Encode(unconfirmed), "ALGOD_NOT_YET_CONFIRMED"},
+		{"trailing pending data", 200, append(msgpack.Encode(unconfirmed), 0xc0), ""},
+		{"unexpected success status", 201, msgpack.Encode(unconfirmed), ""},
+		{"malformed not found", 404, []byte(`not JSON`), ""},
+		{"missing error message", 404, []byte(`{}`), ""},
+		{"ambiguous not found", 404, []byte(`{"message":"a","message":"b"}`), ""},
+		{"malformed success", 200, []byte{0xc1}, ""},
+		{"missing transaction", 200, msgpack.Encode(models.PendingTransactionInfoResponse{}), ""},
+		{"unauthorized", 401, []byte(`{"message":"unauthorized"}`), ""},
+		{"rate limit", 429, []byte(`{"message":"limited"}`), ""},
+		{"server error", 500, []byte(`{"message":"unavailable"}`), ""},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			calls := 0
+			request := observerRequest{requestProfile, proof.FastOperator{
+				ID: "fixture", Organization: "Isolated Operator", Endpoint: "https://operator.invalid"}, archive.TransactionID}
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != http.MethodGet || r.URL.Path != "/v2/transactions/pending/"+archive.TransactionID {
+					t.Fatalf("unexpected observation request: %s %s", r.Method, r.URL.Path)
+				}
+				return &http.Response{StatusCode: item.status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(item.body))}, nil
+			})
+			var output bytes.Buffer
+			err := run(bytes.NewReader(proof.Encode(request)), &output, transport)
+			var retry retryObservation
+			if err == nil || errors.As(err, &retry) != (item.reason != "") || calls != 1 {
+				t.Fatalf("unexpected result: %v (calls %d)", err, calls)
+			}
+			if item.reason == "" {
+				if output.Len() != 0 {
+					t.Fatalf("terminal failure produced retry evidence: %s", output.String())
+				}
+			} else {
+				var result retryObservation
+				if err := proof.DecodeJSON(output.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if result != (retryObservation{retryProfile, archive.TransactionID, item.reason}) {
+					t.Fatalf("unexpected retry result: %+v", result)
+				}
+			}
+		})
+	}
+}
+
+func TestPendingConflictsAndPostConfirmationFailuresAreTerminal(t *testing.T) {
+	archive := recordedArchive(t)
+	pending, block, _ := fixtureResponses(t, archive)
+	for _, kind := range []string{"pool error", "transaction", "network", "genesis", "signature", "block missing", "proof missing"} {
+		t.Run(kind, func(t *testing.T) {
+			var value models.PendingTransactionInfoResponse
+			if err := msgpack.Decode(pending, &value); err != nil {
+				t.Fatal(err)
+			}
+			request := observerRequest{requestProfile, proof.FastOperator{
+				ID: "fixture", Organization: "Isolated Operator", Endpoint: "https://operator.invalid"}, archive.TransactionID}
+			if kind != "block missing" && kind != "proof missing" {
+				value.ConfirmedRound = 0
+			}
+			switch kind {
+			case "pool error":
+				value.PoolError = "rejected"
+			case "transaction":
+				value.Transaction.Txn.Note[0] ^= 1
+			case "network":
+				value.Transaction.Txn.GenesisID = "wrong-network"
+				request.TransactionID = sdkcrypto.GetTxID(value.Transaction.Txn)
+			case "genesis":
+				value.Transaction.Txn.GenesisHash[0] ^= 1
+				request.TransactionID = sdkcrypto.GetTxID(value.Transaction.Txn)
+			case "signature":
+				value.Transaction.Sig[0] ^= 1
+			}
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				status, body := 404, []byte(`{"message":"not found"}`)
+				if strings.Contains(r.URL.Path, "/pending/") {
+					status, body = 200, msgpack.Encode(value)
+				} else if kind == "proof missing" && !strings.HasSuffix(r.URL.Path, "/proof") {
+					status, body = 200, block
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(body))}, nil
+			})
+			_, err := observe(context.Background(), request, transport)
+			var retry retryObservation
+			if err == nil || errors.As(err, &retry) {
+				t.Fatalf("conflict or post-confirmation failure was retryable: %v", err)
+			}
+		})
+	}
+}
+
+func TestObserverCancellationStopsTheOnlyActiveRead(t *testing.T) {
+	archive := recordedArchive(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		cancel()
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	_, err := observe(ctx, observerRequest{requestProfile, proof.FastOperator{
+		ID: "fixture", Organization: "Isolated Operator", Endpoint: "https://operator.invalid"}, archive.TransactionID}, transport)
+	var retry retryObservation
+	if err == nil || errors.As(err, &retry) || !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("unexpected cancellation result: %v (calls %d)", err, calls)
 	}
 }

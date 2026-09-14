@@ -146,6 +146,15 @@ test('documented runner exercises real components with correlated bounded report
     if (scenario.scenario !== 'account-disconnected') {
       const confirmation = correlated.filter(event => event.confirmationId);
       assert.ok(confirmation.length >= 2 && new Set(confirmation.map(event => event.confirmationId)).size === 1);
+      if (scenario.scenario === 'sealed-delayed-confirmation') {
+        assert.equal(confirmation.filter(event => event.code === 'ALGOD_NOT_YET_OBSERVABLE').length, 1);
+        assert.equal(confirmation.filter(event => event.code === 'ALGOD_NOT_YET_CONFIRMED').length, 2);
+        assert.equal(confirmation.at(-1).code, 'CONFIRMATION_ACCEPTED');
+      }
+      if (scenario.scenario === 'confirmation-unavailable') {
+        assert.ok(confirmation.some(event => event.code === 'CONFIRMATION_BUDGET_EXPIRED'));
+        assert.ok(confirmation.some(event => event.code === 'CONFIRMATION_PENDING'));
+      }
     }
   }
   assert.deepEqual(JSON.parse(await readFile(join(output, 'diagnostics.json'), 'utf8')), report.diagnostics);
