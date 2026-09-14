@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { open, rename, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { emit } from './diagnostics.mjs';
 
 export const digest = payload => createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 export const MAX_PROTECTED_TEXT_BYTES = 256 * 1024;
@@ -53,13 +54,15 @@ export function validatePayload(payload) {
 // Laboratory defaults are plaintext and stub-confirmed. Integrations supply
 // trusted storage and confirmation adapters at the local runtime boundary.
 export class ReleaseRuntime {
+  #diagnostics;
   #state; #file; #dir; #tail = Promise.resolve(); #dispatch; #fault; #store; #confirm; #validate; #protocol;
   constructor(directory, dispatch, fault = () => {}, {
-    store, confirm, validate = validatePayload, protocol = 'release-fixture/1',
+    store, confirm, validate = validatePayload, protocol = 'release-fixture/1', diagnostics = null,
   } = {}) {
     this.#dir = directory; this.#file = join(directory, 'release-test-journal.json');
     this.#dispatch = dispatch; this.#fault = fault;
     this.#store = store; this.#confirm = confirm; this.#validate = validate; this.#protocol = protocol;
+    this.#diagnostics = diagnostics;
   }
   async init() {
     try { this.#state = this.#store ? await this.#store.load() : JSON.parse(await readFile(this.#file, 'utf8')); }
@@ -70,8 +73,8 @@ export class ReleaseRuntime {
     await this.#persist(this.#state);
     return this;
   }
-  async #persist(next) {
-    if (this.#store) { await this.#store.save(next); this.#state = next; return; }
+  async #persist(next, refs = {}) {
+    if (this.#store) { await this.#store.save(next, refs); this.#state = next; return; }
     const temp = `${this.#file}.${randomUUID()}.tmp`;
     const f = await open(temp, 'wx', 0o600);
     try { await f.writeFile(JSON.stringify(next)); await f.sync(); } finally { await f.close(); }
@@ -98,7 +101,7 @@ export class ReleaseRuntime {
       const next = structuredClone(this.#state);
       const id = randomUUID();
       next.seals[id] = { id, scope, mode, payload: frozen, digest: digest(frozen), confirmation: null, authorization: null, priorAttempt: null };
-      await this.#persist(next);
+      await this.#persist(next, { operationId: id });
       return { id, digest: digest(frozen), scope };
     });
   }
@@ -111,7 +114,7 @@ export class ReleaseRuntime {
         : { policy: 'synthetic-confirmation/1', digest: seal.digest, result: 'TEST_CONFIRMED' };
       if (!seal.confirmation || seal.confirmation.digest !== seal.digest) throw Error('Confirmation version mismatch');
       seal.authorization = randomUUID();
-      await this.#persist(next);
+      await this.#persist(next, { operationId: id });
     });
   }
   retry(id, scope, priorAttempt, explicit) {
@@ -122,7 +125,7 @@ export class ReleaseRuntime {
           || attempt.releaseClass === 'RETROSPECTIVE_CONTINUOUS'
           || !['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].includes(attempt.state) || seal.authorization || seal.cancelled) throw Error('Retry not authorized');
       seal.authorization = randomUUID();
-      await this.#persist(next);
+      await this.#persist(next, { operationId: id });
     });
   }
   cancel(id, scope, expectedDigest) {
@@ -130,7 +133,7 @@ export class ReleaseRuntime {
       const next = structuredClone(this.#state), seal = this.#sealFor(next, id, scope);
       if (seal.digest !== expectedDigest || seal.priorAttempt || seal.cancelled) throw Error('Stale or attempted seal');
       seal.authorization = null; seal.cancelled = true;
-      await this.#persist(next);
+      await this.#persist(next, { operationId: id });
     });
   }
   release(request) {
@@ -147,8 +150,11 @@ export class ReleaseRuntime {
       next.attempts[attemptId] = attempt;
       seal.authorization = null; seal.priorAttempt = attemptId;
       await this.#fault('before-consumption');
-      await this.#persist(next);
+      await this.#persist(next, { operationId: id, dispatchId: attemptId });
+      emit(this.#diagnostics, 'DISPATCH_AUTHORIZATION_CONSUMED', { operationId: id, dispatchId: attemptId });
       await this.#fault('after-consumption');
+      const started = performance.now();
+      emit(this.#diagnostics, 'DISPATCH_STARTED', { operationId: id, dispatchId: attemptId });
       let state;
       try {
         state = await this.#dispatch({ ...structuredClone(attempt), payload: structuredClone(seal.payload) });
@@ -157,7 +163,8 @@ export class ReleaseRuntime {
       await this.#fault('after-egress');
       const completed = structuredClone(this.#state);
       completed.attempts[attemptId].state = state;
-      await this.#persist(completed);
+      await this.#persist(completed, { operationId: id, dispatchId: attemptId });
+      emit(this.#diagnostics, state, { operationId: id, dispatchId: attemptId, durationMs: performance.now() - started });
       return { attemptId, state, providerReceipt: 'UNKNOWN' };
     });
   }
@@ -174,8 +181,10 @@ export class ReleaseRuntime {
         confirmation: null, authorization: null, priorAttempt: null,
         releaseClass: 'RETROSPECTIVE_CONTINUOUS', state: 'DISPATCHING' };
       next.attempts[attemptId] = attempt; seal.priorAttempt = attemptId;
-      await this.#persist(next);
+      await this.#persist(next, { operationId: id, dispatchId: attemptId });
       await this.#fault('after-consumption');
+      const started = performance.now();
+      emit(this.#diagnostics, 'DISPATCH_STARTED', { operationId: id, dispatchId: attemptId });
       let state;
       try {
         state = await this.#dispatch({ ...structuredClone(attempt), payload: structuredClone(seal.payload) });
@@ -184,7 +193,8 @@ export class ReleaseRuntime {
       await this.#fault('after-egress');
       const completed = structuredClone(this.#state);
       completed.attempts[attemptId].state = state;
-      await this.#persist(completed);
+      await this.#persist(completed, { operationId: id, dispatchId: attemptId });
+      emit(this.#diagnostics, state, { operationId: id, dispatchId: attemptId, durationMs: performance.now() - started });
       return { attemptId, state, providerReceipt: 'UNKNOWN' };
     });
   }

@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startProductComposer } from '../spikes/browser/chatgpt/product-server.mjs';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
+import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
 
 // All browser state, downloads and registrations belong to this run. The local
 // fixture supplies no external store, updater, provider account or key authority.
@@ -14,7 +15,10 @@ try {
   let lifecycle = await new InstallationLifecycle({ supportDirectory: join(root, 'support'),
     chromeSupportDirectory: join(root, 'fake-chrome'), browserHost: join(root, 'Test.app/Contents/MacOS/host'), sequence: 2 }).init();
   const state = { eligibility: 'UNENROLLED' };
+  const diagnostics = new LocalDiagnostics({ mode: 'SYNTHETIC_FIXTURE' });
+  diagnostics.record('OPERATION_FROZEN', { operationId: 'synthetic-operation', epochId: 'synthetic-epoch' });
   server = await startProductComposer({ browserState: () => null,
+    diagnostics,
     session: { status: () => state, receipts: { list: () => [] }, managedStatus: () => ({ state: 'NOT_CONFIGURED' }) },
     maintenance: { status: () => lifecycle.status(), enable: () => lifecycle.enable(),
       store: () => ({ opened: false }), offerExport: async () => { await lifecycle.record('exportOffered'); return {}; },
@@ -23,9 +27,9 @@ try {
       downloadUpdate: () => ({ state: 'DOWNLOADED', instruction: 'Synthetic verified-update fixture. No installer opened.' }),
     } });
   const downloads = join(root, 'downloads'); await mkdir(downloads);
-  browser = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
+  browser = spawn(process.argv[2] ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
     '--headless=new', `--user-data-dir=${join(root, 'profile')}`, '--remote-debugging-port=0', '--no-first-run',
-    '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-default-apps',
+    '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-default-apps', '--disable-updater-scheduler',
     '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank',
   ], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
   let launchError; browser.on('error', error => { launchError = error; });
@@ -71,12 +75,21 @@ try {
   await click('offer-export'); await wait("!document.querySelector('#removal-options').hidden && !document.querySelector('#remove-integration').disabled");
   await click('remove-integration'); await wait("document.querySelector('#status').textContent.includes('Evidence and keys retained')");
   assert.equal((await lifecycle.status()).integration, 'DISABLED');
+  assert.equal(await evaluate("document.querySelector('#save-diagnostics').disabled"), true);
+  await click('refresh-diagnostics');
+  await wait("document.querySelector('#diagnostic-operation').options.length === 2");
+  await evaluate("document.querySelector('#diagnostic-operation').selectedIndex = 1; document.querySelector('#diagnostic-operation').dispatchEvent(new Event('change'))");
+  await click('preview-diagnostics'); await wait("!document.querySelector('#save-diagnostics').disabled");
+  const preview = await evaluate("JSON.parse(document.querySelector('#diagnostic-preview').textContent)");
+  diagnostics.record('ENGINE_CLOSED');
   await click('save-diagnostics');
   let report;
   for (let i = 0; i < 100; i++) {
     try { report = JSON.parse(await readFile(join(downloads, 'provenance-support.json'), 'utf8')); break; } catch { await delay(30); }
   }
-  assert.equal(report?.profile, 'pap-support/1'); assert.equal(report.events.integrationRemoved, 1);
+  assert.equal(report?.profile, 'pap-local-diagnostics/1'); assert.deepEqual(report, preview);
+  assert.equal(report.events.length, 1); assert.equal(report.events[0].code, 'OPERATION_FROZEN');
+  assert.equal(await evaluate("document.querySelector('#save-diagnostics').disabled"), true);
   assert.doesNotMatch(JSON.stringify(report), /Test\.app|fake-chrome|127\.0\.0\.1|supportDirectory/);
   state.eligibility = 'REVOKED'; await click('refresh');
   await wait("document.querySelector('#scope').textContent.includes('eligibility revoked')");

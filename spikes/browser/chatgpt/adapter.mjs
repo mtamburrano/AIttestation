@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
+import { emit } from '../../release/diagnostics.mjs';
 
 export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/2';
 export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-10';
@@ -38,12 +39,14 @@ function macOSSupported(version) {
 export class ChatGPTChromeAdapter {
   #send; #extensionId; #runtimeEpoch = randomUUID(); #connection = null; #tabs = [];
   #enrollment = null; #generation = 0; #attempts = new Set();
+  #diagnostics;
 
-  constructor(send, { extensionId }) {
+  constructor(send, { extensionId, diagnostics = null }) {
     if (typeof send !== 'function' || typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)) {
       throw Error('Invalid ChatGPT adapter construction');
     }
     this.#send = send; this.#extensionId = extensionId;
+    this.#diagnostics = diagnostics;
   }
 
   get capabilities() {
@@ -77,6 +80,7 @@ export class ChatGPTChromeAdapter {
         || connection.hostPermission !== `${CHATGPT_ORIGIN}/*`
         || typeof connection.browserSessionId !== 'string' || connection.browserSessionId.length < 16;
     if (invalid) {
+      emit(this.#diagnostics, 'ADAPTER_REJECTED');
       this.#connection = null; this.#invalidate('adapter pairing rejected');
       fail('adapter identity, platform, version, or permission mismatch');
     }
@@ -124,6 +128,7 @@ export class ChatGPTChromeAdapter {
       && !tab.attachmentsPresent && tab.composerEmpty);
   }
   #invalidate(reason) {
+    emit(this.#diagnostics, 'SCOPE_INVALIDATED');
     this.#generation++; this.#enrollment = null; this.#tabs = [];
     return reason;
   }
@@ -143,6 +148,7 @@ export class ChatGPTChromeAdapter {
       browserSessionId: this.#connection.browserSessionId,
       runtimeEpoch: this.#runtimeEpoch, generation: this.#generation,
     };
+    emit(this.#diagnostics, 'SCOPE_ENROLLED');
     return { scope, runtimeEpoch: this.#runtimeEpoch, destination, capabilities: this.capabilities };
   }
 
@@ -168,6 +174,7 @@ export class ChatGPTChromeAdapter {
       const payload = validateProtectedTextPayload(attempt.payload);
       if (attempt.protocol !== CHATGPT_RELEASE_PROTOCOL || typeof attempt.attemptId !== 'string'
           || !/^[a-f0-9]{64}$/.test(attempt.digest ?? '') || this.#attempts.has(attempt.attemptId)) {
+        emit(this.#diagnostics, 'ADAPTER_REJECTED', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
         return 'FAILED_BEFORE_EGRESS';
       }
       snapshot = {
@@ -175,7 +182,10 @@ export class ChatGPTChromeAdapter {
         expectedUrl: health.enrolled.url, destination: health.enrolled.destination,
       };
       this.#attempts.add(attempt.attemptId);
-    } catch { return 'FAILED_BEFORE_EGRESS'; }
+    } catch {
+      emit(this.#diagnostics, 'ADAPTER_REJECTED', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
+      return 'FAILED_BEFORE_EGRESS';
+    }
     let response;
     const command = {
       profile: CHATGPT_RELEASE_PROTOCOL, runtimeEpoch: this.#runtimeEpoch,
@@ -185,7 +195,8 @@ export class ChatGPTChromeAdapter {
       textDigest: textDigest(snapshot.text), textBytes: Buffer.from(snapshot.text, 'utf8').toString('base64'),
     };
     try {
-      response = await this.#send(command);
+      emit(this.#diagnostics, 'ADAPTER_DISPATCH', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
+      response = await this.#send(command, { operationId: attempt.sealId });
     } catch (error) {
       return error?.exposure === 'NONE' ? 'FAILED_BEFORE_EGRESS' : 'OUTCOME_UNKNOWN';
     }

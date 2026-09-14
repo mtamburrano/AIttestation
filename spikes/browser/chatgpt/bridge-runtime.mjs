@@ -9,6 +9,7 @@ import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID } from './adapter.mjs';
 import { ChromeBridgeController } from './bridge.mjs';
 import { ChatGPTProtectionSession } from './session.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord } from './native-host.mjs';
+import { LocalDiagnostics, emit } from '../../release/diagnostics.mjs';
 
 const MAX_LINE_BYTES = 512 * 1024;
 const MAX_PEER_RESULT_BYTES = 4 * 1024;
@@ -128,6 +129,7 @@ export async function startChromeProtectionRuntime(directory, {
   collectFast, verifyFast, verifyArchive, managed = null, fault, controllerTimeoutMs = 5_000,
   rendezvousPath = join(directory, 'browser-bridge.json'), socketPath = null,
   now = Date.now, attestPeer = attestNativePeer, peerValidatorPath,
+  diagnostics = new LocalDiagnostics(),
 } = {}) {
   if (!isAbsolute(directory) || !/^[a-p]{32}$/.test(extensionId) || typeof attestPeer !== 'function') {
     throw bridgeError('Invalid browser bridge configuration');
@@ -138,6 +140,7 @@ export async function startChromeProtectionRuntime(directory, {
     throw bridgeError('Rendezvous must be an absolute file in the owner-only bridge directory');
   }
   const runtimeEpoch = randomUUID();
+  const events = diagnostics.scope({ epochId: runtimeEpoch });
   const selectedSocket = socketPath ?? join(canonicalDirectory, `bridge-${runtimeEpoch.slice(0, 12)}.sock`);
   if (!isAbsolute(selectedSocket) || !resolve(selectedSocket).startsWith(`${canonicalDirectory}${sep}`)
       || Buffer.byteLength(selectedSocket) > 100) throw bridgeError('Unsafe or overlong browser bridge socket path');
@@ -147,15 +150,15 @@ export async function startChromeProtectionRuntime(directory, {
   let pairedResolve;
   const paired = new Promise(resolvePaired => { pairedResolve = resolvePaired; });
   const extensionOrigin = `chrome-extension://${extensionId}/`;
-  const adapter = new ChatGPTChromeAdapter(command => {
+  const adapter = new ChatGPTChromeAdapter((command, diagnosticRefs) => {
     if (!controller) {
       const error = bridgeError('Authenticated Chrome bridge is disconnected'); error.exposure = 'NONE';
       return Promise.reject(error);
     }
-    return controller.sendRelease(command);
-  }, { extensionId });
+    return controller.sendRelease(command, diagnosticRefs);
+  }, { extensionId, diagnostics: events });
   const session = await new ChatGPTProtectionSession(directory, adapter, {
-    vault, vaultKey, fastTrust, managed,
+    vault, vaultKey, fastTrust, managed, diagnostics: events,
     ...(collectFast === undefined ? {} : { collectFast }),
     ...(verifyFast === undefined ? {} : { verifyFast }),
     ...(verifyArchive === undefined ? {} : { verifyArchive }),
@@ -178,9 +181,11 @@ export async function startChromeProtectionRuntime(directory, {
   const server = createServer({ pauseOnConnect: true }, socket => {
     if (closed || integrationDisabled || candidateSocket || activeSocket) { socket.destroy(); return; }
     candidateSocket = socket;
+    const connectionEvents = events.scope({ bridgeId: randomUUID() }), connectedAt = performance.now();
+    emit(connectionEvents, 'BRIDGE_CONNECTED');
     let authenticated = false, peerIdentity = null, bytes = Buffer.alloc(0), connectionController = null;
     let authTimer;
-    const fail = () => socket.destroy();
+    const fail = () => { emit(connectionEvents, 'BRIDGE_REJECTED'); socket.destroy(); };
     socket.on('error', () => {});
     const receive = chunk => {
       try {
@@ -197,11 +202,12 @@ export async function startChromeProtectionRuntime(directory, {
                 || auth.extensionOrigin !== extensionOrigin || auth.runtimeEpoch !== runtimeEpoch
                 || now() >= expiresAt || !timingSafeEqual(supplied, currentToken)) return fail();
             authenticated = true; clearTimeout(authTimer); candidateSocket = null; activeSocket = socket;
+            emit(connectionEvents, 'BRIDGE_AUTHENTICATED', { durationMs: performance.now() - connectedAt });
             connectionController = new ChromeBridgeController(adapter, message => {
               if (socket.destroyed) throw bridgeError('Browser bridge disconnected');
               socket.write(`${canonical(message)}\n`);
             }, { timeoutMs: controllerTimeoutMs, localBrowser: peerIdentity.browser,
-              localPlatform: peerIdentity.platform });
+              localPlatform: peerIdentity.platform, diagnostics: connectionEvents });
             controller = connectionController;
             // Consume the just-used token. A replacement is published for a
             // later Chrome reconnect while this socket remains the only peer.
@@ -219,6 +225,7 @@ export async function startChromeProtectionRuntime(directory, {
       } catch { fail(); }
     };
     socket.once('close', () => {
+      emit(connectionEvents, 'BRIDGE_DISCONNECTED', { durationMs: performance.now() - connectedAt });
       clearTimeout(authTimer);
       if (candidateSocket === socket) candidateSocket = null;
       if (activeSocket === socket) activeSocket = null;
@@ -233,7 +240,7 @@ export async function startChromeProtectionRuntime(directory, {
       keys(identity.platform, ['product', 'arch', 'version']);
       if (closed || socket.destroyed) return fail();
       peerIdentity = structuredClone(identity);
-      authTimer = setTimeout(() => socket.destroy(), AUTH_TIMEOUT_MS);
+      authTimer = setTimeout(fail, AUTH_TIMEOUT_MS);
       socket.on('data', receive); socket.resume();
     }).catch(fail);
   });
@@ -242,18 +249,20 @@ export async function startChromeProtectionRuntime(directory, {
     await listen(server, selectedSocket);
     await chmod(selectedSocket, 0o600);
     await publishRendezvous();
+    emit(events, 'BRIDGE_LISTENING');
     refreshTimer = setInterval(() => publishRendezvous().catch(() => {
       controller?.disconnect(); activeSocket?.destroy();
     }), RENDEZVOUS_LIFETIME_MS / 2);
     refreshTimer.unref();
   } catch (error) {
+    emit(events, 'BRIDGE_LISTEN_FAILED');
     session.close();
     try { await unlink(selectedSocket); } catch {}
     throw error;
   }
 
   return {
-    adapter, session, runtimeEpoch, rendezvousPath, socketPath: selectedSocket,
+    adapter, session, diagnostics, runtimeEpoch, rendezvousPath, socketPath: selectedSocket,
     waitForPairing: () => paired,
     browserState: () => structuredClone(latestBrowserState),
     disableIntegration() {

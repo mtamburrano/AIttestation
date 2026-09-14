@@ -52,6 +52,19 @@ export async function startProductComposer(runtime, { onClose = () => {} } = {})
       if (request.method !== 'POST' || request.headers.origin !== origin
           || request.headers.authorization !== `Bearer ${secret}`) throw Error('Unpaired local composer');
       const data = await requestBody(request, request.url === '/upgrade' ? 12 * 1024 * 1024 : BODY_LIMIT); let value;
+      if (request.url.startsWith('/diagnostics/')) {
+        try {
+          if (!runtime.diagnostics) throw Error('Diagnostics unavailable');
+          if (request.url === '/diagnostics/selection' && Object.keys(data).length === 0) {
+            return reply(response, 200, runtime.diagnostics.selection());
+          }
+          if (request.url === '/diagnostics/preview') return reply(response, 200, runtime.diagnostics.preview(data));
+          if (request.url === '/diagnostics/export' && Object.keys(data).join(',') === 'previewId') {
+            return reply(response, 200, { content: runtime.diagnostics.export(data.previewId) });
+          }
+          throw Error('Unsupported diagnostic operation');
+        } catch { return reply(response, 400, { error: 'Diagnostic selection expired or is invalid. Preview again before saving.' }); }
+      }
       if (request.url.startsWith('/installation/')) {
         const operations = { '/installation/status': 'status', '/installation/enable': 'enable',
           '/installation/store': 'store', '/installation/export-opportunity': 'offerExport',

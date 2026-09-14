@@ -3,6 +3,12 @@
 Disposable technical slices for private, portable evidence of human + AI work.
 These experiments are not a production protection product.
 
+For ordinary development, run `npm run test:product`. The
+[local product runner](spikes/development/PRODUCT-TESTING.md) exercises the real
+engine, encrypted vault, native framing and product API with explicit synthetic
+dependencies. It produces a bounded JSON result and a local HTML diagnostic
+preview without switching users, signing a build or using a provider account.
+
 The [private development guide](spikes/development/README.md) provides a separate
 prepare/start/stop route for the signed Mac app, unpacked Chrome extension and a
 local TLS TestNet sponsor. It requires a dedicated macOS test user and the pinned

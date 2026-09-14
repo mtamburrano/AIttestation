@@ -119,7 +119,20 @@ through an unsigned configuration update.
 
 ## macOS package boundary
 
-For private iteration, use the [dedicated test-user workflow](../../development/README.md).
+For ordinary iteration, run the [local product fixtures](../../development/PRODUCT-TESTING.md)
+with `npm run test:product`. They reuse this runtime, product API and native relay
+with explicitly injected synthetic provider, sponsor, confirmation and platform
+identity. No installed Chrome or native Keychain authority is claimed by fixtures.
+
+The local product page offers **Local diagnostics** in development and packaged
+builds. Choose an operation/component, preview the exact bounded report, then
+save that snapshot. The collector shares pseudonymous operation, epoch, connection,
+capture, confirmation and dispatch references across the existing components.
+Only fixed event codes and relative timings leave the collector; raw identifiers,
+URLs, content digests, prompt bytes and arbitrary errors are excluded.
+Details and retention limits are in the [testing guide](../../development/PRODUCT-TESTING.md).
+
+For installed platform checks, use the [dedicated test-user workflow](../../development/README.md).
 It retains Developer ID/Keychain provisioning and native peer authentication while
 avoiding per-build notarization, a published Store listing and a public backend.
 Its separate entrypoint and local TLS certificate are excluded from distribution

@@ -442,8 +442,8 @@ Record unexecuted checks as null, not zero or passed.
 | Removal | Export opportunity, manifest removal, extension/app removal, evidence retained, verifier usable offline |
 | Provider drift | Missing/changed composer/send controls, attachments, tab ambiguity and revoked permissions remove eligibility |
 
-The diagnostic JSON records application action counts, while external OS/store
-permission measurements remain null until these checks are performed. The
+The installation diagnostics API records application action counts, while external
+OS/store permission measurements remain null until these checks are performed. The
 previous-browser fixture (152) and previous extension contract are deliberately
 unsupported. The first release has no previously supported shipping artifact;
 provide one before claiming a tested current/previous shipping matrix. Synthetic
@@ -477,9 +477,14 @@ an old binary and all local state.
 
 ## Support and provider maintenance
 
-Start with the locally saved support JSON. It allowlists status codes and bounded
-action counts; arbitrary error text, DOM content, URLs, evidence IDs, raw hashes,
-credentials and paths are excluded. It is never uploaded automatically. Do not
+Start with **Local diagnostics** in the product page: select an operation/component,
+preview the exact report, then save it. This works in private builds as well as
+packaged releases. Reports contain fixed lifecycle codes, relative timings and
+temporary pseudonymous references, with bounded size and retention; arbitrary
+error text, DOM content, URLs, original evidence IDs, raw hashes, credentials and
+paths are excluded. It is never uploaded automatically. The
+[local product runner](../development/PRODUCT-TESTING.md) reproduces targeted
+failures with the same instrumentation and isolated synthetic dependencies. Do not
 ask for a vault, browser profile, recovery secret, environment dump or raw crash
 log. The user can continue to export and verify existing evidence independently.
 

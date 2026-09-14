@@ -2,11 +2,12 @@ import { open, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { canonical, parseCanonical, objectDigest } from '../vault/format.mjs';
+import { emit } from '../release/diagnostics.mjs';
 
 // The pointer contains only an event identifier. State and selected bytes live in
 // the encrypted vault; pointer publication happens after the vault's FULL commit.
 export class VaultReleaseStore {
-  constructor(directory, vault) { this.directory = directory; this.vault = vault; }
+  constructor(directory, vault, diagnostics = null) { this.directory = directory; this.vault = vault; this.diagnostics = diagnostics; }
   capture(bytes) {
     const ref = objectDigest(bytes);
     if (this.vault.inspect().objects.some(o => o.digest === ref)) {
@@ -15,7 +16,13 @@ export class VaultReleaseStore {
     }
     return this.vault.capture(bytes).manifest.evidence[0].objectDigest;
   }
-  async save(state) {
+  async save(state, refs = {}) {
+    const started = performance.now();
+    try { await this.#save(state);
+      emit(this.diagnostics, 'VAULT_STATE_COMMITTED', { ...refs, durationMs: performance.now() - started });
+    } catch (error) { emit(this.diagnostics, 'VAULT_WRITE_FAILED', refs); throw error; }
+  }
+  async #save(state) {
     const stored = structuredClone(state);
     for (const seal of Object.values(stored.seals)) {
       seal.payload = {

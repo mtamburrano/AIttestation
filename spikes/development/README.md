@@ -1,5 +1,11 @@
 # Private Mac development
 
+For routine development, start with `npm run test:product` in your current user.
+The [local product testing guide](PRODUCT-TESTING.md) covers labelled isolated
+fixtures, correlated diagnostics and targeted failure reports. It creates fresh
+temporary resources and leaves the retained private installation untouched.
+The signed, installed workflow below is for explicitly scheduled platform checks.
+
 This route prepares the actual trusted composer, encrypted durable vault, native
 bridge and unpacked ChatGPT extension for a **dedicated macOS test user**. Builds
 retain the frozen app, helper, Keychain group, native host and extension IDs.
@@ -172,6 +178,18 @@ outside every checkout; initialization makes no external calls:
 ```sh
 npm run dev:sponsor -- init /absolute/new/private-sponsor 37461
 ```
+
+Initialization creates private files with mode 0600 even under umask 000 and
+checks the generated TLS key/certificate and account seed/address pair before
+reporting success. To repeat the read-only setup checks for an explicitly
+selected sponsor directory, without starting a server or making network calls:
+
+```sh
+npm run dev:sponsor -- doctor /absolute/private-sponsor
+```
+
+The self-check reports fixed labels and does not repair existing permissions.
+The existing owner/permission validation at server startup remains enforced.
 
 It generates a fresh TestNet-only signing seed, a 30-day loopback TLS certificate,
 one seven-day test access code and an isolated durable ledger. Fund **only the

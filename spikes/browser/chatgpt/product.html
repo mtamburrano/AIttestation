@@ -16,8 +16,15 @@
 <div id="removal-options" hidden><a href="#history">Review and export receipts</a>
 <label>Before removal <select id="export-decision"><option value="keep-local">Keep evidence on this Mac</option><option value="exported">I saved my selected exports</option></select></label>
 <button id="remove-integration">Remove Chrome connection</button></div>
-<button id="save-diagnostics" disabled>Save content-free support report</button>
-<p>The support report contains connection/update status and setup action counts. It excludes evidence, filenames, URLs, account details and keys. Nothing is sent automatically.</p></details></section>
+<p>Preview a support report below to investigate a connection or protection failure.</p></details></section>
+<section><h2>Local diagnostics</h2>
+<p>Select a recent operation and preview the exact report before saving. Reports contain fixed lifecycle codes, relative timings and temporary identifiers. Evidence, content hashes, URLs, account details and keys are excluded. Nothing is uploaded.</p>
+<button id="refresh-diagnostics">Refresh diagnostic selection</button>
+<label>Operation <select id="diagnostic-operation"><option value="">All retained operations and connection events</option></select></label>
+<label>Component <select id="diagnostic-component"><option value="">All components</option><option>engine</option><option>vault</option><option>bridge</option><option>adapter</option><option>anchor</option></select></label>
+<div class="actions"><button id="preview-diagnostics">Preview support report</button><button id="save-diagnostics" disabled>Save previewed support report</button></div>
+<p>Up to 512 events / 256 KiB are kept in memory for 30 minutes. Closing the app discards them. A preview expires after two minutes; saved reports remain where you choose to keep them.</p>
+<pre id="diagnostic-preview">No diagnostic preview.</pre></section>
 <section><h2>1. Pair one tab</h2><p id="pairing">Waiting for the signed Chrome extension…</p>
 <button id="refresh">Refresh paired tab</button> <button id="enroll" disabled>Enroll detected tab</button>
 <pre id="scope">No scope enrolled.</pre></section>

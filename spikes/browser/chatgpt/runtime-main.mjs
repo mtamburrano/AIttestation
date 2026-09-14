@@ -20,6 +20,7 @@ export async function startPackagedChatGPT({
   supportDirectory = defaultSupportDirectory, fastTrust = null, keyStore, vault = null,
   collectFast, verifyFast, verifyArchive, attestPeer, managed = undefined, openBrowser = false,
   installation = undefined,
+  diagnostics, controllerTimeoutMs,
 } = {}) {
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
   let installedRelease = null, releaseCandidate = null;
@@ -69,6 +70,8 @@ export async function startPackagedChatGPT({
       ...(verifyFast === undefined ? {} : { verifyFast }),
       ...(verifyArchive === undefined ? {} : { verifyArchive }),
       ...(attestPeer === undefined ? {} : { attestPeer }),
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+      ...(controllerTimeoutMs === undefined ? {} : { controllerTimeoutMs }),
     });
     const updater = installedRelease ? new DesktopUpdater({ config: installedRelease, lifecycle: installation,
       schema: () => vault.schemaInfo(), directory: join(supportDirectory, 'Updates') }) : null;

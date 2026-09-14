@@ -103,8 +103,8 @@ export async function runNativeHost({
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  runNativeHost({ extensionOrigin: process.argv[2] }).catch(error => {
-    process.stderr.write(`${error.message}\n`); process.exitCode = 1;
+  runNativeHost({ extensionOrigin: process.argv[2] }).catch(() => {
+    process.stderr.write('NATIVE_BRIDGE_START_FAILED\n'); process.exitCode = 1;
   });
 }
 

@@ -2,6 +2,7 @@ const secret = location.hash.slice(1); history.replaceState(null, '', '/');
 const $ = id => document.getElementById(id);
 let detected = null, scope = null, selected = null, editRevision = 0, busy = false;
 let previewId = null;
+let diagnosticPreviewId = null;
 let installationConfigured = false, releaseChannel = null, updateAvailable = false;
 
 async function api(path, data = {}) {
@@ -21,9 +22,11 @@ function controls() {
   for (const id of ['connect-account', 'account-status', 'disconnect-account']) $(id).disabled = busy;
   for (const id of ['refresh-history', 'preview-export', 'redact']) $(id).disabled = busy;
   $('save-export').disabled = busy || previewId === null;
-  for (const id of ['enable-integration', 'open-store', 'offer-export', 'save-diagnostics', 'remove-integration']) {
+  for (const id of ['enable-integration', 'open-store', 'offer-export', 'remove-integration']) {
     $(id).disabled = busy || !installationConfigured;
   }
+  for (const id of ['refresh-diagnostics', 'preview-diagnostics']) $(id).disabled = busy;
+  $('save-diagnostics').disabled = busy || diagnosticPreviewId === null;
   const updatesConfigured = installationConfigured && releaseChannel === 'production';
   $('check-update').disabled = busy || !updatesConfigured;
   $('download-update').disabled = busy || !updatesConfigured || !updateAvailable;
@@ -56,9 +59,28 @@ action('remove-integration', async () => {
   $('pairing').textContent = 'Connection removed. Reopen the app to reconnect.';
   await installationStatus(); $('status').textContent = 'Connection removed. Evidence and keys retained on this Mac.';
 });
+function invalidateDiagnostics() {
+  diagnosticPreviewId = null; $('diagnostic-preview').textContent = 'Selection changed. Preview before saving.'; controls();
+}
+$('diagnostic-operation').onchange = invalidateDiagnostics;
+$('diagnostic-component').onchange = invalidateDiagnostics;
+action('refresh-diagnostics', async () => {
+  const selection = await api('/diagnostics/selection'), list = $('diagnostic-operation');
+  list.replaceChildren(new Option('All retained operations and connection events', ''));
+  for (const id of selection.operationIds) list.append(new Option(id, id));
+  invalidateDiagnostics();
+});
+action('preview-diagnostics', async () => {
+  diagnosticPreviewId = null;
+  const operation = $('diagnostic-operation').value, component = $('diagnostic-component').value;
+  const preview = await api('/diagnostics/preview', { operationIds: operation ? [operation] : [], components: component ? [component] : [] });
+  diagnosticPreviewId = preview.previewId;
+  $('diagnostic-preview').textContent = JSON.stringify(preview.report, null, 2);
+});
 action('save-diagnostics', async () => {
-  const result = await api('/installation/diagnostics');
-  const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' }));
+  const previewId = diagnosticPreviewId; diagnosticPreviewId = null;
+  const result = await api('/diagnostics/export', { previewId });
+  const url = URL.createObjectURL(new Blob([result.content], { type: 'application/json' }));
   const link = document.createElement('a'); link.href = url; link.download = 'provenance-support.json'; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
