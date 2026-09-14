@@ -171,6 +171,7 @@ export async function startChromeProtectionRuntime(directory, {
       ...(fault === undefined ? {} : { fault }),
     }).init();
     engine = await new ResidentEngine(directory, session, adapter, runtimeEpoch, events).init();
+    engine.subscribe(() => controller?.publishCapturePolicy());
   } catch (error) { session?.close(); unlock(); throw error; }
 
   const publishRendezvous = () => {
@@ -217,7 +218,7 @@ export async function startChromeProtectionRuntime(directory, {
               if (socket.destroyed) throw bridgeError('Browser bridge disconnected');
               socket.write(`${canonical(message)}\n`);
             }, { timeoutMs: controllerTimeoutMs, localBrowser: peerIdentity.browser,
-              localPlatform: peerIdentity.platform, diagnostics: connectionEvents });
+              localPlatform: peerIdentity.platform, diagnostics: connectionEvents, engine });
             controller = connectionController;
             socket.write(`${canonical({ kind: 'PAP_BRIDGE_READY', profile: NATIVE_BRIDGE_PROFILE, runtimeEpoch })}\n`);
             // Consume the just-used token. A replacement is published for a

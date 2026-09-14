@@ -31,7 +31,7 @@ export async function workerFixture({ onConnect = () => {}, inspect = async () =
     tabs: { query, sendMessage: inspect, onActivated: event(), onCreated: event(), onRemoved: event(), onUpdated: event() },
   };
   runInNewContext(await readFile(new URL('../spikes/browser/chatgpt/extension/service-worker.js', import.meta.url), 'utf8'), {
-    chrome, crypto: webcrypto, navigator: {}, URL, performance: clock?.performance ?? performance,
+    chrome, crypto: webcrypto, navigator: {}, URL, TextEncoder, btoa, performance: clock?.performance ?? performance,
     setTimeout(callback, delay) {
       const timer = clock ? clock.setTimeout(() => { timers.delete(timer); callback(); }, delay) : { callback, delay };
       timers.add(timer); return timer;

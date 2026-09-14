@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { canonical, parseCanonical, objectDigest, pack, keys, LIMITS } from '../vault/format.mjs';
 import { publicProofDigest, verifyRecord } from '../vault/records.mjs';
-import { PORTABLE_PROFILE, RECIPIENT_LIMITS, verifyPortable, signedObservation, linksCancellation, CLAIMS } from './portable.mjs';
+import { PORTABLE_PROFILE, RECIPIENT_LIMITS, verifyPortable, signedObservation, linksCancellation, linksNormalMessage, CLAIMS } from './portable.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
@@ -31,12 +31,15 @@ export class LocalReceipts {
       const bytes = this.#vault.read(record.manifest.evidence[0].objectDigest);
       return { record, value: signedObservation(record, bytes, verifyRecord(record, bytes)) };
     }).filter(entry => entry.value);
-    const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version').map(({ record, value }) => {
+    const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version'
+      || entry.value.profile === 'pap-chatgpt-observation/2' && entry.value.kind === 'normal-send-intent').map(({ record, value }) => {
       const text = records.find(r => r.manifest.eventId === value.textRecord
         && r.manifest.evidence[0].objectDigest === value.textObject);
       if (!text) throw Error('Receipt text reference missing');
       const related = observations.filter(entry => entry.value.recordDigest === record.recordDigest
-        && (entry.value.kind !== 'release-cancelled' || linksCancellation(entry.record, entry.value, record, value)));
+        && entry.record.manifest.signingPublicKey === record.manifest.signingPublicKey
+        && (entry.value.kind !== 'release-cancelled' || linksCancellation(entry.record, entry.value, record, value))
+        && (entry.value.kind !== 'normal-message-observed' || linksNormalMessage(entry.record, entry.value, record, value)));
       return { id: record.manifest.eventId, title: `${value.mode} · ${record.manifest.localClaimedTime}`,
         textRecordId: text.manifest.eventId, recordIds: [text.manifest.eventId, record.manifest.eventId,
           ...related.map(entry => entry.record.manifest.eventId)], related,

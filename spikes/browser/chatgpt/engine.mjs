@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { canonical, keys } from '../../vault/format.mjs';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
 import { emit } from '../../release/diagnostics.mjs';
 import { CHATGPT_ADAPTER_ID, CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
 import { EngineStateStore } from './engine-store.mjs';
+import { CHATGPT_CAPTURE_PROFILE, validateCapture } from './capture.mjs';
 
 export const ENGINE_COMMAND_PROFILE = 'pap-resident-command/1';
 export const ENGINE_EVENT_PROFILE = 'pap-resident-event/1';
@@ -44,6 +45,7 @@ export class ResidentEngine {
   #commands = new Map(); #control = Promise.resolve(); #writes = Promise.resolve(); #work = new Set();
   #listeners = new Set(); #knownScopes = new Map(); #unsubscribe; #closed = false; #failed = false;
   #operationIds = new Set(); #temporaryPreferences = new Map();
+  #captureTokens = new Map();
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
     this.#session = session; this.#adapter = adapter; this.#epoch = runtimeEpoch; this.#diagnostics = diagnostics;
@@ -63,7 +65,7 @@ export class ResidentEngine {
       this.#operationIds.add(operation.id);
       const seal = durable.seals[operation.versionId], attempt = seal && durable.attempts[seal.priorAttempt];
       operation.stopped = true; operation.restored = true;
-      operation.state = attempt?.state ?? (seal?.cancelled ? 'CANCELLED' : 'INTERRUPTED');
+      operation.state = operation.observation ? 'PROMPT_SAVED' : attempt?.state ?? (seal?.cancelled ? 'CANCELLED' : 'INTERRUPTED');
       if (operation.result) operation.result.actions = Object.fromEntries(Object.keys(operation.result.actions).map(key => [key, false]));
     }
     this.#session.setAuthorityCheck(version => !this.#closed && !this.#failed
@@ -92,8 +94,8 @@ export class ResidentEngine {
       scopes: this.#adapter.scopes().map(target => {
         const requestedMode = this.#requested(target.scope);
         const effectiveMode = this.#state.preferences.paused || requestedMode === 'Off' ? 'Off'
-          : target.eligibility !== 'ELIGIBLE' || this.#failed || this.#closed ? 'Unavailable'
-            : requestedMode === 'Continuous' && !this.#adapter.capabilities.observation ? 'Unavailable' : requestedMode;
+          : this.#failed || this.#closed || (requestedMode === 'Continuous'
+            ? !this.#adapter.observationEligible(target.scope) : target.eligibility !== 'ELIGIBLE') ? 'Unavailable' : requestedMode;
         return { ...target, requestedMode, effectiveMode,
           editRevision: this.#session.status().scopes.find(value => value.scope === target.scope)?.editRevision ?? 0,
           reason: this.#state.preferences.paused ? 'GLOBAL_PAUSE' : effectiveMode === 'Unavailable' ? 'CAPABILITY_UNAVAILABLE' : 'CURRENT' };
@@ -123,7 +125,7 @@ export class ResidentEngine {
     this.#state.revision++;
     const snapshot = structuredClone(this.#state);
     const write = this.#writes.then(() => this.#store.save(snapshot));
-    this.#writes = write.catch(() => { this.#failed = true; emit(this.#diagnostics, 'VAULT_WRITE_FAILED'); });
+    this.#writes = write.catch(() => { this.#failed = true; emit(this.#diagnostics, 'VAULT_WRITE_FAILED'); this.#publish(); });
     return write.then(() => { this.#publish(); });
   }
   #track(promise) {
@@ -131,9 +133,10 @@ export class ResidentEngine {
       .finally(() => this.#work.delete(work));
     this.#work.add(work); return work;
   }
-  #stopScopes(scopes) {
+  #stopScopes(scopes, revokeCapture = true) {
+    if (revokeCapture) for (const scope of scopes) this.#captureTokens.delete(scope);
     for (const operation of this.#state.operations) {
-      if (scopes.includes(operation.scope) && !operation.stopped) operation.stopped = true;
+      if (scopes.includes(operation.scope) && !operation.stopped && !operation.observation) operation.stopped = true;
     }
     for (const scope of scopes) this.#track(this.#session.interruptScope(scope).then(() => this.#syncOperations()));
   }
@@ -149,7 +152,8 @@ export class ResidentEngine {
     const ended = [...this.#knownScopes].filter(([scope, eligibility]) =>
       eligibility === 'ELIGIBLE' && current.get(scope) !== 'ELIGIBLE').map(([scope]) => scope);
     this.#knownScopes = current;
-    this.#stopScopes(ended);
+    this.#stopScopes(ended, false);
+    this.capturePolicy();
     this.#publish();
   }
   async #syncOperations() {
@@ -163,6 +167,73 @@ export class ResidentEngine {
       }
     }
     await this.#commit();
+  }
+
+  capturePolicy() {
+    const scopes = this.#adapter.scopes().filter(target => !this.#closed && !this.#failed
+      && !this.#state.preferences.paused && this.#requested(target.scope) === 'Continuous'
+      && this.#adapter.observationEligible(target.scope));
+    for (const scope of this.#captureTokens.keys()) if (!scopes.some(target => target.scope === scope)) this.#captureTokens.delete(scope);
+    return scopes.map(target => {
+      if (!this.#captureTokens.has(target.scope)) this.#captureTokens.set(target.scope, randomUUID());
+      return { profile: CHATGPT_CAPTURE_PROFILE, token: this.#captureTokens.get(target.scope),
+        runtimeEpoch: this.#epoch, browserSessionId: target.browserSessionId, scope: target.scope,
+        tabId: target.tabId, windowId: target.windowId, tabEpoch: target.tabEpoch,
+        expectedUrl: target.url, destination: target.destination };
+    });
+  }
+
+  captureStates() {
+    return this.#adapter.scopes().map(target => ({ tabId: target.tabId,
+      state: this.#requested(target.scope) !== 'Continuous' || this.#state.preferences.paused ? 'OFF'
+        : this.#closed || this.#failed || !this.#adapter.observationEligible(target.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
+  }
+
+  observe(input) {
+    let observation;
+    try { observation = validateCapture(input); } catch (error) { return Promise.reject(error); }
+    const run = this.#control.then(async () => {
+      const { eventId, source } = observation;
+      const policy = this.capturePolicy().find(value => value.scope === source.scope);
+      if (!policy || policy.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
+      this.#adapter.assertObservationSource(source);
+      const existing = this.#state.operations.find(value => value.id === eventId);
+      if (existing && !existing.observation) reject('CAPTURE_REPLAY_CONFLICT');
+      if (!existing && this.#state.operations.length >= 512) {
+        const index = this.#state.operations.findIndex(value => value.settled || value.stopped || value.restored);
+        if (index < 0) reject('OPERATION_LIMIT');
+        this.#state.operations.splice(index, 1);
+      }
+      let version;
+      try { version = this.#session.observeNormal(observation); }
+      catch (error) {
+        if (!['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
+          this.#failed = true; this.#publish();
+        }
+        emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;
+      }
+      let operation = this.#state.operations.find(value => value.id === eventId);
+      const first = !operation;
+      if (first) {
+        operation = { id: eventId, scope: source.scope, target: this.#scope(source.scope), observation: true,
+          mode: 'Continuous', versionId: version.id, state: 'PROMPT_SAVED', stopped: true, restored: false, settled: true };
+        this.#state.operations.push(operation); this.#operationIds.add(eventId);
+      }
+      if (first || canonical(operation.result) !== canonical(version)) {
+        operation.result = version;
+        await this.#commit();
+      }
+      if (first) this.#track(this.#anchorObservation(version));
+      return { profile: CHATGPT_CAPTURE_PROFILE, eventId, kind: observation.kind,
+        state: 'PROMPT_SAVED', receiptId: version.descriptorId };
+    });
+    this.#control = run.catch(() => {}); return run;
+  }
+
+  async #anchorObservation(version) {
+    try { await this.#session.anchorManaged({ id: version.id, scope: version.scope }); }
+    catch { emit(this.#diagnostics, 'CONFIRMATION_PENDING', { operationId: version.id }); }
+    finally { await this.#syncOperations(); }
   }
 
   command(input, { surface } = {}) {

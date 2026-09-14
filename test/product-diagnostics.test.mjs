@@ -133,9 +133,14 @@ test('documented runner exercises real components with correlated bounded report
   assert.ok(events.length <= DIAGNOSTIC_LIMITS.events);
   for (const scenario of report.scenarios) {
     assert.equal(scenario.status, 'PASS');
-    const correlated = events.filter(event => event.operationId === scenario.operationId);
+    const correlated = events.filter(event => scenario.operationId ? event.operationId === scenario.operationId : event.epochId === scenario.epochId);
     assert.ok(correlated.length > 0 && correlated.every(event => event.epochId === scenario.epochId));
     assert.ok(correlated.some(event => event.code === scenario.observed));
+    if (scenario.scenario.startsWith('continuous-') && scenario.scenario.endsWith('-gap')) {
+      assert.equal(scenario.providerAttempts, 0); assert.equal(scenario.sponsorBroadcasts, 0);
+      assert.ok(!correlated.some(event => event.code === 'NORMAL_PROMPT_SAVED' || event.code === 'DISPATCH_STARTED'));
+      continue;
+    }
     assert.ok(correlated.some(event => event.code === 'VAULT_CAPTURED' && event.captureId));
     if (scenario.providerAttempts) {
       const dispatch = correlated.find(event => event.code === 'DISPATCH_AUTHORIZATION_CONSUMED');

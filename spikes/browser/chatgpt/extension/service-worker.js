@@ -2,6 +2,9 @@ const ADAPTER_PROFILE = 'pap-chatgpt-chrome/5';
 const RELEASE_PROTOCOL = 'pap-chatgpt-release/2';
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
 const NATIVE_HOST = 'ai.provenance.consumer';
+const CAPTURE_PROFILE = 'pap-chatgpt-capture/1';
+let policyRevision = 0;
+const documents = new Map();
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
 let connection;
 let reconnectDelay = 1000, reconnectTimer;
@@ -10,7 +13,7 @@ function tabEpoch(id) {
   if (!tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
   return tabEpochs.get(id);
 }
-const current = context => connection === context && !context.closed;
+const current = context => Boolean(context && connection === context && !context.closed);
 
 async function bounded(promise) {
   let timer;
@@ -47,6 +50,7 @@ async function stateMessage(kind) {
   const [permissions, tabs] = await Promise.all([permissionState(), inspectTabs()]);
   return {
     kind, extensionId: chrome.runtime.id, adapterProfile: ADAPTER_PROFILE,
+    captureProfile: CAPTURE_PROFILE,
     releaseProtocol: RELEASE_PROTOCOL, pageContract: PAGE_CONTRACT, browserSessionId,
     // JavaScript brand strings cannot establish the installed product/channel.
     // The signed native host replaces this fail-closed value with locally
@@ -162,6 +166,8 @@ function scheduleReconnect() {
 function retire(context) {
   if (!current(context)) return;
   context.closed = true; clearTimeout(context.handshakeTimer); connection = undefined;
+  for (const pending of context.captures.values()) pending.resolve({ state: 'RECORDING_UNAVAILABLE' });
+  context.captures.clear(); broadcastCapturePolicy(context, true);
   for (const release of context.releases.values()) release.check?.resolve(false);
   try { context.port.disconnect(); } catch {}
   scheduleReconnect();
@@ -198,7 +204,8 @@ function connect() {
   try { port = chrome.runtime.connectNative(NATIVE_HOST); }
   catch { scheduleReconnect(); return; }
   const context = { port, closed: false, ready: false, epoch: null, revision: 0, dirty: false,
-    activeReleases: 0, publishing: false, urgent: false, attempts: new Set(), releases: new Map(), authorityRevision: 0 };
+    activeReleases: 0, publishing: false, urgent: false, attempts: new Set(), releases: new Map(), authorityRevision: 0,
+    policies: new Map(), states: new Map(), captures: new Map() };
   connection = context;
   context.handshakeTimer = setTimeout(() => retire(context), 10_000);
   port.onMessage.addListener(message => {
@@ -213,6 +220,16 @@ function connect() {
       const check = context.releases.get(message.attemptId)?.check;
       if (check?.checkId === message.checkId) check.resolve(message.authorized === true);
       return;
+    }
+    if (context.ready && message?.kind === 'PAP_CAPTURE_POLICY') {
+      if (message.profile !== CAPTURE_PROFILE || !Array.isArray(message.policies) || message.policies.length > 32
+          || !Array.isArray(message.states) || message.states.length > 32) return retire(context);
+      context.policies = new Map(message.policies.map(policy => [policy.tabId, policy]));
+      context.states = new Map(message.states.map(value => [value.tabId, value.state]));
+      broadcastCapturePolicy(context); return;
+    }
+    if (context.ready && message?.kind === 'PAP_CAPTURE_RESULT') {
+      context.captures.get(message.requestId)?.resolve(message.result); return;
     }
     if (!context.ready || message?.kind !== 'PAP_RELEASE') return retire(context);
     context.activeReleases++;
@@ -231,6 +248,9 @@ function connect() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message?.kind)) {
+    captureMessage(message, sender).then(respond).catch(() => respond({ state: 'RECORDING_UNAVAILABLE' })); return true;
+  }
   if (message?.kind === 'PAP_CHECK_RELEASE') {
     checkRelease(message, sender, connection).then(respond).catch(() => respond(false)); return true;
   }
@@ -246,10 +266,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 chrome.permissions.onRemoved.addListener(() => publishState(true));
 chrome.tabs.onActivated.addListener(() => publishState());
 chrome.tabs.onCreated.addListener(() => publishState());
-chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); publishState(); });
+chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); documents.delete(id); publishState(); });
 chrome.tabs.onUpdated.addListener((id, change) => {
   if (change.url || change.status === 'loading') {
     if (tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
+    documents.delete(id);
     for (const release of connection?.releases.values() ?? []) {
       if (release.message.tabId === id) release.check?.resolve(false);
     }
@@ -258,4 +279,59 @@ chrome.tabs.onUpdated.addListener((id, change) => {
     publishState();
   } else if (change.status === 'complete') publishState();
 });
+
+function captureStatus(context, tabId, unavailable = false) {
+  const policy = !unavailable && current(context) && context.ready ? context.policies.get(tabId) : null;
+  return { kind: 'PAP_CAPTURE_POLICY', pageContract: PAGE_CONTRACT, browserSessionId, revision: policyRevision,
+    state: unavailable || !current(context) ? 'RECORDING_UNAVAILABLE' : context.states.get(tabId) ?? 'OFF',
+    policy: policy && policy.tabEpoch === tabEpochs.get(tabId) ? policy : null };
+}
+
+function broadcastCapturePolicy(context, unavailable = false) {
+  policyRevision++;
+  for (const [id, documentId] of documents) {
+    chrome.tabs.sendMessage(id, captureStatus(context, id, unavailable), { documentId, frameId: 0 }).catch(() => {});
+  }
+}
+
+async function captureMessage(message, sender) {
+  const context = connection;
+  if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || sender.origin !== 'https://chatgpt.com'
+      || sender.documentLifecycle !== 'active'
+      || !Number.isSafeInteger(sender.tab?.id) || sender.tab.incognito
+      || typeof sender.documentId !== 'string' || !sender.documentId.length || sender.documentId.length > 128
+      || message.pageContract !== PAGE_CONTRACT) return { state: 'RECORDING_UNAVAILABLE' };
+  if (!context || !context.ready || !current(context)) return captureStatus(context, sender.tab.id, true);
+  const epoch = tabEpoch(sender.tab.id);
+  const [tabs, permission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
+  const tab = tabs.find(value => value.id === sender.tab.id);
+  if (!current(context) || epoch !== tabEpochs.get(sender.tab.id) || permission !== 'granted'
+      || tabs.length > 32 || !tab || tab.url !== sender.url || tab.windowId !== sender.tab.windowId) return { state: 'RECORDING_UNAVAILABLE' };
+  if (message.kind === 'PAP_CAPTURE_STATUS') {
+    if (Object.keys(message).sort().join(',') !== 'kind,pageContract') return { state: 'RECORDING_UNAVAILABLE' };
+    documents.set(tab.id, sender.documentId);
+    return captureStatus(context, tab.id);
+  }
+  const policy = context.policies.get(tab.id), kind = message.observationKind;
+  if (!policy || policy.token !== message.token || policy.tabEpoch !== epoch || policy.windowId !== tab.windowId
+      || policy.expectedUrl !== sender.url || policy.runtimeEpoch !== context.epoch
+      || policy.browserSessionId !== browserSessionId || documents.get(tab.id) !== sender.documentId
+      || context.captures.size >= 32 || !['send-intent', 'message-observed'].includes(kind)
+      || Object.keys(message).sort().join(',') !== ['kind', 'pageContract', 'token', 'eventId', 'observationKind', 'text',
+        kind === 'send-intent' ? 'inputMethod' : 'messageId'].sort().join(',')
+      || typeof message.text !== 'string' || message.text.length > 256 * 1024 || !message.text.isWellFormed()
+      || new TextEncoder().encode(message.text).length > 256 * 1024) return { state: 'RECORDING_UNAVAILABLE' };
+  const requestId = crypto.randomUUID();
+  const result = new Promise(resolve => context.captures.set(requestId, { resolve }));
+  const { token, scope, runtimeEpoch, browserSessionId: session, tabId, windowId, tabEpoch: documentEpoch, destination } = policy;
+  const observation = { profile: CAPTURE_PROFILE, kind, token, eventId: message.eventId,
+    source: { adapterProfile: ADAPTER_PROFILE, pageContract: PAGE_CONTRACT, scope, runtimeEpoch,
+      browserSessionId: session, tabId, windowId, tabEpoch: documentEpoch, destination, documentId: sender.documentId },
+    textBytes: btoa(Array.from(new TextEncoder().encode(message.text), byte => String.fromCharCode(byte)).join('')),
+    ...(kind === 'send-intent' ? { inputMethod: message.inputMethod } : { messageId: message.messageId }) };
+  try {
+    post(context, { kind: 'PAP_CAPTURE', requestId, observation });
+    return await bounded(result);
+  } finally { context.captures.delete(requestId); }
+}
 connect();

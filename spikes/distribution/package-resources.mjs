@@ -4,7 +4,7 @@ export const applicationResourceDirectories = ['release', 'vault', 'anchor', 'br
 export const managedResourceFiles = ['spikes/managed/client.mjs', 'spikes/managed/protocol.mjs'];
 export const recipientSourceResources = [
   'spikes/vault/format.mjs', 'spikes/vault/records.mjs', 'spikes/anchor/verifier.mjs', 'spikes/anchor/merkle.mjs',
-  ...['portable.mjs', 'verify.mjs', 'server.mjs', 'main.mjs', 'recipient.html', 'recipient.js', 'recipient.css']
+  ...['portable.mjs', 'normal-observation.mjs', 'verify.mjs', 'server.mjs', 'main.mjs', 'recipient.html', 'recipient.js', 'recipient.css']
     .map(name => `spikes/recipient/${name}`),
 ];
 

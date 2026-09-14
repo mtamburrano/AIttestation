@@ -86,12 +86,17 @@ resuming it when the surface recovers. During an active consumed attempt, its
 exact engine guard distinguishes its own authorized insertion from a lost
 capability; this does not bypass destination, permissions or document checks.
 
-The current adapter advertises strict text admission and no native-flow
-Continuous observation. Requested Continuous therefore appears as effectively
-unavailable. The development view explicitly retains historical Continuous
-dispatch and Always Protect semantics. Normal ChatGPT Send observation, the
-extension panel and resident Mac menu are separate integrations; these engine
-contracts do not claim those interfaces are implemented.
+The adapter advertises normal-send observation only when the connected extension
+negotiates `pap-chatgpt-capture/1`. Continuous eligibility allows a nonempty
+supported composer and independent tabs; Sealed keeps its active, empty-composer
+requirement. The engine distributes current scoped recording policies through the
+authenticated bridge and handles observations separately from control commands.
+It commits exact text and a signed source-bound intent before acknowledging a
+save, then anchors asynchronously without creating a release seal or dispatch.
+See [the capture contract](CONTINUOUS.md) for input mappings, retries and gaps.
+The development view retains historical Continuous dispatch and Always Protect
+semantics. The privileged extension panel and resident Mac menu remain separate
+surface integrations.
 
 ## Persistence, recovery and compatibility
 
@@ -107,11 +112,13 @@ attempts without a durable result become `OUTCOME_UNKNOWN`. No scope, queued sen
 or grant is restored. Old runtime commands reject, including commands whose reply
 was lost. Receipts and already exported bundles retain their original claims.
 
-The adapter advances to `pap-chatgpt-chrome/5`, extension 1.4.0, and dispatch to
-`pap-chatgpt-release/2`, adding window and document correlation at both ends.
+Adapter `pap-chatgpt-chrome/5` and dispatch `pap-chatgpt-release/2` retain window
+and document correlation at both ends. Extension 1.5.0 adds negotiated
+`pap-chatgpt-capture/1` delivery and signed `pap-chatgpt-observation/2` assertions.
 Earlier adapter contracts reject at pairing. Native peer identity, rendezvous
-framing, observation records and export formats remain unchanged; historical
-`pap-chatgpt-release/1` evidence is not relabelled.
+framing and portable export formats remain unchanged; historical observation
+and release evidence is not relabelled. New intent receipts remain saved across
+restart without reconstructed release grants or replayed provider actions.
 
 The development view stores its local bearer and selected target identity in
 per-tab session storage so reload can read authoritative state without choosing

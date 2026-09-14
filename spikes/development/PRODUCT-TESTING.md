@@ -39,10 +39,12 @@ through the real local relay. These fixtures establish no installed browser/DOM,
 macOS peer identity, native Keychain, live provider or Algorand assurance.
 Reports always say `SYNTHETIC_FIXTURE` and `liveEvidence: NOT_TESTED`.
 
-The scenarios use the existing trusted-composer product API. They do not establish
-normal ChatGPT Send or a side-panel journey. The engine and synthetic multi-tab
-scenarios cover independent scopes, while installed multi-tab acceptance remains separate. Those behaviors
-need scenarios alongside their implementations.
+Sealed scenarios use the existing trusted-composer product API. Continuous
+scenarios additionally execute the actual content script and extension worker
+against a synthetic DOM, through the native relay and the same engine. They cover
+normal Send intent, exact bytes, IME exclusions, duplicate delivery, independent
+tabs, page changes and recording failures. Installed browser/provider acceptance
+and the privileged side-panel journey remain separate evidence.
 
 ## Target a failure
 
@@ -67,6 +69,10 @@ npm run test:chatgpt
 | `bridge-response-mismatch` | Mismatched reply rejected; unknown outcome, no automatic resend |
 | `account-disconnected` | Account required; no sponsor broadcast or dispatch |
 | `account-disconnected-cancel` | Terminal cancellation; three selected signed records, portable local assertion, no anchor or release attempt after repeated requests |
+| `continuous-normal-send` | Mouse/Enter capture, IME/typing exclusions, lost acknowledgement, equal-text events, multiple tabs, navigation and retrospective export; no Attestamp dispatch |
+| `continuous-storage-gap` | Unavailable storage produces a recording gap without a save acknowledgement or provider replay |
+| `continuous-key-gap` | Unavailable keys produce a recording gap without a save acknowledgement or provider replay |
+| `continuous-connection-gap` | Lost bridge produces recording-unavailable feedback without capturing or replaying the user's action |
 
 The cancellation scenario follows the authenticated API from disconnected-account
 freeze through cancellation, history, selective export and independent recipient

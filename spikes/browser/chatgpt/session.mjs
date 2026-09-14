@@ -11,6 +11,7 @@ import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verify
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
+import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from '../../recipient/normal-observation.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
@@ -56,6 +57,7 @@ export class ChatGPTProtectionSession {
       validate: validateProtectedTextPayload, protocol: CHATGPT_RELEASE_PROTOCOL, diagnostics: this.#diagnostics,
       revokeOnRestart: true,
     }).init();
+    this.#restoreObservations();
     emit(this.#diagnostics, 'ENGINE_STARTED');
     return this;
   }
@@ -72,6 +74,81 @@ export class ChatGPTProtectionSession {
     return next;
   }
   #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value }), { type: 'observation' }); }
+  #normalEvent(value) {
+    return this.vault.capture(wire(validateNormalObservation({ profile: NORMAL_OBSERVATION_PROFILE, ...value })), { type: 'observation' });
+  }
+  #observedVersion(record, value, text) {
+    return { id: value.eventId, observation: true, source: value.source, inputMethod: value.inputMethod,
+      payload: { text, attachments: [] }, digest: digest({ text, attachments: [] }), scope: value.source.scope,
+      mode: 'Continuous', descriptorId: record.manifest.eventId, recordDigest: record.recordDigest,
+      state: 'PROMPT_SAVED', anchor: 'PENDING', timestamp: 'INDETERMINATE', attempt: null, assuranceHistory: [] };
+  }
+  #restoreObservations() {
+    const records = this.vault.inspect().records;
+    const observations = [];
+    for (const record of records.filter(value => value.manifest.type === 'observation')) {
+      const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
+      observations.push({ record, value });
+      if (value.profile !== NORMAL_OBSERVATION_PROFILE) continue;
+      validateNormalObservation(value);
+      if (value.kind === 'normal-send-intent') {
+        const text = records.find(entry => entry.manifest.eventId === value.textRecord
+          && entry.manifest.evidence[0].objectDigest === value.textObject
+          && entry.manifest.signingPublicKey === record.manifest.signingPublicKey);
+        if (!text || this.#versions.has(value.eventId)) throw Error('INVALID_CAPTURE_HISTORY');
+        const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(this.vault.read(value.textObject));
+        this.#versions.set(value.eventId, this.#observedVersion(record, value, content));
+      } else {
+        const version = this.#versions.get(value.eventId);
+        if (!version || value.recordDigest !== version.recordDigest || canonical(value.source) !== canonical(version.source)) {
+          throw Error('INVALID_CAPTURE_HISTORY');
+        }
+        version.messageId = value.messageId;
+      }
+    }
+    for (const { record, value } of observations) {
+      const version = this.#versions.get(value.version);
+      if (!version?.observation || value.profile !== 'pap-chatgpt-observation/1' || value.recordDigest !== version.recordDigest
+          || record.manifest.signingPublicKey !== records.find(entry => entry.manifest.eventId === version.descriptorId)?.manifest.signingPublicKey) continue;
+      if (value.kind === 'fast-confirmation' && value.report?.anchor === 'SOURCE_CORROBORATED'
+          && value.report?.timestamp === 'SOURCE_REPORTED' && version.anchor === 'PENDING'
+          || value.kind === 'consensus-assurance-upgrade' && value.report?.anchor === 'CONSENSUS_VERIFIED'
+          && value.report?.timestamp === 'BLOCK_HASH_BOUND') {
+        version.anchor = value.report.anchor; version.timestamp = value.report.timestamp;
+        version.assuranceHistory.push({ anchor: version.anchor, timestamp: version.timestamp,
+          profile: value.kind === 'fast-confirmation' ? FAST_CONFIRM_PROFILE : 'pap-algorand-sp/1',
+          round: value.report.round, receiptId: record.manifest.eventId });
+      }
+    }
+  }
+
+  observeNormal(input) {
+    const { eventId, source, text } = input;
+    const prior = this.#versions.get(eventId);
+    if (prior && (!prior.observation || canonical(prior.source) !== canonical(source) || prior.payload.text !== text
+        || input.kind === 'send-intent' && prior.inputMethod !== input.inputMethod)) throw Error('CAPTURE_REPLAY_CONFLICT');
+    if (input.kind === 'message-observed') {
+      if (!prior || prior.messageId && prior.messageId !== input.messageId) throw Error('CAPTURE_CORRELATION_CONFLICT');
+      if (!prior.messageId) {
+        this.#normalEvent({ kind: 'normal-message-observed', eventId, source, recordDigest: prior.recordDigest,
+          messageId: input.messageId, correlation: 'UNIQUE_NEW_EXACT_TEXT_DOM_MATCH', providerReceipt: 'UNKNOWN' });
+        prior.messageId = input.messageId;
+        emit(this.#diagnostics, 'MESSAGE_APPEARANCE_RECORDED', { operationId: eventId });
+      }
+      return this.#public(prior);
+    }
+    if (prior) return this.#public(prior);
+    const captured = this.vault.capture(Buffer.from(text, 'utf8'));
+    const value = { kind: 'normal-send-intent', eventId, source, inputMethod: input.inputMethod,
+      textRecord: captured.manifest.eventId, textObject: captured.manifest.evidence[0].objectDigest,
+      mode: 'Continuous', boundary: 'provider_dom', coverage: 'UTF8_COMPOSER_TEXT',
+      releaseClass: 'RETROSPECTIVE_CONTINUOUS', attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
+    const record = this.#normalEvent(value), version = this.#observedVersion(record, value, text);
+    this.#versions.set(eventId, version);
+    emit(this.#diagnostics, 'VAULT_CAPTURED', { operationId: eventId, captureId: captured.manifest.eventId });
+    emit(this.#diagnostics, 'NORMAL_PROMPT_SAVED', { operationId: eventId, captureId: captured.manifest.eventId });
+    return this.#public(version);
+  }
   #version(id) { const value = this.#versions.get(id); if (!value) throw Error('Unknown version'); return value; }
   #activeVersion(id) {
     const version = this.#version(id);
@@ -124,11 +201,13 @@ export class ChatGPTProtectionSession {
   }
   interruptScope(scope) {
     this.#generations.set(scope, (this.#generations.get(scope) ?? 0) + 1);
-    return Promise.allSettled([...this.#versions.values()].filter(value => value.scope === scope)
+    return Promise.allSettled([...this.#versions.values()].filter(value => value.scope === scope && !value.observation)
       .map(value => this.interruptVersion(value.id)));
   }
   interruptVersion(id) {
-    const version = this.#version(id); this.#ended.add(id);
+    const version = this.#version(id);
+    if (version.observation) return Promise.resolve();
+    this.#ended.add(id);
     if (version.state === 'CANCELLED' || version.attempt || this.runtime.snapshot().seals[id]?.priorAttempt) return Promise.resolve();
     return this.cancel({ id, scope: version.scope });
   }
@@ -232,7 +311,7 @@ export class ChatGPTProtectionSession {
     return this.#serial(async () => {
       const started = performance.now();
       const version = this.#activeVersion(id);
-      if (scope !== version.scope || !this.#scopes.has(scope)) throw Error('UNSUPPORTED_PATH: scope changed');
+      if (scope !== version.scope || !version.observation && !this.#scopes.has(scope)) throw Error('UNSUPPORTED_PATH: scope changed');
       if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
       if (version.mode !== 'Continuous') {
         this.#assertCurrentDraft(version, validateProtectedTextPayload({ text: currentText, attachments }));
@@ -300,7 +379,7 @@ export class ChatGPTProtectionSession {
           emit(this.#diagnostics, 'CONFIRMATION_ACCEPTED', { ...confirmationRefs, durationMs: performance.now() - confirmationStarted });
           if (version.mode === 'Always Protect') await this.#releaseVersion(version, current);
         } else {
-          if (!version.attempt) throw Error('Continuous release has not been attempted');
+          if (!version.observation && !version.attempt) throw Error('Continuous release has not been attempted');
           if (version.anchor !== 'PENDING') throw Error('Duplicate or non-monotonic fast confirmation');
           const evidence = await collect();
           emit(this.#diagnostics, 'CONFIRMATION_COLLECTED', confirmationRefs);
@@ -353,7 +432,7 @@ export class ChatGPTProtectionSession {
   cancel({ id, scope }) {
     return this.#serial(async () => {
       const version = this.#activeVersion(id);
-      if (scope !== version.scope || version.attempt) throw Error('Stale cancellation');
+      if (scope !== version.scope || version.attempt || version.observation) throw Error('Stale cancellation');
       await this.runtime.cancel(id, scope, version.digest); version.state = 'CANCELLED';
       if (version.managed) delete version.managed.message;
       version.message = 'Version cancelled. This version cannot be released. Its local evidence remains available.';

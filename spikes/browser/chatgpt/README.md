@@ -2,9 +2,11 @@
 
 This directory implements the first narrow browser contract: Apple-silicon macOS
 15.7 or later, Chrome Stable (fixture baseline 153), and `https://chatgpt.com`.
-Prompt text originates in the trusted local composer. The extension receives bytes
-only after the local runtime has durably recorded a release attempt and consumed
-the exact version's authorization. Attachments are unsupported.
+Continuous observes explicit normal Send actions in consented ChatGPT conversations.
+Sealed text originates in the trusted local composer; its extension receives bytes
+only after the runtime records a release attempt and consumes the exact version's
+authorization. Attachments are unsupported. See [normal-send capture](CONTINUOUS.md)
+for its supported inputs, gaps and retrospective assertion contract.
 
 The [resident engine contract](ENGINE.md) defines independent conversation scopes,
 versioned commands, preferences, operation lifetime and restart behavior. The local
@@ -21,8 +23,9 @@ UTF-8 text through 256 KiB without Unicode normalization. A trusted-composer edi
 revision accompanies the digest, so editing and then restoring the same visible
 text cannot reuse a stale authorization.
 
-- Continuous durably records an exact version and a retrospective dispatch attempt,
-  then releases without claiming pre-disclosure anchoring.
+- Continuous observes normal user Send and durably records the captured text, then
+  requests anchoring without dispatching anything. The labelled development composer
+  retains the historical Continuous dispatch path for compatibility and regressions.
 - Sealed persists exact bytes and fast-confirmation evidence, consumes one durable
   authorization, and only then calls the browser adapter.
 - Always Protect uses the identical Sealed path automatically inside one explicitly
@@ -103,7 +106,8 @@ that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
 access is disabled. The draft item is not yet a published or verified Web Store
 listing. Adapter profile version 5 requires an acknowledged runtime epoch and
 fresh engine checks before insertion and click. It rejects older extension
-contracts; extension version 1.4.0 uses page contract `chatgpt-web-text/2026-09-14`.
+contracts; extension version 1.5.0 uses page contract `chatgpt-web-text/2026-09-14`
+and separately negotiates `pap-chatgpt-capture/1` for normal-send observation.
 Its JavaScript state explicitly reports browser identity as
 `UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
 only a running parent whose macOS code signature is Google's Stable identifier and

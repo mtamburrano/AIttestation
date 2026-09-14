@@ -24,6 +24,7 @@ async function api(path, data = {}) {
 
 function controls() {
   $('enroll').disabled = busy || scope !== null || detected === null;
+  $('apply-conversation-mode').disabled = busy || !engineState?.available || scope === null;
   $('freeze').disabled = busy || capabilityUnavailable || scope === null;
   $('request').disabled = busy || !selected?.actions?.anchorRequest;
   $('cancel').disabled = busy || !selected?.actions?.cancel;
@@ -199,10 +200,10 @@ async function refresh() {
   capabilityUnavailable = eligibility === 'TEMPORARILY_UNAVAILABLE';
   const tabs = state.browser?.tabs ?? [];
   const target = tabs.find(value => String(value.id) === $('target').value);
-  detected = target?.active && target.surfaceSupported && target.composerEmpty && !target.attachmentsPresent ? target : null;
+  detected = engine?.targets.find(value => value.tabId === target?.id)?.eligible ? target : null;
   $('pairing').textContent = detected
     ? `Detected tab ${detected.id}: ${detected.destination}`
-    : 'Select an active, empty, supported ChatGPT target.';
+    : 'Select a supported ChatGPT target. Protected dispatch needs an active, empty composer.';
   if (eligibility === 'REVOKED') {
     scope = null; detected = null; selected = null;
     $('scope').textContent = 'Protection eligibility revoked. Existing receipts remain available.';
@@ -219,6 +220,13 @@ $('target').onchange = () => {
 };
 
 action('refresh', refresh);
+action('apply-conversation-mode', async () => {
+  await engineCommand('SET_CONVERSATION_MODE', { scope, mode: $('conversation-mode').value });
+  await refresh();
+  $('status').textContent = $('conversation-mode').value === 'Continuous'
+    ? 'Continuous requested. Use ChatGPT’s normal composer and Send; recording feedback appears there.'
+    : 'Conversation preference saved.';
+});
 action('enroll', async () => {
   if (!detected) throw Error('Refresh and select one supported tab first');
   if (!engineState) throw Error('Resident engine unavailable');

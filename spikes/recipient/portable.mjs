@@ -2,6 +2,7 @@ import { canonical, parseCanonical, keys, fail, unpack, pack, unb64, LIMITS } fr
 import { publicProofDigest, verifyDisclosure } from '../vault/records.mjs';
 import { verifyAnchor } from '../anchor/verifier.mjs';
 import { verifyInclusion } from '../anchor/merkle.mjs';
+import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from './normal-observation.mjs';
 
 export const PORTABLE_PROFILE = 'pap-portable-evidence/1';
 export const RECIPIENT_LIMITS = Object.freeze({ wire: 16 * 2 ** 20, total: 12 * 2 ** 20,
@@ -85,8 +86,17 @@ export function signedObservation(record, bytes, checked) {
       || checked.structure !== 'VALID' || checked.integrity !== 'VALID' || checked.keyAttribution !== 'SIGNATURE_VALID' || !bytes) return null;
   try {
     const value = parseCanonical(bytes, LIMITS.manifest);
-    return value.profile === 'pap-chatgpt-observation/1' ? value : null;
+    return value.profile === 'pap-chatgpt-observation/1' ? value
+      : value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation(value) : null;
   } catch { return null; }
+}
+
+export function linksNormalMessage(record, observation, targetRecord, targetObservation) {
+  return observation?.profile === NORMAL_OBSERVATION_PROFILE && observation.kind === 'normal-message-observed'
+    && targetObservation?.profile === NORMAL_OBSERVATION_PROFILE && targetObservation.kind === 'normal-send-intent'
+    && observation.eventId === targetObservation.eventId && observation.recordDigest === targetRecord?.recordDigest
+    && record.manifest.signingPublicKey === targetRecord?.manifest.signingPublicKey
+    && canonical(observation.source) === canonical(targetObservation.source);
 }
 
 export function linksCancellation(record, observation, targetRecord, targetObservation) {
@@ -189,6 +199,26 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
   disclosure.records.forEach((record, index) => {
     const observation = observations.get(record.recordDigest);
     const target = byDigest.get(observation?.recordDigest);
+    if (observation?.profile === NORMAL_OBSERVATION_PROFILE) {
+      if (observation.kind === 'normal-send-intent') {
+        const text = disclosure.records.find(value => value.manifest?.eventId === observation.textRecord);
+        const checkedText = text && byDigest.get(text.recordDigest);
+        const linked = checkedText?.structure === 'VALID' && checkedText?.keyAttribution === 'SIGNATURE_VALID'
+          && text.manifest.signingPublicKey === record.manifest.signingPublicKey
+          && text.manifest.evidence[0].objectDigest === observation.textObject;
+        records[index].releaseControl = 'OBSERVED_ONLY';
+        records[index].localAssertions.push({ kind: observation.kind, eventId: observation.eventId,
+          source: observation.source, inputMethod: observation.inputMethod, coverage: observation.coverage,
+          textAssociation: linked ? 'SIGNED_TEXT_REFERENCE' : 'MISSING_OR_INVALID',
+          assurance: 'CLIENT_ASSERTION_ONLY', providerReceipt: 'UNKNOWN',
+          claim: 'Retrospective observation of normal Send intent. No pre-egress control, provider receipt, response, attachment or hidden-context coverage.' });
+      } else if (linksNormalMessage(record, observation, sourceRecords.get(observation.recordDigest), observations.get(observation.recordDigest))) {
+        target.localAssertions.push({ kind: observation.kind, eventId: observation.eventId, messageId: observation.messageId,
+          correlation: observation.correlation, assurance: 'CLIENT_ASSERTION_ONLY', providerReceipt: 'UNKNOWN',
+          claim: 'Client reports a unique new exact-text user message in the same page. DOM appearance is not independent provider receipt.' });
+      }
+      return;
+    }
     if (observation?.kind === 'release-cancelled') {
       const linked = linksCancellation(record, observation, sourceRecords.get(observation.recordDigest), observations.get(observation.recordDigest));
       (linked ? target : records[index]).localAssertions.push({ kind: 'release-cancelled', state: 'CANCELLED',
@@ -201,7 +231,7 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
       target.localAssertions.push({ kind: observation.kind, anchor: observation.report?.anchor ?? 'UNKNOWN',
         timestamp: observation.report?.timestamp ?? 'UNKNOWN', assurance: 'CLIENT_ASSERTION_ONLY' });
     }
-    if (observation.kind === 'release-outcome') {
+    if (observation.kind === 'release-outcome' && observations.get(target.recordDigest)?.profile !== NORMAL_OBSERVATION_PROFILE) {
       const releaseControl = observation.mode === 'Continuous' && observation.releaseClass === 'RETROSPECTIVE_CONTINUOUS'
         ? 'OBSERVED_ONLY' : ['Sealed', 'Always Protect'].includes(observation.mode)
           && observation.releaseClass === 'PRE_DISCLOSURE_PROTECTED' && observation.state === 'SUBMISSION_OBSERVED'

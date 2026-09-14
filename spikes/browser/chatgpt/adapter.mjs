@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validateProtectedTextPayload } from '../../release/runtime.mjs';
 import { emit } from '../../release/diagnostics.mjs';
+import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
 
 export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/5';
 export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
@@ -65,7 +66,8 @@ export class ChatGPTChromeAdapter {
       providerReceipt: 'UNKNOWN',
       filesystemAPI: false,
       signerAPI: false,
-      observation: false,
+      observation: this.#connection?.captureProfile === CHATGPT_CAPTURE_PROFILE,
+      captureProfile: CHATGPT_CAPTURE_PROFILE,
       strictAdmission: true,
     });
   }
@@ -153,7 +155,7 @@ export class ChatGPTChromeAdapter {
     return this.#tabs.filter(tab => supportedURL(tab.url)).map(tab => ({
       adapterId: CHATGPT_ADAPTER_ID, adapterEpoch: this.#connection?.browserSessionId,
       tabId: tab.id, windowId: tab.windowId, tabEpoch: tab.tabEpoch, destination: tab.destination,
-      eligible: this.#eligibleTabs().some(value => value.id === tab.id),
+      eligible: [...this.#eligibleTabs(), ...this.#observableTabs()].some(value => value.id === tab.id),
     }));
   }
   scopes() {
@@ -165,6 +167,11 @@ export class ChatGPTChromeAdapter {
   #eligibleTabs() {
     return this.#chatGPTTabs().filter(tab => supportedURL(tab.url) && tab.active && tab.surfaceSupported
       && !tab.attachmentsPresent && tab.composerEmpty);
+  }
+  #observableTabs() {
+    return this.capabilities.observation ? this.#chatGPTTabs().filter(tab => supportedURL(tab.url)
+      && tab.surfaceSupported && !tab.attachmentsPresent && tab.destination === (new URL(tab.url).pathname === '/'
+        ? 'new-chat' : `conversation:${new URL(tab.url).pathname.split('/')[2]}`)) : [];
   }
   #invalidate(reason) {
     emit(this.#diagnostics, 'SCOPE_INVALIDATED');
@@ -181,7 +188,7 @@ export class ChatGPTChromeAdapter {
 
   enroll({ tabId, destination }) {
     if (!this.#connection) fail('extension is not paired');
-    const tab = this.#eligibleTabs().find(value => value.id === tabId && value.destination === destination);
+    const tab = [...this.#eligibleTabs(), ...this.#observableTabs()].find(value => value.id === tabId && value.destination === destination);
     if (!tab) fail('an active, empty, supported ChatGPT target is required');
     const existing = [...this.#enrollments.values()].find(value => value.tabId === tabId);
     if (existing) return this.#publicEnrollment(existing);
@@ -219,6 +226,21 @@ export class ChatGPTChromeAdapter {
   eligibility(scope) {
     try { this.#assertHealthy(scope); return 'ELIGIBLE'; }
     catch (error) { return error.code === 'CAPABILITY_UNAVAILABLE' ? 'TEMPORARILY_UNAVAILABLE' : 'REVOKED'; }
+  }
+
+  observationEligible(scope) {
+    const enrolled = this.#enrollments.get(scope);
+    return Boolean(enrolled && this.#connection && this.#observableTabs().some(tab => tab.id === enrolled.tabId
+      && tab.windowId === enrolled.windowId && tab.tabEpoch === enrolled.tabEpoch && tab.url === enrolled.url
+      && tab.destination === enrolled.destination));
+  }
+
+  assertObservationSource(source) {
+    const enrolled = this.#enrollments.get(source.scope);
+    if (!this.observationEligible(source.scope) || source.runtimeEpoch !== this.#runtimeEpoch
+        || source.browserSessionId !== enrolled.browserSessionId || source.tabId !== enrolled.tabId
+        || source.windowId !== enrolled.windowId || source.tabEpoch !== enrolled.tabEpoch
+        || source.destination !== enrolled.destination) fail('capture source changed');
   }
 
   isDispatchCurrent(attemptId) {

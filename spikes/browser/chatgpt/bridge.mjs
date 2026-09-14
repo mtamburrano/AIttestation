@@ -1,11 +1,13 @@
 import { CHATGPT_RELEASE_PROTOCOL } from './adapter.mjs';
 import { emit } from '../../release/diagnostics.mjs';
+import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
 
 export class ChromeBridgeController {
   #diagnostics;
   #adapter; #write; #pending = new Map(); #timeoutMs; #connected = true; #localBrowser; #localPlatform; #paired = false;
+  #engine; #policy = null; #observations = 0;
 
-  constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform, diagnostics = null } = {}) {
+  constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform, diagnostics = null, engine = null } = {}) {
     if (!adapter || typeof write !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20_000) {
       throw Error('Invalid Chrome bridge controller');
     }
@@ -15,6 +17,7 @@ export class ChromeBridgeController {
     this.#adapter = adapter; this.#write = write; this.#timeoutMs = timeoutMs;
     this.#localBrowser = structuredClone(localBrowser); this.#localPlatform = structuredClone(localPlatform);
     this.#diagnostics = diagnostics;
+    this.#engine = engine;
   }
 
   receive(message) {
@@ -28,10 +31,28 @@ export class ChromeBridgeController {
       this.#adapter.synchronize(hello);
       this.#paired = true;
       this.#write({ kind: 'PAP_READY', runtimeEpoch, browserSessionId: message.browserSessionId });
+      this.publishCapturePolicy();
       emit(this.#diagnostics, 'BRIDGE_HELLO');
       return;
     }
     if (!this.#paired) throw Error('Chrome bridge is not paired');
+    if (message.kind === 'PAP_CAPTURE') {
+      if (!this.#engine || this.#observations >= 32 || Object.keys(message).sort().join(',') !== 'kind,observation,requestId'
+          || !/^[a-f0-9-]{36}$/.test(message.requestId ?? '')) throw Error('Invalid capture delivery');
+      const { textBytes, ...observation } = message.observation ?? {};
+      if (typeof textBytes !== 'string' || textBytes.length > 349528 || Object.hasOwn(observation, 'text')
+          || Buffer.from(textBytes, 'base64').toString('base64') !== textBytes) throw Error('Invalid capture encoding');
+      observation.text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(textBytes, 'base64'));
+      this.#observations++;
+      this.#engine.observe(observation).then(result => {
+        if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId, result });
+      }).catch(() => {
+        emit(this.#diagnostics, 'CAPTURE_GAP');
+        if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId,
+          result: { profile: CHATGPT_CAPTURE_PROFILE, state: 'RECORDING_UNAVAILABLE' } });
+      }).catch(() => {}).finally(() => { this.#observations--; });
+      return;
+    }
     if (message.kind === 'PAP_STATE') {
       this.#adapter.synchronize(message); emit(this.#diagnostics, 'BRIDGE_STATE'); return;
     }
@@ -69,6 +90,14 @@ export class ChromeBridgeController {
       return;
     }
     throw Error('Unsupported Chrome bridge message');
+  }
+
+  publishCapturePolicy() {
+    if (!this.#connected || !this.#paired || !this.#engine || !this.#adapter.capabilities.observation) return;
+    const policies = this.#engine.capturePolicy(), states = this.#engine.captureStates(), encoded = JSON.stringify({ policies, states });
+    if (encoded === this.#policy) return;
+    this.#policy = encoded;
+    this.#write({ kind: 'PAP_CAPTURE_POLICY', profile: CHATGPT_CAPTURE_PROFILE, policies, states });
   }
 
   sendRelease(command, diagnosticRefs = {}) {

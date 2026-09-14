@@ -95,6 +95,16 @@ conflicting anchor results remain visible and aggregate to indeterminate.
 Selection never proves global completeness or latest state. Release-control
 results describe signed client assertions, not independent evidence of egress.
 
+Normal ChatGPT Send uses the closed `pap-chatgpt-observation/2` vocabulary:
+`normal-send-intent` binds the selected text record and source scope/document;
+`normal-message-observed` separately binds an exact-text DOM appearance to that
+intent by signed record digest, event ID, source and signing key. The verifier
+reports `OBSERVED_ONLY`, explicit retrospective coverage and unknown provider
+receipt. It cannot turn a legacy release assertion aimed at this descriptor into
+pre-egress control. Missing bytes remain missing evidence; omitted appearances
+make no appearance claim. Historical observation/1 Continuous and Sealed exports
+are read under their original semantics. See the [capture contract](../browser/chatgpt/CONTINUOUS.md).
+
 ## Hostile input limits and offline behavior
 
 Imports are at most 16 MiB, with 128 records, 128 evidence objects, 128 anchor
