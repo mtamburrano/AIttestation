@@ -212,7 +212,10 @@ export async function collectFastEvidence({
         if (controller.signal.aborted) throw pending('two-operator observation was interrupted');
         if (!retryCodes.has(error?.code)) throw error;
         emit(diagnostics, error.code);
-        const backoff = Math.min(RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)], remaining());
+        remaining();
+        // Preserve the full backoff; the shared deadline aborts a delay that
+        // cannot finish in time without creating a fractional final retry.
+        const backoff = RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
         try { await delay(backoff, undefined, { signal: controller.signal }); }
         catch { throw pending('two-operator observation was interrupted'); }
         continue;

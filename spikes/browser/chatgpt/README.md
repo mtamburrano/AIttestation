@@ -47,7 +47,9 @@ two-source budget. The two operators are launched concurrently. An operator's
 pending-transaction HTTP 404 with a valid error body, or an intact signed
 transaction still in the pool with no pool error, permits another observation.
 Backoff is 100, 200, 400, 800, then at most 1,000 ms, inside that same deadline;
-a successful operator is retained. Retry outcomes use the additive
+a successful operator is retained. Backoff is never shortened to fit the remaining
+budget: the shared deadline aborts it before another observation can begin.
+Retry outcomes use the additive
 `pap-algod-observer-retry/1` profile and exit status 2, bound to the requested
 transaction ID. The request and evidence profiles remain unchanged.
 

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
+import { syncBuiltinESMExports } from 'node:module';
 import { FAST_CONFIRM_PROFILE, ALGOD_RETRY_PROFILE, collectFastEvidence, observeAlgodOperator } from '../spikes/anchor/algorand/fast-confirm.mjs';
 import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
 
@@ -51,16 +52,44 @@ test('one or both delayed operators confirm automatically without rereading a su
   }
 });
 
-test('permanent absence exhausts one shared budget with bounded attempts and no background retries', async () => {
-  const calls = { a: 0, b: 0 }, signals = [], diagnostics = new LocalDiagnostics();
-  const started = performance.now();
-  await assert.rejects(collectFastEvidence({ trust, transactionId, waitMs: 250, diagnostics,
-    observe: async (operator, { signal }) => { calls[operator.id]++; signals.push(signal); throw transient(); } }),
-  { code: 'PENDING_FAST_CONFIRMATION' });
-  assert.ok(performance.now() - started < 1000);
-  assert.deepEqual(calls, { a: 2, b: 2 }); assert.ok(signals.every(signal => signal.aborted));
-  assert.ok(diagnostics.preview().report.events.some(event => event.code === 'CONFIRMATION_BUDGET_EXPIRED'));
-  await delay(120); assert.deepEqual(calls, { a: 2, b: 2 });
+test('permanent absence exhausts one shared budget with bounded attempts and no background retries', async t => {
+  for (const retryTime of [100, 100.5]) {
+    await t.test(`second observation at ${retryTime} ms`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      syncBuiltinESMExports();
+      const calls = { a: 0, b: 0 }, signals = [], diagnostics = new LocalDiagnostics();
+      const controller = new AbortController();
+      t.after(() => { controller.abort(); t.mock.timers.reset(); syncBuiltinESMExports(); });
+      let now = 0, settled = false;
+      const work = collectFastEvidence({ trust, transactionId, waitMs: 250, now: () => now,
+        signal: controller.signal, diagnostics,
+        observe: async (operator, request) => {
+          assert.equal(request.transactionId, transactionId);
+          calls[operator.id]++; signals.push(request.signal); throw transient();
+        } });
+      const rejected = assert.rejects(work, { code: 'PENDING_FAST_CONFIRMATION' }).then(() => { settled = true; });
+      await new Promise(setImmediate);
+      assert.deepEqual(calls, { a: 1, b: 1 });
+      now = retryTime; t.mock.timers.tick(100);
+      await new Promise(setImmediate);
+      assert.deepEqual(calls, { a: 2, b: 2 });
+
+      // Fractional callback time lets a shortened final sleep wake just before
+      // the independent deadline. Neither source may start a third observation.
+      now = 249.5; t.mock.timers.tick(149.5);
+      await new Promise(setImmediate);
+      assert.deepEqual(calls, { a: 2, b: 2 });
+      assert.equal(settled, false);
+      assert.ok(signals.every(signal => !signal.aborted));
+      now = 250; t.mock.timers.tick(0.5);
+      await rejected;
+      assert.deepEqual(calls, { a: 2, b: 2 }); assert.ok(signals.every(signal => signal.aborted));
+      assert.equal(diagnostics.preview().report.events.filter(event => event.code === 'CONFIRMATION_BUDGET_EXPIRED').length, 1);
+      now = 1250; t.mock.timers.tick(1000);
+      await new Promise(setImmediate);
+      assert.deepEqual(calls, { a: 2, b: 2 });
+    });
+  }
 });
 
 test('abort interrupts observation and backoff, and a pre-aborted request starts no work', async t => {
