@@ -13,6 +13,8 @@ import { MANAGED_NETWORK, MANAGED_GENESIS } from '../../managed/protocol.mjs';
 import { InstallationLifecycle, STORE_URL } from '../../distribution/lifecycle.mjs';
 import { DesktopUpdater } from '../../distribution/updater.mjs';
 import { RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from '../../distribution/config.mjs';
+import { startRecipient } from '../../recipient/server.mjs';
+import { startDesktopChannel } from './desktop-channel.mjs';
 
 const defaultSupportDirectory = join(homedir(), 'Library', 'Application Support', 'Private Provenance');
 
@@ -21,7 +23,7 @@ export async function startPackagedChatGPT({
   collectFast, verifyFast, verifyArchive, attestPeer, managed = undefined, openBrowser = false,
   installation = undefined,
   diagnostics, controllerTimeoutMs,
-  openDashboard,
+  openDashboard, desktopChannel = null,
 } = {}) {
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
   let installedRelease = null, releaseCandidate = null;
@@ -63,14 +65,23 @@ export async function startPackagedChatGPT({
       : DurableVault.create(vaultDirectory, keyStore === undefined ? {} : { keyStore });
     ownedVault = true;
   }
-  let bridge, composer;
+  let bridge, composer, desktop, recipient, recipientStarting;
   try {
+    const openLocal = path => new Promise((resolve, reject) => {
+      const child = spawn('/usr/bin/open', [path], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
+      child.once('error', () => reject(Error('Unable to open the selected release resource')));
+      child.once('exit', code => code === 0 ? resolve() : reject(Error('Unable to open the selected release resource')));
+    });
+    const showDashboard = (section = '') => {
+      if (!composer) throw Error('Dashboard unavailable');
+      const url = new URL(composer.dashboardURL);
+      if (section) url.searchParams.set('section', section);
+      return (openDashboard ?? openLocal)(url.href);
+    };
     bridge = await startChromeProtectionRuntime(supportDirectory, {
       fastTrust: trust, vault, managed,
-      openDashboard: () => {
-        if (!composer) throw Error('Dashboard unavailable');
-        return (openDashboard ?? openLocal)(composer.url);
-      },
+      openDashboard: () => showDashboard(),
+      integrationEnabled: installation ? (await installation.status()).integration === 'ENABLED' : true,
       ...(collectFast === undefined ? {} : { collectFast }),
       ...(verifyFast === undefined ? {} : { verifyFast }),
       ...(verifyArchive === undefined ? {} : { verifyArchive }),
@@ -80,21 +91,26 @@ export async function startPackagedChatGPT({
     });
     const updater = installedRelease ? new DesktopUpdater({ config: installedRelease, lifecycle: installation,
       schema: () => vault.schemaInfo(), directory: join(supportDirectory, 'Updates') }) : null;
-    const openLocal = path => new Promise((resolve, reject) => {
-      const child = spawn('/usr/bin/open', [path], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
-      child.once('error', () => reject(Error('Unable to open the selected release resource')));
-      child.once('exit', code => code === 0 ? resolve() : reject(Error('Unable to open the selected release resource')));
-    });
+    let maintenanceTail = Promise.resolve();
+    const changeIntegration = operation => {
+      const next = maintenanceTail.then(operation); maintenanceTail = next.catch(() => {}); return next;
+    };
     bridge.maintenance = installation ? {
       status: () => installation.status(),
-      enable: () => installation.enable(),
+      enable: () => changeIntegration(async () => {
+        const state = await installation.enable(); await bridge.enableIntegration(); return state;
+      }),
+      disable() {
+        bridge.disableIntegration();
+        return changeIntegration(() => { bridge.disableIntegration(); return installation.disable(); });
+      },
       async store() { await installation.record('storeOpened'); await openLocal(STORE_URL); return { opened: true }; },
       async offerExport() { await installation.record('exportOffered'); return { evidence: 'RETAINED', exportAvailable: true }; },
       async remove(data) {
         // End bridge authority before removing the registration. A concurrent
         // admitted attempt is drained by the ordinary close path, never retried.
         bridge.disableIntegration();
-        return installation.remove(data);
+        return changeIntegration(() => { bridge.disableIntegration(); return installation.remove(data); });
       },
       diagnostics: () => installation.diagnostics({ paired: bridge.browserState() !== null, update: updater?.state }),
       async checkUpdate() { if (!updater) throw Error('Updates are not configured'); return updater.check(); },
@@ -104,26 +120,36 @@ export async function startPackagedChatGPT({
         return { state: result.state, instruction: 'Close Attestamp, replace the app in Finder, then reopen and pair your tab. Evidence stays on this Mac.' };
       },
     } : null;
+    bridge.openVerifier = async () => {
+      if (closing) throw Error('ENGINE_UNAVAILABLE');
+      if (!recipient || recipient.closed) {
+        recipientStarting ??= startRecipient();
+        try { recipient = await recipientStarting; } finally { recipientStarting = null; }
+      }
+      if (closing) { await recipient.close(); throw Error('ENGINE_UNAVAILABLE'); }
+      await (openDashboard ?? openLocal)(recipient.url);
+      return { opened: true };
+    };
+    bridge.openDashboard = showDashboard;
     if (installation) bridge.waitForPairing().then(() => installation.record('paired')).catch(() => {});
     let closing;
     const close = () => closing ??= (async () => {
       // Revoke authority before draining; closing a browser view never calls this.
       bridge.engine.stop();
+      desktop?.close(); await recipientStarting?.catch(() => {}); await recipient?.close();
       await composer?.close(); await bridge.close(); if (ownedVault) vault.close();
     })();
     composer = await startProductComposer(bridge, { onExit: close });
+    if (desktopChannel) desktop = startDesktopChannel(bridge, { ...desktopChannel, onExit: close });
     if (openBrowser) {
-      const browser = spawn('/usr/bin/open', ['-b', 'com.google.Chrome', composer.url], {
-        env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore', detached: true,
-      });
-      browser.on('error', () => {});
-      browser.unref();
+      await showDashboard();
     }
     return {
-      ...bridge, composerURL: composer.url,
+      ...bridge, composerURL: composer.url, dashboardURL: composer.dashboardURL,
       close,
     };
   } catch (error) {
+    desktop?.close(); await recipient?.close();
     try { await composer?.close(); } catch {}
     try { await bridge?.close(); } catch {}
     if (ownedVault) vault.close();
@@ -132,7 +158,8 @@ export async function startPackagedChatGPT({
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  startPackagedChatGPT({ openBrowser: process.argv.includes('--open') }).then(runtime => {
+  startPackagedChatGPT({ openBrowser: process.argv.includes('--open'),
+    desktopChannel: process.argv.includes('--resident') ? { requestFD: 6, responseFD: 7 } : null }).then(runtime => {
     const close = () => runtime.close().finally(() => process.exit());
     process.once('SIGINT', close); process.once('SIGTERM', close);
   }).catch(() => { process.stderr.write('PRIVATE_PROVENANCE_START_FAILED\n'); process.exitCode = 1; });

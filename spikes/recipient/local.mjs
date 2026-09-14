@@ -41,6 +41,12 @@ export class LocalReceipts {
         && (entry.value.kind !== 'release-cancelled' || linksCancellation(entry.record, entry.value, record, value))
         && (entry.value.kind !== 'normal-message-observed' || linksNormalMessage(entry.record, entry.value, record, value)));
       return { id: record.manifest.eventId, title: `${value.mode} · ${record.manifest.localClaimedTime}`,
+        prompt: { mode: value.mode, savedAt: record.manifest.localClaimedTime,
+          scope: value.source?.scope ?? value.scope ?? null, destination: value.source?.destination ?? null,
+          outcome: related.findLast(entry => entry.value.kind === 'release-outcome')?.value.state ?? null,
+          cancelled: related.some(entry => entry.value.kind === 'release-cancelled'),
+          anchor: related.some(entry => entry.value.kind === 'consensus-assurance-upgrade') ? 'PORTABLE_PROOF'
+            : related.some(entry => entry.value.kind === 'fast-confirmation') ? 'SOURCE_CORROBORATED' : 'PENDING' },
         textRecordId: text.manifest.eventId, recordIds: [text.manifest.eventId, record.manifest.eventId,
           ...related.map(entry => entry.record.manifest.eventId)], related,
         recordDigest: record.recordDigest, derivative: false };

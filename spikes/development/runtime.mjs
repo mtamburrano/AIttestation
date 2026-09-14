@@ -1,9 +1,11 @@
 import { readFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { MacOSKeychainStore } from '../vault/key-lifecycle.mjs';
 import { ManagedAnchoringClient } from '../managed/client.mjs';
 import { startPackagedChatGPT } from '../browser/chatgpt/runtime-main.mjs';
-import { DEVELOPMENT_PROFILE, validateAccount, privateJSON, writeNewJSON } from './environment.mjs';
+import { DEVELOPMENT_PROFILE, validateAccount, privateJSON, writeNewJSON, exists } from './environment.mjs';
+import { atomicWrite } from '../distribution/files.mjs';
+import { privateInstallation } from './integration.mjs';
 import { checkPlatform, launchDevelopmentChrome } from './chrome.mjs';
 import { localTLSRequest } from './tls.mjs';
 import { backupDevelopment, restoreDevelopment } from './recovery.mjs';
@@ -12,7 +14,10 @@ import { startupFailure } from './startup.mjs';
 let runtime, statePath;
 try {
   const paths = await validateAccount();
-  const request = await privateJSON(join(paths.control, 'launch.json'));
+  const launchPath = join(paths.control, 'launch.json'), desktopPath = join(paths.control, 'desktop.json');
+  const explicitLaunch = await exists(launchPath);
+  const request = await privateJSON(explicitLaunch ? launchPath : desktopPath);
+  if (!explicitLaunch && request.mode !== 'live-chatgpt-testnet') throw Error('EXPLICIT_PRIVATE_OPERATION_REQUIRED');
   const fields = { 'live-chatgpt-testnet': 'chromeApplication,mode,profile', backup: 'mode,outputDirectory,profile',
     restore: 'mode,outputDirectory,packageFile,profile,secretFile' };
   if (request.profile !== DEVELOPMENT_PROFILE || !Object.hasOwn(fields, request.mode)
@@ -24,7 +29,7 @@ try {
   // Revalidate the explicit copy inside the signed runtime before opening the
   // vault; launcher state is not a substitute for browser identity validation.
   const chrome = request.mode === 'live-chatgpt-testnet' ? await checkPlatform(request.chromeApplication, paths) : null;
-  await unlink(join(paths.control, 'launch.json'));
+  if (explicitLaunch) await unlink(launchPath);
   const keyStore = new MacOSKeychainStore();
   if (request.mode !== 'live-chatgpt-testnet') {
     const report = request.mode === 'backup'
@@ -37,8 +42,13 @@ try {
     origin: config.sponsorOrigin, keyStore,
     request: localTLSRequest(await readFile(new URL('sponsor-certificate.pem', import.meta.url)), config.sponsorOrigin),
   });
-  runtime = await startPackagedChatGPT({ supportDirectory: paths.support, keyStore, managed, installation: null });
-  await launchDevelopmentChrome(chrome, paths, runtime.composerURL);
+  runtime = await startPackagedChatGPT({ supportDirectory: paths.support, keyStore, managed,
+    installation: privateInstallation(paths, join(dirname(process.execPath), 'provenance-browser-host')),
+    desktopChannel: process.argv.includes('--resident') ? { requestFD: 6, responseFD: 7 } : null,
+    openDashboard: url => launchDevelopmentChrome(chrome, paths, url) });
+  // Reopening restores only the consented browser location, never a scope or send.
+  if (explicitLaunch) await atomicWrite(desktopPath, JSON.stringify(request));
+  await launchDevelopmentChrome(chrome, paths, 'about:blank');
   statePath = join(paths.control, 'runtime.json');
   await writeNewJSON(statePath, { profile: DEVELOPMENT_PROFILE, composerURL: runtime.composerURL });
   process.once('beforeExit', () => unlink(statePath).catch(() => {}));

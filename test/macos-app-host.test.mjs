@@ -13,6 +13,40 @@ import { portableBundle } from '../spikes/recipient/portable.mjs';
 import { sourceInventory } from '../spikes/distribution/inventory.mjs';
 import { verifyDistribution } from '../spikes/distribution/verify-artifacts.mjs';
 
+test('resident host keeps menu pipes separate from the fixed Keychain broker descriptors', { skip: process.platform !== 'darwin' }, t => {
+  const root = realpathSync(mkdtempSync('/private/tmp/attestamp-host-pipes-test-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = readFileSync(new URL('../spikes/vault/native/macos-app-host.swift', import.meta.url), 'utf8');
+  const entrypoint = source.lastIndexOf('\ndo {'); assert.ok(entrypoint > 0);
+  const fixture = join(root, 'main.swift'), executable = join(root, 'isolated-pipe-fixture'), script = join(root, 'pipe-runtime.mjs');
+  // Exercise the real spawn/descriptor wiring with a synthetic runtime. This
+  // fixture does not instantiate AppKit, sign a bundle or request a Keychain item.
+  writeFileSync(fixture, `${source.slice(0, entrypoint)}
+do {
+  let (child, request, response, control, event) = try spawnFixedRuntime(
+    nodeURL: URL(fileURLWithPath: CommandLine.arguments[1]), scriptURL: URL(fileURLWithPath: CommandLine.arguments[2]))
+  guard let control, let event, framedWrite(control, Data("CONTROL".utf8)),
+    let eventSize = readExactly(event, 4), eventSize.withUnsafeBytes({ $0.loadUnaligned(as: UInt32.self).bigEndian }) == 5,
+    readExactly(event, 5) == Data("EVENT".utf8),
+    let requestSize = readExactly(request, 4), requestSize.withUnsafeBytes({ $0.loadUnaligned(as: UInt32.self).bigEndian }) == 11,
+    readExactly(request, 11) == Data("KEY_REQUEST".utf8), framedWrite(response, Data("KEY_REPLY".utf8)) else { exit(1) }
+  var status: Int32 = 0; while waitpid(child, &status, 0) < 0 && errno == EINTR {}
+  exit(status == 0 ? 0 : 1)
+} catch { exit(1) }
+`);
+  writeFileSync(script, `import {readSync,writeSync} from 'node:fs';
+const read=(fd,n)=>{const b=Buffer.alloc(n);let i=0;while(i<n){const m=readSync(fd,b,i,n-i);if(!m)throw Error('EOF');i+=m;}return b;};
+const frame=fd=>read(fd,read(fd,4).readUInt32BE()).toString();
+const send=(fd,text)=>{const b=Buffer.from(text),p=Buffer.alloc(4);p.writeUInt32BE(b.length);writeSync(fd,Buffer.concat([p,b]));};
+if(process.argv[2]!=='--resident'||frame(6)!=='CONTROL')process.exit(1);
+send(7,'EVENT');send(3,'KEY_REQUEST');if(frame(4)!=='KEY_REPLY')process.exit(1);`);
+  const compile = spawnSync('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(root, 'cache'), '-D', 'PRODUCT_CHATGPT',
+    '-framework', 'Security', fixture, '-o', executable], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 60000 });
+  assert.equal(compile.status, 0, compile.stderr);
+  const result = spawnSync(executable, [process.execPath, script], { env: {}, encoding: 'utf8', timeout: 10000 });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('native peer identity serialization satisfies the strict JavaScript wire contract', { skip: process.platform !== 'darwin' }, t => {
   const root = realpathSync(mkdtempSync('/private/tmp/provenance-native-codec-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

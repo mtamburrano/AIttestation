@@ -235,8 +235,8 @@ In the test user, using only a designated test ChatGPT account and synthetic tex
 npm run dev -- start /absolute/copied/private-build --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app' --live-chatgpt-testnet
 ```
 
-This is the explicit live-boundary opt-in. It opens the local composer in the
-explicit Chrome copy with the isolated user-data directory. The private runtime
+This is the explicit live-boundary opt-in. It starts the resident Attestamp menu
+and opens a blank tab in the explicit Chrome copy with the isolated user-data directory. The private runtime
 rechecks the selected copy before opening the vault, and supplies the actual test
 user's HOME. It disables background networking, component updates and Chrome's
 updater scheduler for this process; it does not change updater preferences or
@@ -244,14 +244,20 @@ services. The supported browser's
 [scheduler switch](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.37/chrome/browser/chrome_browser_main.cc#1075)
 skips periodic updater setup, while
 [copy ownership](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.37/chrome/browser/updater/browser_updater_client_util_mac.mm#250)
-keeps its updater scope in the test account. Use this command for every launch;
-do not open the copy's About/Update action or promote its updater.
+keeps its updater scope in the test account. After this setup, opening the same
+Attestamp Private Test app in Finder reuses the saved consented browser location
+in `desktop.json`; it revalidates that copy and restores no scope or send grant.
+Do not open the copy's About/Update action or promote its updater.
 
 Visit `chrome://extensions`, enable Developer mode and
 load the output's `extension` directory unpacked. Verify its unchanged ID is
 `medilhopfckldjgdnchfkpmfmfnkadca`. Open one empty `https://chatgpt.com/` tab and
-sign into the designated test account. Enter protected text only in the local
-composer. Its banner identifies private development; no Store connection is needed.
+sign into the designated test account. Use the trusted Attestamp side panel for
+Sealed text, or Continuous with normal ChatGPT Send. The menu opens an optional
+dashboard for history, integrations, anchoring account and recovery. Its integration
+card identifies private development; no Store connection is needed. Closing the
+dashboard leaves capture running. Quit from the menu ends the engine. The old
+technical composer is available under Developer tools for bounded checks.
 
 While a designated ChatGPT account is unavailable, check local startup, load the
 unpacked extension to test native pairing, and verify rejection without an enrolled
@@ -272,20 +278,25 @@ An older private build without explicit browser selection is rejected with
 `PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT`; prepare an updated signed build.
 The production package has no browser-path override.
 
-1. Connect anchoring using the local sponsor's access code. Enroll the one supported
-   empty ChatGPT tab. Record only whether authenticated pairing succeeds.
-2. Try Continuous with synthetic text: local capture and release precede anchoring.
-   Try Sealed: bytes stay local while pending; after independent confirmation,
-   choose Send. Try Always Protect: the same confirmation gate releases automatically.
+1. During an approved installed checkpoint, connect anchoring in dashboard Settings
+   using the local sponsor's access code. Select a current conversation in the panel.
+2. Try Continuous with synthetic text using ChatGPT's normal Send. Try Sealed with
+   the panel's **Protect and send** action: bytes stay local until confirmation.
+   A persistent Sealed preference never restores old send authority.
 3. Stop the sponsor, edit while pending, add another ChatGPT tab, or disable the
    extension. Strict modes must remain pending or revoke eligibility; no downgrade
    or automatic resend is allowed. Refresh/re-enroll only as the app requires.
 4. Export a selected receipt using its disclosure preview. Open the bundled
    `Recipient/Attestamp Verifier.app` to check it without the sponsor. An export
    with only fast evidence does not become consensus-verified or prove authorship.
-5. Stop, close test Chrome, then start again using the same command. Reload the
+5. Quit Attestamp, close test Chrome, then reopen the app in Finder. Reload the
    extension if Chrome requires it. Check persisted receipts and fresh enrollment;
    old interrupted versions must never gain send authority after restart.
+
+Use `npm run test:dashboard-browser` and
+`npm run test:product -- --scenario resident-dashboard` for ordinary isolated
+regressions. Do not rebuild or modify the retained installed kit per task. These
+setup instructions do not authorize a new live provider send or transaction.
 
 ```sh
 npm run dev -- stop

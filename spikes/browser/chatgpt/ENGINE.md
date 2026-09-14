@@ -97,8 +97,9 @@ See [the capture contract](CONTINUOUS.md) for input mappings, retries and gaps.
 The development view retains historical Continuous dispatch and Always Protect
 semantics. The [privileged extension panel](SEALED.md) now uses the same engine
 commands over its negotiated, authenticated bridge path. A pending Sealed command
-in a scope rejects a second concurrent admission. The resident Mac menu remains
-a separate surface integration.
+in a scope rejects a second concurrent admission. The [resident Mac menu and
+optional dashboard](DASHBOARD.md) reuse these contracts through private inherited
+pipes and authenticated local requests.
 
 ## Persistence, recovery and compatibility
 

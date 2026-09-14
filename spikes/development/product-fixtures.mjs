@@ -15,11 +15,12 @@ import { MemoryKeyStore } from '../vault/key-lifecycle.mjs';
 import { verifyPortable } from '../recipient/portable.mjs';
 import { continuousProductFixture } from './continuous-fixtures.mjs';
 import { sidePanelProductFixture } from './sidepanel-fixtures.mjs';
+import { dashboardProductFixture } from './dashboard-fixtures.mjs';
 
 export const PRODUCT_SCENARIOS = Object.freeze(['sealed-success', 'sealed-delayed-confirmation', 'confirmation-unavailable',
   'confirmation-rejected', 'bridge-timeout', 'bridge-response-mismatch', 'account-disconnected', 'account-disconnected-cancel', 'resident-view-and-scopes',
   'continuous-normal-send', 'continuous-storage-gap', 'continuous-key-gap', 'continuous-connection-gap',
-  'panel-protect-and-send', 'panel-cancel', 'panel-destination-change']);
+  'panel-protect-and-send', 'panel-cancel', 'panel-destination-change', 'resident-dashboard']);
 export const SYNTHETIC_CANARY = 'SYNTHETIC_PRIVATE_PROMPT_e\u0301☕_https://private.invalid/c/secret?token=SECRET_CANARY_<div>PRIVATE_DOM</div>';
 const transactionId = 'A'.repeat(52), sponsorOrigin = 'https://synthetic-sponsor.invalid';
 const trust = Object.freeze({ profile: FAST_CONFIRM_PROFILE, network: MANAGED_NETWORK, genesis: 'synthetic-genesis',
@@ -51,6 +52,7 @@ export async function productFixture(directory, scenario, diagnostics, network) 
   invariant(typeof network?.allowRuntime === 'function', 'FIXTURE_NETWORK_FORBIDDEN');
   if (scenario.startsWith('continuous-')) return continuousProductFixture(directory, scenario, diagnostics, network);
   if (scenario.startsWith('panel-')) return sidePanelProductFixture(directory, scenario, diagnostics, network);
+  if (scenario === 'resident-dashboard') return dashboardProductFixture(directory, scenario, diagnostics, network);
   const disconnected = scenario.startsWith('account-disconnected');
   const keyStore = new MemoryKeyStore(), input = new PassThrough(), output = new PassThrough();
   let runtime, socket, payload, providerAttempts = 0, broadcasts = 0, preparations = 0, sponsorRequests = 0, failure, revokeNetwork;

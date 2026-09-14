@@ -44,8 +44,8 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
   // The separate private launcher reuses frozen identities. Check its additions
   // explicitly while keeping every original source entry in the baseline intact.
   const privateSources = {
-    'spikes/development/cli.mjs': ['ai.provenance.consumer', 'ai.provenance.consumer.json',
-      'ai.provenance.consumer.json', 'medilhopfckldjgdnchfkpmfmfnkadca'],
+    'spikes/development/integration.mjs': ['ai.provenance.consumer', 'ai.provenance.consumer.json',
+      'ai.provenance.consumer.json', 'ai.provenance.consumer.json', 'medilhopfckldjgdnchfkpmfmfnkadca'],
     'spikes/development/environment.mjs': ['pap-private-development/1'],
     'spikes/development/prepare.mjs': ['ai.provenance.consumer.bridge-peer-validator',
       'ai.provenance.consumer.browser-host', 'ai.provenance.consumer.runtime',
@@ -61,6 +61,11 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
   // Keep the historical baseline frozen. Enumerate epoch-handshake and bounded
   // dispatch-check migrations independently of production constants.
   const expectedSources = { ...baseline.sources,
+    'spikes/browser/chatgpt/dashboard.mjs': ['pap-dashboard/1'],
+    'spikes/browser/chatgpt/dashboard.js': ['pap-resident-command/1'],
+    'spikes/browser/chatgpt/desktop-channel.mjs': ['pap-desktop-command/1', 'pap-desktop-event/1'],
+    'spikes/vault/native/macos-app-host.swift': [...baseline.sources['spikes/vault/native/macos-app-host.swift'],
+      'pap-desktop-command/1', 'pap-desktop-event/1'].sort(),
     'spikes/browser/chatgpt/session.mjs': ['pap-algorand-sp/1', 'pap-algorand-sp/1', 'pap-chatgpt-observation/1', 'pap-chatgpt-observation/1'],
     'spikes/recipient/normal-observation.mjs': ['pap-chatgpt-capture/1', 'pap-chatgpt-chrome/5', 'pap-chatgpt-observation/2'],
     'spikes/recipient/local.mjs': ['pap-chatgpt-observation/2'],

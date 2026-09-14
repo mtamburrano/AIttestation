@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 import Security
+#if PRODUCT_CHATGPT || PRIVATE_DEVELOPMENT
+import AppKit
+#endif
 
 private let maximumRequestBytes = 256 * 1024
 private let maximumResponseBytes = 1024 * 1024
@@ -108,27 +111,49 @@ private func lockApplicationInstance() throws -> Int32 {
 }
 #endif
 
-private func spawnFixedRuntime(nodeURL: URL, scriptURL: URL, instanceLock: Int32? = nil) throws -> (pid_t, Int32, Int32) {
-  var requests = [Int32](repeating: -1, count: 2), responses = [Int32](repeating: -1, count: 2)
-  guard pipe(&requests) == 0, pipe(&responses) == 0 else { throw HostFailure.pipe }
-  for fd in requests + responses { guard fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 else { throw HostFailure.pipe } }
+private func privatePipe() throws -> [Int32] {
+  var descriptors = [Int32](repeating: -1, count: 2)
+  guard pipe(&descriptors) == 0 else { throw HostFailure.pipe }
+  // Keep sources above every fixed child descriptor before applying dup2.
+  return try descriptors.map { descriptor in
+    let duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, 64); close(descriptor)
+    guard duplicate >= 0 else { throw HostFailure.pipe }; return duplicate
+  }
+}
+
+private func spawnFixedRuntime(nodeURL: URL, scriptURL: URL, instanceLock: Int32? = nil) throws -> (pid_t, Int32, Int32, Int32?, Int32?) {
+  let requests = try privatePipe(), responses = try privatePipe()
+#if PRODUCT_CHATGPT || PRIVATE_DEVELOPMENT
+  let controls = try privatePipe(), events = try privatePipe()
+#else
+  let controls: [Int32] = [], events: [Int32] = []
+#endif
   var actions: posix_spawn_file_actions_t?
   guard posix_spawn_file_actions_init(&actions) == 0 else { throw HostFailure.spawn }
   defer { posix_spawn_file_actions_destroy(&actions) }
   posix_spawn_file_actions_adddup2(&actions, requests[1], 3)
   posix_spawn_file_actions_adddup2(&actions, responses[0], 4)
+  if !controls.isEmpty {
+    posix_spawn_file_actions_adddup2(&actions, controls[0], 6)
+    posix_spawn_file_actions_adddup2(&actions, events[1], 7)
+  }
   if let instanceLock {
     // Retain the kernel lock in the child as well. An orphaned old runtime must
     // finish before another app version can update the rollback floor or vault.
     posix_spawn_file_actions_adddup2(&actions, instanceLock, 5)
     posix_spawn_file_actions_addclose(&actions, instanceLock)
   }
-  for fd in [requests[0], requests[1], responses[0], responses[1]] where fd != 3 && fd != 4 && (instanceLock == nil || fd != 5) {
+  for fd in requests + responses + controls + events {
     posix_spawn_file_actions_addclose(&actions, fd)
   }
 
   var arguments: [UnsafeMutablePointer<CChar>?] = []
-  for value in [nodeURL.path, scriptURL.path, "--open"] { arguments.append(strdup(value)) }
+#if PRODUCT_CHATGPT || PRIVATE_DEVELOPMENT
+  let launchArgument = "--resident"
+#else
+  let launchArgument = "--open"
+#endif
+  for value in [nodeURL.path, scriptURL.path, launchArgument] { arguments.append(strdup(value)) }
   arguments.append(nil)
   var environment: [UnsafeMutablePointer<CChar>?] = []
   for value in ["HOME=\(try ownedHome())", "PATH=/usr/bin:/bin", "LANG=en_US.UTF-8"] { environment.append(strdup(value)) }
@@ -145,8 +170,115 @@ private func spawnFixedRuntime(nodeURL: URL, scriptURL: URL, instanceLock: Int32
   }
   guard status == 0 else { throw HostFailure.spawn }
   close(requests[1]); close(responses[0])
-  return (child, requests[0], responses[1])
+  if !controls.isEmpty { close(controls[0]); close(events[1]) }
+  return (child, requests[0], responses[1], controls.last, events.first)
 }
+
+#if PRODUCT_CHATGPT || PRIVATE_DEVELOPMENT
+private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegate {
+  private let control: Int32
+  private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+  private var state: [String: Any]?
+  private var lastUpdate = Date.distantPast
+  private var timer: Timer?
+  private var runtimeExited = false
+  private var terminationRequested = false
+  private let labels = [
+    "ENGINE_UNAVAILABLE": "Recording unavailable — restart Attestamp",
+    "CONFIGURATION_CONFLICT": "Chrome configuration needs attention",
+    "DISABLED": "Chrome connection disabled — open Integrations",
+    "PAUSED": "Paused for all conversations",
+    "DISCONNECTED": "Chrome disconnected — open Integrations",
+    "COVERAGE_UNAVAILABLE": "Coverage unavailable — check your conversation",
+    "SCOPES_READY": "Conversation inputs ready",
+    "OFF": "Capture off for current conversations",
+    "SELECT_CONVERSATION": "Choose a conversation in the Chrome panel",
+    "ACTION_FAILED": "Action failed — refresh and try again"
+  ]
+  init(control: Int32) { self.control = control; super.init() }
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    render()
+    timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+      guard let self else { return }
+      if Date().timeIntervalSince(self.lastUpdate) > 6 { self.state = nil; self.render() }
+    }
+  }
+  func receive(_ value: [String: Any]) -> Bool {
+    let expected = Set(["profile", "runtimeEpoch", "revision", "paused", "defaultMode", "available", "code",
+      "continuousScopes", "sealedScopes", "unavailableScopes"])
+    guard Set(value.keys) == expected, value["profile"] as? String == "pap-desktop-event/1",
+      let epoch = value["runtimeEpoch"] as? String, UUID(uuidString: epoch) != nil,
+      let revision = value["revision"] as? Int, revision >= 0,
+      value["paused"] is Bool, value["available"] is Bool,
+      let mode = value["defaultMode"] as? String, ["Off", "Continuous", "Sealed"].contains(mode),
+      let code = value["code"] as? String, labels[code] != nil,
+      ["continuousScopes", "sealedScopes", "unavailableScopes"].allSatisfy({ key in
+        guard let count = value[key] as? Int else { return false }; return count >= 0 && count <= 32
+      }) else { return false }
+    state = value; lastUpdate = Date(); render(); return true
+  }
+  private func item(_ title: String, _ selector: Selector?, value: String? = nil) -> NSMenuItem {
+    let result = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+    result.target = self; result.representedObject = value; return result
+  }
+  private func render() {
+    statusItem.button?.title = state == nil ? "Attestamp !" : state?["paused"] as? Bool == true ? "Attestamp ‖" : "Attestamp"
+    let menu = NSMenu(); menu.delegate = self
+    let code = state?["code"] as? String ?? "ENGINE_UNAVAILABLE"
+    menu.addItem(item(labels[code]!, nil))
+    if let state {
+      menu.addItem(item("\(state["continuousScopes"]!) Continuous · \(state["sealedScopes"]!) Sealed panel", nil))
+    }
+    menu.addItem(NSMenuItem.separator())
+    let pause = item(state?["paused"] as? Bool == true ? "Resume preferences" : "Pause all conversations", #selector(togglePause))
+    pause.isEnabled = state?["available"] as? Bool == true; menu.addItem(pause)
+    let modes = NSMenu(), modeItem = item("Chrome / ChatGPT default", nil)
+    for mode in ["Off", "Continuous", "Sealed"] {
+      let entry = item(mode, #selector(setMode(_:)), value: mode)
+      entry.state = state?["defaultMode"] as? String == mode ? .on : .off
+      entry.isEnabled = state?["available"] as? Bool == true; modes.addItem(entry)
+    }
+    modes.autoenablesItems = false; modeItem.submenu = modes; menu.addItem(modeItem)
+    menu.addItem(NSMenuItem.separator())
+    for (title, section) in [("Prompt history…", "history"), ("Integrations…", "integrations"),
+      ("Settings and recovery…", "settings"), ("Open free verifier…", "verifier")] {
+      menu.addItem(item(title, #selector(openSection(_:)), value: section))
+    }
+    menu.addItem(item("Refresh status", #selector(refresh)))
+    menu.addItem(NSMenuItem.separator()); menu.addItem(item("Quit Attestamp", #selector(quit)))
+    menu.autoenablesItems = false; statusItem.menu = menu
+    statusItem.button?.toolTip = labels[code]
+  }
+  private func send(_ kind: String, _ data: [String: Any] = [:]) {
+    var request = data; request["profile"] = "pap-desktop-command/1"; request["kind"] = kind
+    guard let bytes = try? JSONSerialization.data(withJSONObject: request), framedWrite(control, bytes) else {
+      state = nil; render(); return
+    }
+  }
+  @objc private func refresh() { send("REFRESH") }
+  @objc private func togglePause() {
+    guard let state else { return }
+    send("PAUSE", ["runtimeEpoch": state["runtimeEpoch"]!, "revision": state["revision"]!, "paused": !(state["paused"] as! Bool)])
+  }
+  @objc private func setMode(_ sender: NSMenuItem) {
+    guard let state, let mode = sender.representedObject as? String else { return }
+    send("MODE", ["runtimeEpoch": state["runtimeEpoch"]!, "revision": state["revision"]!, "mode": mode])
+  }
+  @objc private func openSection(_ sender: NSMenuItem) { send("OPEN", ["section": sender.representedObject as! String]) }
+  @objc private func quit() { send("QUIT") }
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    send("OPEN", ["section": "history"]); return false
+  }
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    if runtimeExited { return .terminateNow }
+    terminationRequested = true; send("QUIT"); return .terminateLater
+  }
+  func didExit() {
+    runtimeExited = true
+    if terminationRequested { NSApplication.shared.reply(toApplicationShouldTerminate: true) }
+  }
+}
+#endif
 
 do {
   signal(SIGPIPE, SIG_IGN)
@@ -176,14 +308,45 @@ do {
   let scriptURL = contents.appendingPathComponent("Resources/spikes/demonstrator/main.mjs")
 #endif
 #if PRODUCT_RELEASE
-  let (child, requestFD, responseFD) = try spawnFixedRuntime(nodeURL: nodeURL, scriptURL: scriptURL, instanceLock: instanceLock)
+  let (child, requestFD, responseFD, controlFD, eventFD) = try spawnFixedRuntime(nodeURL: nodeURL, scriptURL: scriptURL, instanceLock: instanceLock)
 #else
-  let (child, requestFD, responseFD) = try spawnFixedRuntime(nodeURL: nodeURL, scriptURL: scriptURL)
+  let (child, requestFD, responseFD, controlFD, eventFD) = try spawnFixedRuntime(nodeURL: nodeURL, scriptURL: scriptURL)
 #endif
+#if PRODUCT_CHATGPT || PRIVATE_DEVELOPMENT
+  guard let controlFD, let eventFD else { throw HostFailure.pipe }
+  let application = NSApplication.shared, menu = ResidentMenu(control: controlFD)
+  application.setActivationPolicy(.accessory); application.delegate = menu
+  DispatchQueue.global().async {
+    broker(requestFD, responseFD, helperURL: helperURL); close(requestFD); close(responseFD)
+  }
+  DispatchQueue.global().async {
+    while let prefix = readExactly(eventFD, 4) {
+      let size = prefix.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian }
+      guard size > 0, size <= 16 * 1024, let bytes = readExactly(eventFD, Int(size)),
+        let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] else { break }
+      DispatchQueue.main.sync { if !menu.receive(value) { kill(child, SIGTERM) } }
+    }
+    close(eventFD)
+  }
+  DispatchQueue.global().async {
+    var status: Int32 = 0; while waitpid(child, &status, 0) < 0 && errno == EINTR {}
+    DispatchQueue.main.async {
+      menu.didExit()
+      if status != 0 {
+        let alert = NSAlert(); alert.messageText = "Attestamp could not start or stopped unexpectedly."
+        alert.informativeText = "Recording is unavailable. Reopen Attestamp after checking the private setup. Your retained evidence has not been deleted."
+        alert.runModal()
+      }
+      application.terminate(nil)
+    }
+  }
+  application.run(); close(controlFD)
+#else
   broker(requestFD, responseFD, helperURL: helperURL)
   close(requestFD); close(responseFD)
   var status: Int32 = 0; while waitpid(child, &status, 0) < 0 && errno == EINTR {}
   exit(status == 0 ? EXIT_SUCCESS : EXIT_FAILURE)
+#endif
 } catch {
   exit(EXIT_FAILURE)
 }

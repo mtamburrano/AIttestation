@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { dashboardState } from './dashboard.mjs';
 
 const BODY_LIMIT = 384 * 1024;
 
@@ -44,9 +45,13 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
         '/': ['product.html', 'text/html; charset=utf-8'],
         '/product-app.js': ['product-app.js', 'text/javascript; charset=utf-8'],
         '/product.css': ['product.css', 'text/css; charset=utf-8'],
+        '/dashboard': ['dashboard.html', 'text/html; charset=utf-8'],
+        '/dashboard.js': ['dashboard.js', 'text/javascript; charset=utf-8'],
+        '/dashboard.css': ['dashboard.css', 'text/css; charset=utf-8'],
       };
-      if (request.method === 'GET' && Object.hasOwn(assets, request.url)) {
-        const [name, type] = assets[request.url];
+      const pathname = new URL(request.url, origin).pathname;
+      if (request.method === 'GET' && Object.hasOwn(assets, pathname)) {
+        const [name, type] = assets[pathname];
         return reply(response, 200, await readFile(new URL(name, import.meta.url), 'utf8'), type);
       }
       if (request.method !== 'POST' || request.headers.origin !== origin
@@ -68,7 +73,7 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
       if (request.url.startsWith('/installation/')) {
         const operations = { '/installation/status': 'status', '/installation/enable': 'enable',
           '/installation/store': 'store', '/installation/export-opportunity': 'offerExport',
-          '/installation/remove': 'remove', '/installation/diagnostics': 'diagnostics',
+          '/installation/remove': 'remove', '/installation/disable': 'disable', '/installation/diagnostics': 'diagnostics',
           '/installation/check-update': 'checkUpdate', '/installation/download-update': 'downloadUpdate' };
         const operation = operations[request.url];
         if (!operation) throw Error('Unsupported installation operation');
@@ -80,6 +85,20 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
         catch { return reply(response, 400, { error: 'Installation action could not complete. Evidence has been retained. Restart the app or save the content-free support report.' }); }
       }
       switch (request.url) {
+        case '/dashboard/state':
+          if (Object.keys(data).length) throw Error('Invalid dashboard request');
+          value = await dashboardState(runtime); break;
+        case '/dashboard/command': value = await runtime.engine.command(data, { surface: 'desktop' }); break;
+        case '/dashboard/verifier':
+          if (Object.keys(data).length || !runtime.openVerifier) throw Error('Verifier unavailable');
+          value = await runtime.openVerifier(); break;
+        case '/dashboard/recovery': {
+          if (Object.keys(data).join(',') !== 'confirmed' || data.confirmed !== true) throw Error('Recovery consent required');
+          const recovery = runtime.session.vault.exportRecovery();
+          try { value = { package: recovery.package.toString('utf8'), recoveryKey: recovery.recoveryKey.toString('base64') }; }
+          finally { recovery.recoveryKey.fill(0); }
+          break;
+        }
         case '/status': value = { browser: runtime.browserState(), protection: runtime.session.status() }; break;
         case '/engine/state':
           if (Object.keys(data).length) throw Error('Invalid state request');
@@ -119,5 +138,5 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
     await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
     await onClose();
   };
-  return { origin, url: `${origin}/#${secret}`, close };
+  return { origin, url: `${origin}/#${secret}`, dashboardURL: `${origin}/dashboard#${secret}`, close };
 }

@@ -63,6 +63,27 @@ async function backend(t, behavior) {
 const ready = (socket, runtimeEpoch = 'test-epoch') => socket.write(`${JSON.stringify({
   kind: 'PAP_BRIDGE_READY', profile: NATIVE_BRIDGE_PROFILE, runtimeEpoch })}\n`);
 
+test('disabled integration rejects peers and re-enabling accepts only a fresh handshake without old scopes', async t => {
+  const root = await temporary(t);
+  const runtime = await startPackagedChatGPT({ supportDirectory: root, keyStore: new MemoryKeyStore(),
+    installation: null, managed: null, fastTrust, attestPeer: () => identity,
+    collectFast: () => { throw Error('NO_CONFIRMATION_IN_THIS_FIXTURE'); } });
+  t.after(() => runtime.close());
+  const first = relay(t, runtime.rendezvousPath); first.child.stdout.resume();
+  first.child.stdin.write(encodeNativeFrame(hello())); await until(() => runtime.browserState());
+  runtime.adapter.enroll({ tabId: testTab().id, destination: testTab().destination });
+  assert.equal(runtime.adapter.scopes().length, 1);
+  runtime.disableIntegration(); await until(() => first.exited);
+  const rejected = relay(t, runtime.rendezvousPath); rejected.child.stdout.resume();
+  rejected.child.stdin.write(encodeNativeFrame(hello())); await until(() => rejected.exited);
+  assert.equal(runtime.browserState(), null); assert.deepEqual(runtime.adapter.scopes(), []);
+  await runtime.enableIntegration();
+  const replacement = relay(t, runtime.rendezvousPath); replacement.child.stdout.resume();
+  replacement.child.stdin.write(encodeNativeFrame(hello())); await until(() => runtime.browserState());
+  assert.deepEqual(runtime.adapter.scopes(), []); assert.equal(runtime.engine.state().operations.length, 0);
+  await runtime.close(); await until(() => replacement.exited);
+});
+
 test('relay process exits with Chrome stdin still open on backend EOF, rejection, or handshake timeout', async t => {
   const cases = {
     'backend EOF after authentication': { behavior: socket => { ready(socket); socket.end(); }, code: 'NATIVE_BACKEND_EOF' },

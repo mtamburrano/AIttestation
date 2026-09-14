@@ -28,7 +28,8 @@ export function verifyIsolated(bundle, trust = null) {
 }
 
 export async function startRecipient() {
-  const token = randomBytes(32).toString('base64url'); let origin, busy = false;
+  const token = randomBytes(32).toString('base64url'); let origin, busy = false, closing;
+  const close = () => closing ??= new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
   const server = createServer(async (request, response) => {
     const reply = (status, value, type = 'application/json') => {
       response.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store',
@@ -46,7 +47,10 @@ export async function startRecipient() {
       }
       if (request.method !== 'POST' || request.headers.origin !== origin
           || request.headers.authorization !== `Bearer ${token}`) throw Error('Unpaired recipient page');
-      if (request.url === '/close') { reply(200, { closed: true }); setImmediate(() => server.close()); return; }
+      if (request.url === '/close') {
+        if (busy) throw Error('Wait for verification to finish before closing');
+        reply(200, { closed: true }); setImmediate(close); return;
+      }
       if (request.url !== '/verify' || busy) throw Error('Verifier busy or unsupported operation');
       busy = true;
       try {
@@ -63,5 +67,5 @@ export async function startRecipient() {
   server.requestTimeout = 35000; server.headersTimeout = 5000; server.maxConnections = 4;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
-  return { origin, url: `${origin}/#${token}`, close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }) };
+  return { origin, url: `${origin}/#${token}`, get closed() { return Boolean(closing); }, close };
 }

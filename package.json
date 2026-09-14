@@ -11,6 +11,7 @@
     "test": "node --test test/*.test.mjs",
     "test:chatgpt": "node --test test/resident-engine.test.mjs test/chatgpt-browser-path.test.mjs test/chatgpt-composer.test.mjs test/chatgpt-continuous.test.mjs test/chatgpt-sidepanel.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
     "test:sidepanel-browser": "node test/sidepanel-browser.mjs",
+    "test:dashboard-browser": "node test/dashboard-browser.mjs",
     "test:browser": "node test/browser.mjs",
     "test:algorand": "cd spikes/anchor/algorand && make build test && cd ../../.. && node test/algorand-archive.mjs",
     "demo:release": "node spikes/release/demo.mjs",

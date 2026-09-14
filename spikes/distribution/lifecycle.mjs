@@ -102,9 +102,13 @@ export class InstallationLifecycle {
       await this.#save(); return this.status();
     });
   }
+  disable() { return this.#remove({ forget: false }); }
   remove({ exportDecision }) {
+    return this.#remove({ forget: true, exportDecision });
+  }
+  #remove({ forget, exportDecision }) {
     return this.#serial(async () => {
-      if (!['exported', 'keep-local'].includes(exportDecision) || !this.#exportOffered) {
+      if (forget && (!['exported', 'keep-local'].includes(exportDecision) || !this.#exportOffered)) {
         throw distributionError('EXPORT_OPPORTUNITY_REQUIRED');
       }
       await ownedDirectory(this.#manifestDirectory);
@@ -115,7 +119,7 @@ export class InstallationLifecycle {
         if (canonical(value) !== canonical(expected)) throw distributionError('INTEGRATION_CONFLICT');
         await unlink(this.manifestPath); await syncDirectory(this.#manifestDirectory);
       }
-      this.#state.integrationPath = null;
+      if (forget) this.#state.integrationPath = null;
       this.#exportOffered = false;
       this.#state.events.integrationRemoved = Math.min(this.#state.events.integrationRemoved + 1, 1_000_000);
       await this.#save();

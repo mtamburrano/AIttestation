@@ -84,7 +84,7 @@ test('only a live privileged panel can read state, send commands or open the loc
   assert.equal(f.port.messages.filter(value => value.kind === 'PAP_PANEL_REQUEST').length, before);
   assert.equal((await p.transport({ ...state, action: 'COMMAND', command: { kind: 'SIGN' } })).error, 'PANEL_REQUEST_REJECTED');
   await p.model.dashboard();
-  assert.deepEqual(f.dashboards, [f.runtime.composerURL]);
+  assert.deepEqual(f.dashboards, [f.runtime.dashboardURL]);
   assert.ok(!JSON.stringify(f.replies).includes(new URL(f.runtime.composerURL).hash.slice(1)));
   p.close(); assert.equal((await f.worker.message(state, p.sender)).error, 'UNTRUSTED_PANEL');
 });

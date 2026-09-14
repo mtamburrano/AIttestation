@@ -12,7 +12,7 @@ async function file(id, maximum, required) {
   return new TextDecoder('utf-8', { fatal: true }).decode(await chosen.arrayBuffer());
 }
 $('verify').onclick = async () => {
-  $('verify').disabled = true; $('status').textContent = 'Checking locally…'; $('results').replaceChildren(); $('report').textContent = '';
+  $('verify').disabled = true; $('close').disabled = true; $('status').textContent = 'Checking locally…'; $('results').replaceChildren(); $('report').textContent = '';
   try {
     const report = await api('/verify', { bundle: await file('bundle', 16 * 2 ** 20, true), trust: await file('trust', 64 * 1024, false) });
     for (const record of report.records) {
@@ -36,6 +36,16 @@ $('verify').onclick = async () => {
     $('report').textContent = JSON.stringify(report, null, 2);
     $('status').textContent = `Local verification finished. ${report.records.length} selected records; trust ${report.trust.toLowerCase().replaceAll('_', ' ')}.`;
   } catch (error) { $('status').textContent = `Verification unavailable: ${error.message}`; }
-  finally { $('verify').disabled = false; }
+  finally { $('verify').disabled = false; $('close').disabled = false; }
 };
-$('close').onclick = async () => { await api('/close'); $('status').textContent = 'Verifier closed.'; $('verify').disabled = true; };
+$('close').onclick = async () => {
+  $('close').disabled = true;
+  try {
+    await api('/close');
+    $('status').textContent = 'Verifier shut down. You can now close this browser tab. Your evidence files are unchanged.';
+    for (const id of ['verify', 'bundle', 'trust']) $(id).disabled = true;
+  } catch {
+    $('status').textContent = 'Shutdown could not be confirmed. Wait for any verification to finish and try again.';
+    $('close').disabled = false;
+  }
+};

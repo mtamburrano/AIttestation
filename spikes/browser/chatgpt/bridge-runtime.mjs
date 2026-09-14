@@ -134,6 +134,7 @@ export async function startChromeProtectionRuntime(directory, {
   now = Date.now, attestPeer = attestNativePeer, peerValidatorPath,
   diagnostics = new LocalDiagnostics(),
   openDashboard = null,
+  integrationEnabled = true,
 } = {}) {
   if (!isAbsolute(directory) || !/^[a-p]{32}$/.test(extensionId) || typeof attestPeer !== 'function') {
     throw bridgeError('Invalid browser bridge configuration');
@@ -149,7 +150,7 @@ export async function startChromeProtectionRuntime(directory, {
   if (!isAbsolute(selectedSocket) || !resolve(selectedSocket).startsWith(`${canonicalDirectory}${sep}`)
       || Buffer.byteLength(selectedSocket) > 100) throw bridgeError('Unsafe or overlong browser bridge socket path');
 
-  let controller = null, candidateSocket = null, activeSocket = null, latestBrowserState = null, closed = false, integrationDisabled = false;
+  let controller = null, candidateSocket = null, activeSocket = null, latestBrowserState = null, closed = false, integrationDisabled = !integrationEnabled;
   let currentToken = randomBytes(32), expiresAt = 0, refreshTimer, publishTail = Promise.resolve();
   let pairedResolve;
   const paired = new Promise(resolvePaired => { pairedResolve = resolvePaired; });
@@ -251,7 +252,7 @@ export async function startChromeProtectionRuntime(directory, {
       keys(identity, ['browser', 'platform']);
       keys(identity.browser, ['product', 'channel', 'major']);
       keys(identity.platform, ['product', 'arch', 'version']);
-      if (closed || socket.destroyed) return fail();
+      if (closed || integrationDisabled || socket.destroyed) return fail();
       peerIdentity = structuredClone(identity);
       authTimer = setTimeout(() => fail('BRIDGE_AUTH_TIMEOUT'), AUTH_TIMEOUT_MS);
       socket.on('data', receive); socket.resume();
@@ -279,8 +280,12 @@ export async function startChromeProtectionRuntime(directory, {
     waitForPairing: () => paired,
     browserState: () => structuredClone(latestBrowserState),
     disableIntegration() {
-      integrationDisabled = true; adapter.invalidate('integration removed');
+      integrationDisabled = true; adapter.disconnect();
       candidateSocket?.destroy(); activeSocket?.destroy(); controller?.disconnect(); latestBrowserState = null;
+    },
+    async enableIntegration() {
+      if (closed) throw Error('ENGINE_UNAVAILABLE');
+      await publishRendezvous(); integrationDisabled = false;
     },
     async close() {
       if (closed) return; closed = true; clearInterval(refreshTimer);

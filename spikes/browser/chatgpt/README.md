@@ -11,13 +11,16 @@ for its supported inputs, gaps and retrospective assertion contract.
 
 The [resident engine contract](ENGINE.md) defines independent conversation scopes,
 versioned commands, preferences, operation lifetime and restart behavior. The local
-composer is a labelled development view of that engine.
+composer is a labelled development view of that engine. The [resident Mac menu
+and optional dashboard](DASHBOARD.md) provide everyday state, pause, integration
+management, prompt history, recovery and export. Launching the app leaves browser
+views closed; normal capture uses Chrome's existing flow or the trusted panel.
 
 ## Boundaries and development modes
 
 [`runtime-main.mjs`](runtime-main.mjs) is the fixed packaged entrypoint. It opens
 or creates the app-bound Keychain vault, starts the authenticated native bridge,
-and serves the bearer-paired loopback composer. [`session.mjs`](session.mjs)
+and serves the bearer-paired local dashboard and development view. [`session.mjs`](session.mjs)
 composes that encrypted vault with the durable release state machine; there is no
 implicit ephemeral production key. The session accepts well-formed
 UTF-8 text through 256 KiB without Unicode normalization. A trusted-composer edit

@@ -12,32 +12,8 @@ const run = (command, args) => execFileSync(command, args, {
   env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', timeout: 15000,
 });
 
-export async function registerNativeHost(paths, browserHost) {
-  const directory = join(paths.chrome, 'NativeMessagingHosts');
-  if (!await exists(directory)) await mkdir(directory, { mode: 0o700 });
-  await ownerDirectory(directory);
-  const target = join(directory, 'ai.provenance.consumer.json');
-  const manifest = { name: 'ai.provenance.consumer', description: 'Attestamp private development bridge',
-    path: browserHost, type: 'stdio', allowed_origins: ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/'] };
-  const ownership = join(paths.control, 'registration.json');
-  if (await exists(target)) throw Error('NATIVE_REGISTRATION_ALREADY_EXISTS');
-  // Journal ownership before installation; an interrupted install is safe to remove.
-  await writeNewJSON(ownership, manifest);
-  try { await writeNewJSON(target, manifest); }
-  catch (error) { await unlink(ownership); throw error; }
-}
-
-export async function removeNativeHost(paths) {
-  const ownership = join(paths.control, 'registration.json');
-  if (!await exists(ownership)) return;
-  const expected = await privateJSON(ownership);
-  const target = join(paths.chrome, 'NativeMessagingHosts/ai.provenance.consumer.json');
-  if (await exists(target)) {
-    if (JSON.stringify(await privateJSON(target)) !== JSON.stringify(expected)) throw Error('NATIVE_REGISTRATION_CHANGED');
-    await unlink(target);
-  }
-  await unlink(ownership);
-}
+import { registerNativeHost, removeNativeHost } from './integration.mjs';
+export { registerNativeHost, removeNativeHost };
 
 export async function stopDevelopment() {
   const paths = await validateAccount(), state = join(paths.control, 'runtime.json');
