@@ -36,9 +36,10 @@ bundle identities and cryptographic domains are unchanged.
 The extension has only `nativeMessaging`, `sidePanel` and
 `https://chatgpt.com/*` host permission. Its manifest key pins Store item
 `medilhopfckldjgdnchfkpmfmfnkadca`; the upload omits the key. Incognito is disabled.
-The sidebar binds Chrome's sender URL to one live top-level SIDE_PANEL document.
-Each document gets a fresh URL; matching considers every context type, so copied
-popup URLs also fail closed. Origin, permissions, incognito exclusion and native
+The sidebar uses a document-owned request channel and a fresh confirmation after
+browser checks. It rejects one-shot controls and ambiguous non-tab contexts,
+including popups that copy a sidebar URL and then depart or change their URL.
+Origin, permissions, incognito exclusion and native
 authentication remain required. Rejection diagnostics separately negotiate
 `pap-chatgpt-panel-diagnostic/1`. See [sidebar trust and evidence](SIDEBAR.md).
 

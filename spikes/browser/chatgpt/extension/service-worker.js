@@ -3,6 +3,8 @@ const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-15';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/2';
 const PANEL_PROFILE = 'pap-chatgpt-panel/2';
+const PANEL_CHANNEL = 'pap-chatgpt-panel-channel/1';
+const panelChannels = new Set();
 const PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
 const PANEL_REJECTIONS = new Set(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
   'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
@@ -155,7 +157,9 @@ function connect() {
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.kind === 'PAP_PANEL_REQUEST') {
-    panelMessage(message, sender).then(respond).catch(() => respond({ error: 'PANEL_REQUEST_UNCONFIRMED' })); return true;
+    // One-shot MessageSender snapshots cannot prove the requesting document is
+    // still present. Control requests require its own live Port below.
+    respond(rejectPanel('PANEL_SENDER_REJECTED')); return;
   }
   if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message?.kind)) {
     captureMessage(message, sender).then(respond).catch(() => respond({ state: 'RECORDING_UNAVAILABLE' })); return true;
@@ -180,7 +184,56 @@ function rejectPanel(stage, error = 'UNTRUSTED_PANEL') {
   return { error, stage };
 }
 
-async function panelMessage(message, sender) {
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== PANEL_CHANNEL || panelChannels.size >= 32) { port.disconnect(); return; }
+  const channel = { port, closed: false, requested: false, confirmation: null };
+  panelChannels.add(channel);
+  const close = () => {
+    if (channel.closed) return;
+    channel.closed = true; clearTimeout(timer); panelChannels.delete(channel);
+    channel.confirmation?.resolve(false); channel.confirmation = null;
+    port.onMessage.removeListener(receive); port.onDisconnect.removeListener(disconnect);
+    try { port.disconnect(); } catch {}
+  };
+  const finish = result => {
+    if (channel.closed) return;
+    try { port.postMessage({ kind: 'PAP_PANEL_REPLY', result }); } catch {}
+    close();
+  };
+  const disconnect = () => { void chrome.runtime.lastError; close(); };
+  const receive = message => {
+    if (channel.closed) return;
+    if (channel.confirmation) {
+      const { nonce, resolve } = channel.confirmation; channel.confirmation = null;
+      const valid = message?.kind === 'PAP_PANEL_CONFIRM' && message.nonce === nonce
+        && Object.keys(message).sort().join(',') === 'kind,nonce';
+      resolve(valid);
+      if (!valid) finish(rejectPanel('PANEL_CONTEXT_REJECTED'));
+      return;
+    }
+    if (channel.requested) { finish(rejectPanel('PANEL_MESSAGE_REJECTED')); return; }
+    channel.requested = true;
+    panelMessage(message, port.sender ?? {}, channel).then(finish)
+      .catch(() => finish({ error: 'PANEL_REQUEST_UNCONFIRMED' }));
+  };
+  const timer = setTimeout(close, 20_000);
+  port.onDisconnect.addListener(disconnect); port.onMessage.addListener(receive);
+});
+
+async function confirmPanel(channel) {
+  if (channel.closed) return false;
+  // Mint only AFTER the asynchronous browser checks. A departed copied-URL
+  // sender cannot prequeue this reply, or borrow another document's Port.
+  const nonce = crypto.randomUUID();
+  try {
+    const confirmed = new Promise(resolve => { channel.confirmation = { nonce, resolve }; });
+    channel.port.postMessage({ kind: 'PAP_PANEL_CHALLENGE', nonce });
+    return await bounded(confirmed);
+  } catch { return false; }
+  finally { channel.confirmation = null; }
+}
+
+async function panelMessage(message, sender, channel) {
   const origin = `chrome-extension://${chrome.runtime.id}`, base = `${origin}/sidepanel.html?view=`;
   const opaqueId = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
   if (sender.id !== chrome.runtime.id || sender.tab || sender.origin !== origin || sender.nativeApplication
@@ -193,7 +246,7 @@ async function panelMessage(message, sender) {
   if (typeof url !== 'string' || !url.startsWith(base) || !/^[a-f0-9-]{36}$/.test(url.slice(base.length))) {
     return rejectPanel('PANEL_URL_REJECTED');
   }
-  if (message.profile !== PANEL_PROFILE || !['STATE', 'COMMAND', 'OPEN_DASHBOARD'].includes(message.action)
+  if (message?.kind !== 'PAP_PANEL_REQUEST' || message.profile !== PANEL_PROFILE || !['STATE', 'COMMAND', 'OPEN_DASHBOARD'].includes(message.action)
       || Object.keys(message).sort().join(',') !== ['kind', 'profile', 'action',
         ...(message.action === 'COMMAND' ? ['command'] : [])].sort().join(',')) return rejectPanel('PANEL_MESSAGE_REJECTED');
   const context = connection;
@@ -202,22 +255,31 @@ async function panelMessage(message, sender) {
   }
   let identity;
   try {
-    // Chrome 153 omits documentId/lifecycle from non-tab MessageSenders. Each
-    // panel navigates to a fresh document URL before messaging. Enumerate ALL
-    // context types: a popup copying a live panel URL must cause rejection too.
+    // Chrome 153 omits documentId/lifecycle from non-tab MessageSenders.
+    // The Port binds the requester, but sparse Chrome senders cannot identify
+    // its context ID. Enumerate every possible non-tab requester, including
+    // other URLs: history.replaceState changes the inventory URL without
+    // changing port.sender.url or closing the Port. Any non-panel candidate
+    // makes authorization ambiguous. Tab callers already fail sender.tab.
     const inspect = async () => {
-      const contexts = await bounded(chrome.runtime.getContexts({ documentUrls: [url] }));
-      const value = contexts.length === 1 ? contexts[0] : null;
+      const contexts = await bounded(chrome.runtime.getContexts({}));
+      if (!Array.isArray(contexts) || contexts.length > 128) return null;
+      const candidates = contexts.filter(value => value.contextType !== 'BACKGROUND'
+        && !(value.contextType === 'TAB' && Number.isSafeInteger(value.tabId) && value.tabId >= 0));
+      if (candidates.some(value => value.contextType !== 'SIDE_PANEL' || value.frameId !== 0
+          || value.tabId !== -1 || value.incognito !== false || value.documentOrigin !== origin)) return null;
+      const matches = contexts.filter(value => value.documentUrl === url);
+      const value = matches.length === 1 ? matches[0] : null;
       return value?.contextType === 'SIDE_PANEL' && value.documentUrl === url && value.documentOrigin === origin
         && value.incognito === false && value.frameId === 0 && value.tabId === -1
         && opaqueId(value.contextId) && opaqueId(value.documentId)
         && (sender.documentId === undefined || sender.documentId === value.documentId) ? value : null;
     };
     identity = await inspect();
-    if (!identity) return rejectPanel('PANEL_CONTEXT_REJECTED');
+    if (!identity || channel.closed) return rejectPanel('PANEL_CONTEXT_REJECTED');
     if (await permissionState() !== 'granted') return rejectPanel('PANEL_PERMISSION_REJECTED');
     const live = await inspect();
-    if (!live || live.contextId !== identity.contextId || live.documentId !== identity.documentId) {
+    if (channel.closed || !live || live.contextId !== identity.contextId || live.documentId !== identity.documentId) {
       return rejectPanel('PANEL_CONTEXT_REJECTED');
     }
   } catch { return rejectPanel('PANEL_CONTEXT_UNAVAILABLE'); }
@@ -229,6 +291,7 @@ async function panelMessage(message, sender) {
     command = { ...message.command };
     if (JSON.stringify(command).length > 2048) return { error: 'PANEL_REQUEST_REJECTED' };
   }
+  if (!await confirmPanel(channel) || channel.closed) return rejectPanel('PANEL_CONTEXT_REJECTED');
   if (!current(context) || context.panels.size >= 8) return { error: 'PANEL_DISCONNECTED' };
   const requestId = crypto.randomUUID();
   const result = new Promise(resolve => context.panels.set(requestId, resolve));

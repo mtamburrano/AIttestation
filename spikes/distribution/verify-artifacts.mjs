@@ -209,7 +209,7 @@ function validateStore(snapshot, bytes) {
   same(manifest.side_panel, { default_path: 'sidepanel.html' });
   same(manifest.action, { default_title: 'Open Attestamp' });
   same(manifest.content_security_policy, { extension_pages: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
-  for (const name of ['sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel.css']) require(bytes(`${EXTENSION}/${name}`).length > 0);
+  for (const name of ['sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel-channel.js', 'sidepanel.css']) require(bytes(`${EXTENSION}/${name}`).length > 0);
   require(!manifest.optional_permissions && !manifest.optional_host_permissions && !manifest.externally_connectable
     && !manifest.web_accessible_resources && !manifest.update_url);
   const native = artifactJSON(bytes('NativeMessagingHosts/ai.provenance.consumer.json'));

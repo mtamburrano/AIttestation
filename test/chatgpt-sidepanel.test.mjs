@@ -50,10 +50,10 @@ test('each sidebar document is uniquely bound across all runtime context types',
   f.contexts.delete('copied-popup');
   assert.equal((await panel.transport(request)).state.recording, false);
   const sender = { ...panel.sender, documentId: panel.documentId, documentLifecycle: 'active', frameId: 0 };
-  assert.equal((await f.worker.message(request, sender)).state.recording, false);
+  assert.equal((await f.requestFrom(request, sender)).state.recording, false);
   for (const patch of [{ id: 'wrong-extension' }, { origin: 'null' }, { frameId: 1 }, { nativeApplication: 'forged' },
     { documentId: randomUUID() }, { url: panel.sender.url + '#extra' }, { url: panel.sender.url + '&extra=1' }]) {
-    assert.equal((await f.worker.message(request, { ...sender, ...patch })).error, 'UNTRUSTED_PANEL');
+    assert.equal((await f.requestFrom(request, { ...sender, ...patch })).error, 'UNTRUSTED_PANEL');
   }
 });
 
@@ -78,6 +78,85 @@ test('closure, context replacement, missing permissions and API failures fail cl
   assert.equal(f.port.messages.filter(value => value.kind === 'PAP_PANEL_DIAGNOSTIC' && value.code === 'PANEL_CONTEXT_UNAVAILABLE').length, 1);
   assert.equal(f.runtime.engine.state().recording, false);
   panel.close(); assert.equal((await panel.transport(request)).stage, 'PANEL_CONTEXT_REJECTED');
+});
+
+test('a copied-URL popup cannot borrow the surviving sidebar document to change recording', async t => {
+  for (const schedule of ['departure', 'delayed disconnect notification', 'same-document navigation']) await t.test(schedule, async t => {
+    const delayed = schedule === 'delayed disconnect notification', sameDocument = schedule === 'same-document navigation';
+    const f = await fixture(t), panel = await f.panel(), before = f.runtime.engine.state();
+    const popup = { ...f.contexts.get(panel.documentId), contextType: 'POPUP', documentId: randomUUID(), contextId: randomUUID() };
+    f.contexts.set(popup.documentId, popup);
+    const inspect = f.worker.chrome.runtime.getContexts;
+    let release, started;
+    const entered = new Promise(resolve => { started = resolve; });
+    f.worker.chrome.runtime.getContexts = async filter => {
+      started(); await new Promise(resolve => { release = resolve; });
+      f.worker.chrome.runtime.getContexts = inspect;
+      return inspect(filter);
+    };
+    const command = { profile: 'pap-resident-command/2', kind: 'SET_RECORDING', enabled: true,
+      runtimeEpoch: before.runtimeEpoch, adapterProfile: panel.model.state.adapterProfile,
+      expectedRevision: before.revision, commandId: randomUUID() };
+    let requester;
+    const result = f.requestFrom({ kind: 'PAP_PANEL_REQUEST', profile: CHATGPT_PANEL_PROFILE, action: 'COMMAND', command },
+      { ...panel.sender }, { connected(port) { requester = port; }, notifyDisconnect: !delayed, dropAfterDeparture: delayed });
+    await entered;
+    // Synthetic scheduling, including observed Chrome same-document behavior:
+    // only the sidebar remains at the copied URL, but history leaves the Port up.
+    if (sameDocument) popup.documentUrl = panelURL + '?different-location';
+    else { f.contexts.delete(popup.documentId); requester.disconnect(); }
+    release();
+    const reply = await result;
+    await turn();
+    if (delayed) {
+      // Even if Chrome has not delivered onDisconnect yet and a Port write only
+      // drops, the departed document cannot answer a fresh challenge.
+      assert.equal(f.worker.panelPorts.at(-1).messages.at(-1).kind, 'PAP_PANEL_CHALLENGE');
+      await until(() => f.worker.panelPorts.at(-1).messages.some(message => message.kind === 'PAP_PANEL_REPLY'));
+      assert.equal(f.worker.panelPorts.at(-1).messages.at(-1).result.stage, 'PANEL_CONTEXT_REJECTED');
+    }
+    assert.equal(f.runtime.engine.state().recording, false);
+    assert.equal(f.runtime.engine.state().revision, before.revision);
+    assert.equal(f.port.messages.filter(value => value.kind === 'PAP_PANEL_REQUEST' && value.action === 'COMMAND').length, 0);
+    assert.equal(reply.error, 'UNTRUSTED_PANEL');
+  });
+});
+
+test('panel confirmations are single-use and confined to the requesting channel', async t => {
+  const f = await fixture(t), panel = await f.panel();
+  const before = f.runtime.engine.state(), command = { profile: 'pap-resident-command/2', kind: 'SET_RECORDING', enabled: true,
+    runtimeEpoch: before.runtimeEpoch, adapterProfile: panel.model.state.adapterProfile,
+    expectedRevision: before.revision, commandId: randomUUID() };
+  const request = { kind: 'PAP_PANEL_REQUEST', profile: CHATGPT_PANEL_PROFILE, action: 'COMMAND', command };
+  // The old one-shot route must reject even a real-looking sidebar sender.
+  assert.equal((await f.worker.message(request, panel.sender)).error, 'UNTRUSTED_PANEL');
+  let previousNonce;
+  for (const attack of ['other channel', 'replayed confirmation', 'extra fields', 'second request']) {
+    const client = f.worker.connectPanel(panel.sender), messages = [];
+    client.onMessage.addListener(message => messages.push(message));
+    client.postMessage(request);
+    await until(() => messages.some(message => message.kind === 'PAP_PANEL_CHALLENGE'));
+    const { nonce } = messages[0];
+    if (previousNonce) assert.notEqual(nonce, previousNonce);
+    if (attack === 'other channel') {
+      const other = f.worker.connectPanel(panel.sender), replies = [];
+      other.onMessage.addListener(message => replies.push(message));
+      other.postMessage({ kind: 'PAP_PANEL_CONFIRM', nonce });
+      await until(() => replies.length);
+      assert.equal(replies[0].result.error, 'UNTRUSTED_PANEL');
+      assert.equal(f.runtime.engine.state().revision, before.revision);
+      client.disconnect();
+    } else {
+      client.postMessage(attack === 'second request' ? request : { kind: 'PAP_PANEL_CONFIRM',
+        nonce: attack === 'replayed confirmation' ? previousNonce : nonce, ...(attack === 'extra fields' ? { unexpected: true } : {}) });
+      await until(() => messages.some(message => message.kind === 'PAP_PANEL_REPLY'));
+      assert.equal(messages.at(-1).result.error, 'UNTRUSTED_PANEL');
+    }
+    previousNonce = nonce;
+  }
+  assert.equal(f.runtime.engine.state().recording, false);
+  assert.equal(f.runtime.engine.state().revision, before.revision);
+  assert.equal(f.port.messages.filter(value => value.kind === 'PAP_PANEL_REQUEST' && value.action === 'COMMAND').length, 0);
 });
 
 test('native diagnostics accept only paired, bounded content-free stage codes', () => {
@@ -147,7 +226,7 @@ test('untrusted page, tab and stale sidebar contexts cannot acquire control auth
   for (const sender of [f.pages.get(17).captureSender(), { ...panel.sender, tab: { id: 17 } },
     { ...panel.sender, url: panelURL + '?spoof' }, { ...panel.sender, documentLifecycle: 'prerender' },
     { ...panel.sender, documentId: randomUUID() }, { ...panel.sender, origin: 'https://chatgpt.com' }]) {
-    assert.equal((await f.worker.message(message, sender)).error, 'UNTRUSTED_PANEL');
+    assert.equal((await f.requestFrom(message, sender)).error, 'UNTRUSTED_PANEL');
   }
   panel.close(); assert.equal((await panel.transport(message)).error, 'UNTRUSTED_PANEL');
 });

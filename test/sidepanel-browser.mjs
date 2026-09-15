@@ -3,6 +3,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, cp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { randomUUID, createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
 import { runNativeHost, NativeFrameDecoder, encodeNativeFrame } from '../spikes/browser/chatgpt/native-host.mjs';
@@ -64,7 +65,9 @@ async function page(url) {
   return { targetId, session };
 }
 const control = { kind: 'PAP_PANEL_REQUEST', profile: 'pap-chatgpt-panel/2', action: 'STATE' };
-const readState = session => evaluate(session, `chrome.runtime.sendMessage(${JSON.stringify(control)})`);
+const sendControl = (session, message) => evaluate(session, baseline ? `chrome.runtime.sendMessage(${JSON.stringify(message)})`
+  : `import('./sidepanel-channel.js').then(m => m.requestPanel(${JSON.stringify(message)}))`);
+const readState = session => sendControl(session, control);
 const click = (session, id) => evaluate(session, `document.getElementById(${JSON.stringify(id)}).click()`);
 async function visible(session) {
   return evaluate(session, `({ status: document.getElementById('connection')?.textContent,
@@ -74,14 +77,84 @@ async function screenshot(session, name) {
   const result = await call('Page.captureScreenshot', { format: 'png' }, session);
   await writeFile(join(reportDirectory, name), Buffer.from(result.data, 'base64'));
 }
+async function departedPopup(panel, departure) {
+  const sameDocument = departure === 'same-document navigation';
+  const url = await evaluate(panel, 'location.href');
+  const original = await evaluate(workerSession, `__actualContexts({documentUrls:[${JSON.stringify(url)}]})`);
+  assert.equal(original.length, 1); assert.equal(original[0].contextType, 'SIDE_PANEL');
+  await evaluate(workerSession, `chrome.action.setPopup({popup:'context-test.html'})`);
+  await evaluate(workerSession, 'chrome.action.openPopup()');
+  const popupContext = await wait(() => evaluate(workerSession, `(async()=> (await __actualContexts({contextTypes:['POPUP']}))[0])()`), 'copied-URL popup opens');
+  const popupTarget = await wait(async () => (await targets()).find(target => target.type === 'page'
+    && target.url === popupContext.documentUrl && !sessions.has(target.targetId)), 'new popup target');
+  const popup = await attach(popupTarget);
+  await evaluate(popup, `window.name = 'attestamp-copied-url-test'; location.replace(${JSON.stringify(url)});`);
+  await wait(() => evaluate(popup, `location.href === ${JSON.stringify(url)} && document.readyState === 'complete'`), 'popup full navigation to copied URL');
+  const inventory = await evaluate(workerSession, `__actualContexts({documentUrls:[${JSON.stringify(url)}]})`);
+  assert.deepEqual(inventory.map(value => value.contextType).sort(), ['POPUP', 'SIDE_PANEL']);
+  const before = runtime.engine.state(), forwarded = await evaluate(workerSession, '__forwardedCommands');
+  const command = { profile: 'pap-resident-command/2', kind: 'SET_RECORDING', enabled: !before.recording,
+    adapterProfile: before.adapterProfile, runtimeEpoch: before.runtimeEpoch,
+    expectedRevision: before.revision, commandId: randomUUID() };
+  await evaluate(workerSession, `__contextGate = ${JSON.stringify({ url, commandId: command.commandId, armed: false, entered: false })}`);
+  await evaluate(popup, `void import('./sidepanel-channel.js').then(m => m.requestPanel(${JSON.stringify({ ...control, action: 'COMMAND', command })}));`);
+  await wait(() => evaluate(workerSession, '__contextGate.entered'), 'request held before actual context inventory');
+  if (sameDocument) await evaluate(popup, `history.replaceState(null, '', 'context-test.html');`);
+  else if (departure === 'navigation') await call('Page.navigate', { url: origin + '/context-test.html' }, popup);
+  else await call('Target.closeTarget', { targetId: popupTarget.targetId });
+  const probeExpression = `__panelProbes.find(p => p.commandId === ${JSON.stringify(command.commandId)})`;
+  if (!sameDocument) await wait(() => evaluate(workerSession, `${probeExpression}?.disconnected`), 'real requesting Port disconnects');
+  const surviving = await evaluate(workerSession, `__actualContexts({documentUrls:[${JSON.stringify(url)}]})`);
+  if (!sameDocument) { assert.equal(surviving.length, 1); assert.equal(surviving[0].contextType, 'SIDE_PANEL'); }
+  const survivor = surviving.find(value => value.contextType === 'SIDE_PANEL');
+  assert.equal(survivor.documentId, original[0].documentId);
+  assert.equal(survivor.contextId, original[0].contextId);
+  await evaluate(workerSession, '__contextGate.release();');
+  await wait(() => evaluate(workerSession, `${probeExpression}?.settled`), 'departed request authorization finishes');
+  const probe = await evaluate(workerSession, `(()=>{const p=${probeExpression}; return {
+    senderKeys:Object.keys(p.sender).sort(), copiedURL:p.sender.url===__contextGate.url,
+    disconnected:p.disconnected, error:p.error, stage:p.stage, challenges:p.challenges};})()`);
+  assert.deepEqual(probe.senderKeys, ['id', 'origin', 'url']); assert.equal(probe.copiedURL, true);
+  console.log(JSON.stringify({ departure, matchingContextsAfter: surviving.map(value => value.contextType), probe }));
+  assert.equal(probe.error, 'UNTRUSTED_PANEL'); assert.equal(probe.stage, 'PANEL_CONTEXT_REJECTED');
+  assert.equal(await evaluate(workerSession, '__forwardedCommands'), forwarded);
+  assert.equal(runtime.engine.state().recording, before.recording);
+  assert.equal(runtime.engine.state().revision, before.revision);
+  assert.equal(runtime.session.receipts.list().length, 0);
+  report.departedSenders ??= [];
+  report.departedSenders.push({ departure, evidence: 'REAL_CHROME_CONTEXT_AND_PORT_WITH_TEST_CONTROLLED_SCHEDULING',
+    instrumentation: ['Copied-URL popup bootstrap suppressed in disposable extension copy',
+      sameDocument ? 'First context lookup held until history.replaceState, without document departure' : 'First context lookup held until real document departure and Port.onDisconnect',
+      'Actual getContexts inventory and authorization completion observed without replacing their results'],
+    initialContextTypes: inventory.map(value => value.contextType).sort(), survivingContextTypes: surviving.map(value => value.contextType).sort(),
+    survivingIdentityUnchanged: true, probe, forwardedCommands: 0, engineRevisionUnchanged: true,
+    recordingUnchanged: true, receipts: 0 });
+  await evaluate(workerSession, '__contextGate = null;');
+  if (departure !== 'closure') await call('Target.closeTarget', { targetId: popupTarget.targetId });
+  await evaluate(workerSession, `chrome.action.setPopup({popup:''})`);
+  assert.equal((await readState(panel)).state.recording, before.recording);
+}
 try {
   await cp(new URL('../spikes/browser/chatgpt/extension', import.meta.url), extension, { recursive: true });
   const productionWorker = workerPath ? await readFile(workerPath, 'utf8') : await readFile(join(extension, 'service-worker.js'), 'utf8');
+  report.workerSHA256 = createHash('sha256').update(productionWorker).digest('hex');
   await writeFile(join(extension, 'service-worker.js'), `
-  globalThis.__nativeWrites = []; globalThis.__panelProbes = [];
+  globalThis.__nativeWrites = []; globalThis.__panelProbes = []; globalThis.__forwardedCommands = 0;
+  globalThis.__probeByPort = new WeakMap(); globalThis.__contextGate = null;
+  globalThis.__actualContexts = chrome.runtime.getContexts.bind(chrome.runtime);
+  chrome.runtime.getContexts = async filter => {
+    const gate = __contextGate;
+    if (gate?.armed && !gate.entered) {
+      gate.entered = true; await new Promise(resolve => { gate.release = resolve; });
+    }
+    return __actualContexts(filter);
+  };
   const event = () => { const listeners = []; return { addListener: f => listeners.push(f), emit: m => listeners.forEach(f => f(m)) }; };
   chrome.runtime.connectNative = () => {
-    const port = { onMessage: event(), onDisconnect: event(), postMessage: m => __nativeWrites.push(m), disconnect() {} };
+    const port = { onMessage: event(), onDisconnect: event(), postMessage: m => {
+      if (m.kind === 'PAP_PANEL_REQUEST' && m.action === 'COMMAND') __forwardedCommands++;
+      __nativeWrites.push(m);
+    }, disconnect() {} };
     globalThis.__testNativePort = port; return port;
   };
   const addMessage = chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
@@ -92,14 +165,45 @@ try {
     }
     respond(result);
   }));
-  ` + productionWorker);
+  const addConnect = chrome.runtime.onConnect.addListener.bind(chrome.runtime.onConnect);
+  chrome.runtime.onConnect.addListener = listener => addConnect(port => {
+    const probe = { sender: port.sender, disconnected: false, settled: false, challenges: 0 };
+    __probeByPort.set(port, probe);
+    port.onMessage.addListener(message => {
+      if (message.kind !== 'PAP_PANEL_REQUEST') return;
+      probe.action = message.action; probe.commandId = message.command?.commandId;
+      __panelProbes.push(probe); if (__panelProbes.length > 128) __panelProbes.shift();
+      if (__contextGate?.commandId === probe.commandId && probe.action === 'COMMAND') __contextGate.armed = true;
+    });
+    port.onDisconnect.addListener(() => { void chrome.runtime.lastError; probe.disconnected = true; });
+    const post = port.postMessage.bind(port);
+    port.postMessage = message => {
+      if (message.kind === 'PAP_PANEL_CHALLENGE') probe.challenges++;
+      return post(message);
+    };
+    listener(port);
+  });
+  ` + productionWorker + (baseline ? '' : `
+  const authorizePanel = panelMessage;
+  panelMessage = async (...args) => {
+    const result = await authorizePanel(...args), probe = __probeByPort.get(args[2].port);
+    if (probe) Object.assign(probe, { settled: true, error: result?.error, stage: result?.stage });
+    return result;
+  };
+  `));
   // The baseline gate expects the historical fixed URL, so keep the baseline UI
   // module too. This is a private known-baseline fixture, never a shipping file.
   if (baseline) {
     const ui = await readFile(join(extension, 'sidepanel.js'), 'utf8');
-    await writeFile(join(extension, 'sidepanel.js'), ui.slice(0, ui.indexOf('// A full navigation')) + `
+    await writeFile(join(extension, 'sidepanel.js'), ui.slice(0, ui.indexOf('// A full navigation')).replace('new SidePanelModel(requestPanel, render)', 'new SidePanelModel(message => chrome.runtime.sendMessage(message), render)') + `
       document.getElementById('recording').addEventListener('click', () => model.toggle());
       await model.refresh(); setInterval(() => model.refresh(), 1000);`);
+  } else {
+    // Only the adversarial popup uses this name. It suppresses the normal fresh
+    // URL bootstrap so actual Chrome can supply the copied-URL sender under test.
+    const ui = await readFile(join(extension, 'sidepanel.js'), 'utf8');
+    await writeFile(join(extension, 'sidepanel.js'), ui.replace('if (identifyDocument())',
+      "if (window.name !== 'attestamp-copied-url-test' && identifyDocument())"));
   }
   await writeFile(join(extension, 'context-test.html'), '<!doctype html><title>Attestamp isolated context test</title><h1>Isolated sidebar context test</h1><p>No provider or sponsor connection.</p><button id="open">Open test sidebar</button><script src="context-test.js"></script>');
   await writeFile(join(extension, 'context-test.js'), `document.getElementById('open').onclick = async () => chrome.sidePanel.open({windowId:(await chrome.windows.getCurrent()).id});`);
@@ -226,7 +330,11 @@ try {
     report.framedControl = framed;
     assert.equal((await readState(panel)).state.recording, false);
     report.checks.push('REAL_IFRAME_HAS_NO_CONTROL_AUTHORITY_AND_INCOGNITO_ACCESS_IS_DISABLED');
-    // Reload must produce a new document URL; a stale sender cannot borrow it.
+    await departedPopup(panel, 'navigation');
+    await departedPopup(panel, 'closure');
+    await departedPopup(panel, 'same-document navigation');
+    report.checks.push('REAL_COPIED_URL_POPUP_NAVIGATION_AND_CLOSURE_CANCEL_PENDING_COMMANDS');
+    // Reload rotates the URL and creates fresh document-owned request channels.
     const before = await evaluate(panel, 'location.href');
     await call('Page.reload', {}, panel);
     await wait(async () => (await targets()).some(t => t.targetId === panelTarget.targetId && t.url !== before && /\?view=/.test(t.url)), 'fresh reload identity');

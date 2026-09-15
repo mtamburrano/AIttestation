@@ -5,7 +5,7 @@ connection/capability feedback and Dashboard / History. Views do not own recordi
 consent or capture workflows. A stale control learns the latest engine state and
 asks the user to try again; it never automatically repeats the command.
 
-## Browser-owned document identity
+## Browser context and requesting channel
 
 Chrome 153.0.8010.37 on macOS was observed to supply only `id`, `origin` and `url`
 for a toolbar-opened sidebar's `runtime.onMessage` sender. Its live
@@ -23,8 +23,12 @@ claim a reproduction of the owner's entire signed installation.
 [Chrome's runtime API](https://developer.chrome.com/docs/extensions/reference/api/runtime)
 describes these identifiers as optional sender metadata. Platform identifiers are
 opaque: tests must not invent a required encoding or missing property.
+[Chrome's Port lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/messaging#port-lifetime)
+includes disconnection when the connecting frame unloads; the confirmation also
+covers delayed notification. Same-document history changes need the separate
+context ambiguity check described below.
 
-The repaired gate applies these invariants:
+The control gate applies these invariants:
 
 - Each sidebar document navigates once to a fresh `sidepanel.html?view=<UUID>`.
   A consumed session-storage marker prevents loops. Reload/restore rotates the
@@ -35,13 +39,32 @@ The repaired gate applies these invariants:
 - The worker checks the Chrome-supplied extension ID, exact origin and URL shape;
   tab senders, child frames and non-active lifecycle metadata reject. Optional
   sender document IDs must match the live browser-owned ID when present.
-- `getContexts({documentUrls: [sender.url]})` must return exactly one context
-  across **all** types. It must be a top-level, non-tab, non-incognito SIDE_PANEL
-  with the exact origin and URL. Filtering to SIDE_PANEL first would hide an
-  impersonating popup and is forbidden. Browser IDs are bounded opaque strings.
-- After the permission check, the worker resolves the context again and requires
-  the same context/document IDs. Closure or replacement cannot borrow authority
-  during the asynchronous check. The native connection must still be current.
+- Controls use `runtime.connect()` with `pap-chatgpt-panel-channel/1`, one request
+  per Port. The worker takes the browser-supplied `port.sender`; one-shot
+  `PAP_PANEL_REQUEST` messages always reject. Ports and pending requests have
+  bounded lifetimes and counts. A disconnect invalidates the requesting channel.
+- `getContexts({})` examines **all URLs and types**, with at most 128 entries.
+  Exactly one context must match the sender URL: a top-level, non-tab,
+  non-incognito SIDE_PANEL with the exact origin and bounded opaque IDs.
+  Every possible non-tab document requester must also be a top-level SIDE_PANEL.
+  A popup, offscreen or other ambiguous non-tab context anywhere in this extension
+  denies control until it closes. Regular extension tabs are excluded from that
+  candidate set because Chrome identifies their callers through `sender.tab`,
+  which the sender gate rejects. The background worker has its fixed script URL.
+  Other extensions and ordinary website tabs are outside this inventory.
+- After permissions, the same browser context/document IDs must still be present.
+  Inventory alone does not bind the requesting document: a departed popup can
+  leave a legitimate sidebar at its copied URL. After all asynchronous checks,
+  the worker sends a fresh single-use challenge on the **requesting Port** and
+  requires its exact reply on that same Port. Another sidebar cannot supply it.
+  An unloaded document cannot answer, even if disconnect notification is delayed.
+- Looking only at the sender URL is also insufficient while its Port is live:
+  actual Chrome `history.replaceState` changes the inventory URL without changing
+  `port.sender.url` or disconnecting. The exhaustive non-tab candidate check
+  rejects this case. No URL, context ID or client-asserted role grants authority.
+- The channel and native connection must still be current immediately before
+  forwarding. Closing a view after an already authorized command was forwarded
+  does not undo that command. Lost replies never cause automatic command replay.
 - The existing authenticated native chain and engine command schema, epoch,
   revision, replay protection and capture-role separation remain required.
 
@@ -108,14 +131,15 @@ separate temporary report directory with bounded metadata, diagnostics and
 sidebar screenshots. It reports zero provider/sponsor operations. Reports from
 failed attempts remain distinct from a successful run.
 
-### Recorded on 2026-09-15
+### Historical metadata repair, recorded on 2026-09-15
 
 The content-free [baseline report](../../../test/evidence/sidepanel-chrome-153/baseline.json)
 and [toolbar report](../../../test/evidence/sidepanel-chrome-153/toolbar.json)
 preserve the two executed runs. [ON](../../../test/evidence/sidepanel-chrome-153/sidebar-on.png)
 and [OFF](../../../test/evidence/sidepanel-chrome-153/sidebar-off.png) screenshots
-show the actual sidebar. These records are evidence, not synthetic golden results.
-The final `node --test test/*.test.mjs` run passed 317 tests with no failures or
+show the actual sidebar at `db90fe1`. These records establish the metadata repair
+and ordinary interaction, not departed-sender rejection. The corresponding
+`node --test test/*.test.mjs` run passed 317 tests with no failures or
 skips, including the control, capture, bridge, persistent diagnostics, migration,
 legacy evidence and distribution regressions. All used isolated local resources.
 
@@ -127,6 +151,50 @@ legacy evidence and distribution regressions. All used isolated local resources.
 | Actual Chrome reload | New document URL, OFF retained, no new evidence or replay |
 | Synthetic/adversarial regression suite | Copied-URL collisions, wrong origin/context, incognito metadata, API failures, permission loss, closure/replacement, stale commands and diagnostic privacy/limits |
 | Synthetic capture regression suite | Existing/new supported sources, multiple windows, focus/navigation and closed views; exact capture, OFF cutoff, durable save and asynchronous anchor semantics |
+
+### Document-channel validation, recorded on 2026-09-15
+
+The [channel toolbar report](../../../test/evidence/sidepanel-chrome-153/channel-toolbar.json)
+records the worker SHA-256, actual sparse Port sender shape and three explicitly
+instrumented Chrome schedules. The [ON](../../../test/evidence/sidepanel-chrome-153/channel-on.png)
+and [OFF](../../../test/evidence/sidepanel-chrome-153/channel-off.png) images show
+the same sidebar with the new transport. No source sender or context inventory
+is fabricated in these browser checks.
+
+For each adversarial schedule the test creates a real action popup, sets its
+window name in CDP, and fully navigates it to the legitimate sidebar's exact URL.
+Only the disposable copy suppresses that named popup's fresh-URL UI bootstrap.
+The test holds the worker's first context lookup after COMMAND dispatch. It then
+navigates/closes the actual requesting document, observes real `Port.onDisconnect`,
+and releases the lookup against Chrome's actual surviving contexts. The third
+case uses `history.replaceState` without disconnecting. Test wrappers observe
+completion and native forwarding; they do not replace authorization results.
+The action popup and wrappers exist only in the fixture, never the product.
+
+| Evidence | Result and boundary |
+| --- | --- |
+| Actual Chrome toolbar | State and ON/OFF work; dashboard, resident menu pipe and two sidebar windows agree; reload keeps OFF with zero captures |
+| Actual Chrome full navigation and closure, controlled scheduling | Same-extension popup has the copied URL and sparse sender. Its Port disconnects; only the original sidebar remains at that URL. Both commands reject before native forwarding; recording and engine revision stay unchanged |
+| Actual Chrome same-document navigation, controlled scheduling | The popup leaves the URL inventory but its Port stays live. Exhaustive non-tab enumeration rejects it; no command is forwarded |
+| Deterministic synthetic departed-sender baseline | Before the channel fix, the new regression against `db90fe1` observed recording becoming true where false was required. This was a synthetic Chrome inventory/sender counterexample with the product native framing, engine and temporary encrypted vault |
+| Current synthetic regressions | Delivered/delayed disconnect, same-document URL change, wrong-channel and replayed confirmations, malformed confirmations and one-shot control rejection. They assert unchanged recording/revision and zero native COMMAND forwarding |
+
+An initial Port-only iteration passed real closure/navigation but failed the
+same-document Chrome check. That failure motivated the exhaustive candidate
+rule; Port liveness alone is not presented as sufficient. An ambiguous non-tab
+context temporarily disables sidebar control across this extension. The shipped
+manifest has no popup, offscreen or developer-tools page, so this adds no normal
+product flow and grants no new permission.
+
+Run the deterministic suite with `node --test test/chatgpt-sidepanel.test.mjs`.
+It exercises actual product code with **synthetic** browser objects, memory keys
+and isolated native IPC. It does not stand in for the Chrome results above.
+The final full Node suite passed **322 tests**, zero failures or skips. The
+focused sidebar, artifact-policy and package-leak run passed 47 tests. An earlier
+full run found nine packaging-fixture failures because the synthetic archive
+omitted the newly required channel module; its inventory was updated before
+those successful reruns. The artifact verifier and upload check require the
+module alongside the existing sidebar assets.
 
 The browser UI and sender/context results are actual Chrome evidence. The native
 process identity, keys and resident-menu pipe are fixtures, not evidence of signed

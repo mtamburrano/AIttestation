@@ -99,7 +99,7 @@ export async function fixture(t, channel = 'release-candidate') {
     sourceBytes.set(`spikes/${path}`, bytes);
     await write(`${verifier}/Contents/Resources/spikes/${path}`, bytes);
   }
-  for (const path of ['service-worker.js', 'content-script.js', 'sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel.css',
+  for (const path of ['service-worker.js', 'content-script.js', 'sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel-channel.js', 'sidepanel.css',
     ...Object.values(manifest.icons)]) sourceBytes.set(`spikes/browser/chatgpt/extension/${path}`, 'Synthetic extension bytes');
   for (const [path, bytes] of sourceBytes) await write(`${resources}/${path}`, bytes);
   const source = { files: [...sourceBytes].map(([path, bytes]) => ({ path, sha256: sha256(bytes) })).sort((a, b) => a.path < b.path ? -1 : 1) };

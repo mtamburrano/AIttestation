@@ -9,16 +9,16 @@ export const testTab = (overrides = {}) => ({ id: 17, windowId: 1, tabEpoch: 'te
   attachmentsPresent: false, ...overrides });
 const event = () => {
   const listeners = new Set();
-  return { addListener: listener => listeners.add(listener), emit: (...args) => {
+  return { addListener: listener => listeners.add(listener), removeListener: listener => listeners.delete(listener), emit: (...args) => {
     for (const listener of listeners) listener(...args);
   } };
 };
 
 export async function workerFixture({ onConnect = () => {}, inspect = async () => testTab(),
   query = async () => [testTab()], permission = async () => true, clock = null, contexts = async () => [] } = {}) {
-  const ports = [], timers = new Set();
+  const ports = [], panelPorts = [], timers = new Set();
   const chrome = {
-    runtime: { id: CHATGPT_EXTENSION_ID, lastError: undefined, onMessage: event(),
+    runtime: { id: CHATGPT_EXTENSION_ID, lastError: undefined, onMessage: event(), onConnect: event(),
       getContexts: contexts,
       getPlatformInfo: async () => ({ os: 'mac', arch: 'arm64' }),
       connectNative() {
@@ -40,9 +40,33 @@ export async function workerFixture({ onConnect = () => {}, inspect = async () =
     },
     clearTimeout(timer) { if (clock) clock.clearTimeout(timer); timers.delete(timer); },
   });
-  return { chrome, ports, timers,
+  return { chrome, ports, panelPorts, timers,
+    connectPanel(sender, { notifyDisconnect = true, dropAfterDeparture = false } = {}) {
+      let departed = false;
+      const client = { onMessage: event(), onDisconnect: event() };
+      const worker = { onMessage: event(), onDisconnect: event(), name: 'pap-chatgpt-panel-channel/1',
+        sender: structuredClone(sender), messages: [] };
+      client.postMessage = message => {
+        if (departed) throw Error('FIXTURE_PORT_CLOSED');
+        const snapshot = structuredClone(message);
+        queueMicrotask(() => worker.onMessage.emit(snapshot));
+      };
+      worker.postMessage = message => {
+        worker.messages.push(structuredClone(message));
+        if (departed) { if (dropAfterDeparture) return; throw Error('FIXTURE_PORT_CLOSED'); }
+        const snapshot = structuredClone(message);
+        queueMicrotask(() => client.onMessage.emit(snapshot));
+      };
+      const disconnect = () => {
+        if (departed) return; departed = true;
+        queueMicrotask(() => { client.onDisconnect.emit(); if (notifyDisconnect) worker.onDisconnect.emit(); });
+      };
+      client.disconnect = worker.disconnect = disconnect;
+      panelPorts.push(worker); chrome.runtime.onConnect.emit(worker);
+      return client;
+    },
     message(message, sender) { return new Promise(resolve => chrome.runtime.onMessage.emit(message, sender, resolve)); },
-    close() { for (const port of ports) port.disconnect(); for (const timer of timers) clock?.clearTimeout(timer); timers.clear(); },
+    close() { for (const port of [...ports, ...panelPorts]) port.disconnect(); for (const timer of timers) clock?.clearTimeout(timer); timers.clear(); },
     async fire(delay) {
       await turn();
       const timer = [...timers].find(item => item.delay === delay);
