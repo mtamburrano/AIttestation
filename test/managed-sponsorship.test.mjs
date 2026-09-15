@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { canonical, b64 } from '../spikes/vault/format.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
@@ -152,6 +152,19 @@ test('request rates, policy and ledger capacity fail closed across restart', asy
   f.now += 60000;
   assert.equal(f.service.account(f.account.accessCode).remaining, 999);
   assert.throws(() => new ManagedSponsorship(f.root, { ...f.options, limits: { ...f.options.limits, accounts: 2 } }), /policy mismatch/);
+});
+
+test('submission requires local credentials and a successful synchronous attempt checkpoint before any request', async () => {
+  let requests = 0, checkpoints = 0;
+  const client = new ManagedAnchoringClient({ origin: 'https://managed.example', keyStore: new MemoryKeyStore(),
+    request: async () => { requests++; return { profile: MANAGED_PROFILE, accountId: randomUUID(), state: 'ACTIVE',
+      paidThrough: 1, month: '2026-09', remaining: 5 }; } });
+  const payload = request().payload, beforeSubmit = () => { checkpoints++; throw Error('SYNTHETIC_ATTEMPT_WRITE_FAILURE'); };
+  await assert.rejects(client.submit(payload, { beforeSubmit }), code('ACCOUNT_REQUIRED'));
+  assert.equal(requests, 0); assert.equal(checkpoints, 0);
+  await client.connect('a'.repeat(43)); assert.equal(requests, 1);
+  await assert.rejects(client.submit(payload, { beforeSubmit }), /SYNTHETIC_ATTEMPT_WRITE_FAILURE/);
+  assert.equal(requests, 1); assert.equal(checkpoints, 1);
 });
 
 test('HTTP client sends only blinded payload and scoped credential; no token is persisted by the service', async t => {

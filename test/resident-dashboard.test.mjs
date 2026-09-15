@@ -36,7 +36,8 @@ test('dashboard close/reopen, pause and account loss retain prompt counts, selec
   const { f, api } = await fixture(t, { managed: {
     status: () => ({ state: connected ? 'ACTIVE' : 'ACCOUNT_REQUIRED' }),
     disconnect: () => { connected = false; return { state: 'ACCOUNT_REQUIRED' }; },
-    submit: async () => { if (!connected) throw Object.assign(Error('ACCOUNT_REQUIRED'), { code: 'ACCOUNT_REQUIRED' });
+    submit: async (_payload, { beforeSubmit }) => { if (!connected) throw Object.assign(Error('ACCOUNT_REQUIRED'), { code: 'ACCOUNT_REQUIRED' });
+      beforeSubmit();
       return { transactionId: 'A'.repeat(52) }; },
   } });
   await f.recording(true); f.send('DASHBOARD_PRIVATE_CANARY');

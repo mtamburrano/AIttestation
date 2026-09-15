@@ -23,7 +23,7 @@ try {
     openDashboard: async url => { opened.push(url); }, managed: {
     status: () => ({ state: connected ? 'ACTIVE' : 'ACCOUNT_REQUIRED' }),
     disconnect: () => { connected = false; return { state: 'ACCOUNT_REQUIRED' }; },
-    submit: async () => ({ transactionId: 'A'.repeat(52) }),
+    submit: async (_payload, { beforeSubmit }) => { beforeSubmit(); return { transactionId: 'A'.repeat(52) }; },
   } });
   await f.recording(true); f.send('<img src="https://never.invalid/tracker">SYNTHETIC_DASHBOARD_CANARY');
   await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();

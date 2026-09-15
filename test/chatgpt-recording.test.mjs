@@ -5,6 +5,9 @@ import { recordingFixture, until } from './recording-fixture.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
+import { pageFixture } from './chatgpt-page-fixture.mjs';
+import { CHATGPT_PAGE_CONTRACT } from '../spikes/browser/chatgpt/adapter.mjs';
+import { CHATGPT_CAPTURE_PROFILE } from '../spikes/browser/chatgpt/capture.mjs';
 
 const exact = 'SYNTHETIC_NORMAL_e\u0301\r\n☕  ';
 async function fixture(t, options) {
@@ -18,6 +21,58 @@ const preview = (f, id = saved(f)[0].id) => {
   const value = f.runtime.session.receipts.prepare({ ids: [id] });
   return { value, bytes: f.runtime.session.receipts.export(value.previewId) };
 };
+
+for (const unavailable of ['policy', 'transport']) test(`page indicator recovers from ${unavailable} unavailability through OFF and ON with fresh policy only`, async t => {
+  let status = { kind: 'PAP_CAPTURE_POLICY', pageContract: CHATGPT_PAGE_CONTRACT,
+    browserSessionId: 'synthetic-policy-session', revision: 0, state: 'RECORDING_UNAVAILABLE', policy: null };
+  const replies = [], captured = [];
+  const page = pageFixture({ draft: 'POLICY_SYNTHETIC', capture: async message => {
+    if (message.kind === 'PAP_CAPTURE_STATUS') {
+      if (unavailable === 'transport' && status.revision === 0) throw Error('SYNTHETIC_DISCONNECT');
+      return status;
+    }
+    captured.push(message);
+    return new Promise(resolve => replies.push(() => resolve({ profile: CHATGPT_CAPTURE_PROFILE,
+      eventId: message.eventId, kind: message.observationKind, state: 'PROMPT_SAVED' })));
+  } });
+  t.after(() => page.close());
+  const update = async (state, policy = null) => {
+    status = { ...status, revision: status.revision + 1, state, policy }; await page.send(status);
+  };
+  const policy = token => ({ profile: CHATGPT_CAPTURE_PROFILE, token,
+    expectedUrl: page.location.href, destination: 'conversation:test-conversation' });
+  const send = () => page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  await until(() => page.feedback === 'Attestamp · Recording unavailable');
+  const stale = structuredClone(status);
+  await update('OFF'); assert.equal(page.feedback, '');
+  await page.send(stale); assert.equal(page.feedback, '');
+  send(); assert.equal(captured.length, 0);
+  await update('READY', policy('first-token')); assert.equal(page.feedback, 'Attestamp · ON');
+  send(); assert.equal(page.feedback, 'Attestamp · Saving prompt…');
+  await update('RECORDING_UNAVAILABLE'); assert.match(page.feedback, /Recording gap/);
+  await update('OFF'); assert.equal(page.feedback, '');
+  replies[0](); await new Promise(setImmediate); assert.equal(page.feedback, '');
+  const off = structuredClone(status);
+  await update('READY', policy('second-token')); assert.equal(page.feedback, 'Attestamp · ON');
+  await page.send(off); assert.equal(page.feedback, 'Attestamp · ON');
+  send(); replies[1](); await until(() => page.feedback === 'Attestamp · Prompt saved');
+  await update('READY', status.policy); assert.equal(page.feedback, 'Attestamp · Prompt saved');
+  assert.equal(captured.length, 2); assert.equal(page.clicks(), 0); assert.equal(page.injections(), 0);
+});
+
+test('a late failed policy refresh cannot overwrite newer OFF or ON state', async t => {
+  for (const enabled of [false, true]) {
+    let rejectRefresh;
+    const page = pageFixture({ capture: () => new Promise((_resolve, reject) => { rejectRefresh = reject; }) });
+    t.after(() => page.close());
+    await page.send({ kind: 'PAP_CAPTURE_POLICY', pageContract: CHATGPT_PAGE_CONTRACT,
+      browserSessionId: 'synthetic-fresh-policy', revision: 1, state: enabled ? 'READY' : 'OFF',
+      policy: enabled ? { profile: CHATGPT_CAPTURE_PROFILE, token: 'fresh-token',
+        expectedUrl: page.location.href, destination: 'conversation:test-conversation' } : null });
+    rejectRefresh(Error('SYNTHETIC_OLD_REFRESH_FAILURE')); await new Promise(setImmediate);
+    assert.equal(page.feedback, enabled ? 'Attestamp · ON' : '');
+  }
+});
 
 test('ON follows existing and newly opened duplicate-conversation tabs across windows without a control command', async t => {
   const f = await fixture(t); await f.recording(true);

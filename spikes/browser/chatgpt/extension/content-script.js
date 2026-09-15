@@ -67,7 +67,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/2';
 const MESSAGE_SELECTOR = '[data-message-author-role="user"][data-message-id]';
-let capturePolicy = null, policySession = null, policyRevision = -1, policyChecked = 0;
+let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0;
 let composing = false, compositionEnded = -Infinity, keyboardIntent = false, stopped = false, feedback;
 let latestIntent = null;
 const observations = new Map();
@@ -100,11 +100,13 @@ function setCapturePolicy(message) {
   const policy = message.policy;
   const next = policy?.profile === CAPTURE_PROFILE && policy.expectedUrl === location.href
     && policy.destination === destination() ? policy : null;
+  const state = next ? 'READY' : message.state;
   if (capturePolicy?.token !== next?.token) {
     const hadPending = observations.size > 0, saved = [...observations.values()].every(value => value.saved);
     clearObservations(); capturePolicy = next;
-    showRecording(next ? 'READY' : hadPending ? saved ? 'OBSERVATION_GAP' : 'GAP' : message.state);
-  } else if (!next && message.state === 'RECORDING_UNAVAILABLE') showRecording(message.state);
+    showRecording(next ? 'READY' : hadPending ? saved ? 'OBSERVATION_GAP' : 'GAP' : state);
+  } else if (state !== policyState) showRecording(state);
+  policyState = state;
 }
 
 async function refreshCapturePolicy() {
@@ -120,7 +122,8 @@ async function refreshCapturePolicy() {
     if (status?.kind !== 'PAP_CAPTURE_POLICY') throw Error('unavailable');
     setCapturePolicy(status);
   } catch {
-    capturePolicy = null; clearObservations(); showRecording('RECORDING_UNAVAILABLE');
+    if (revision !== policyRevision || stopped) return;
+    capturePolicy = null; policyState = 'RECORDING_UNAVAILABLE'; clearObservations(); showRecording(policyState);
   } finally {
     clearTimeout(timer);
     if (!stopped) setTimeout(refreshCapturePolicy, 1000);

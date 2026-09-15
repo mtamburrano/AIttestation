@@ -17,6 +17,7 @@ export class ResidentEngine {
   #commands = new Map(); #control = Promise.resolve(); #work = new Set();
   #listeners = new Set(); #unsubscribe; #closed = false; #failed = false;
   #captureTokens = new Map(); #anchorQueue = []; #anchoring = new Set();
+  #anchorCursor = 0; #durableVersions = 0;
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
     this.#session = session; this.#adapter = adapter; this.#epoch = runtimeEpoch; this.#diagnostics = diagnostics;
@@ -30,7 +31,8 @@ export class ResidentEngine {
     await this.#commit();
     // Recovery has no engine pointer and stays OFF. Only durable observations,
     // never old Send journals, can contribute bounded pending anchor work.
-    for (const version of this.#session.status().versions.slice(-512)) this.#queueAnchor(version);
+    this.#durableVersions = this.#session.status().versions.length;
+    this.#pumpAnchors();
     return this;
   }
   state() {
@@ -87,7 +89,6 @@ export class ResidentEngine {
       if (!policy || policy.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
       this.#adapter.assertObservationSource(source);
       const prior = this.#session.status().versions.some(value => value.id === eventId);
-      if (!prior && this.#anchorQueue.length + this.#anchoring.size >= 512) reject('CAPTURE_QUEUE_FULL');
       let version;
       try {
         version = this.#session.observeNormal(observation);
@@ -98,19 +99,25 @@ export class ResidentEngine {
         }
         emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;
       }
-      if (!prior) this.#queueAnchor(version);
+      if (!prior) {
+        this.#durableVersions = this.#session.status().versions.length;
+        this.#pumpAnchors();
+      }
       this.#publish();
       return { profile: CHATGPT_CAPTURE_PROFILE, eventId, kind: observation.kind,
         state: 'PROMPT_SAVED', receiptId: version.descriptorId };
     });
   }
-  #queueAnchor(version) {
-    if (version.legacy || version.anchor !== 'PENDING' || version.anchorAttempts >= 3 || this.#closed
-        || this.#anchoring.has(version.id) || this.#anchorQueue.includes(version.id)) return;
-    if (this.#anchorQueue.length + this.#anchoring.size >= 512) return;
-    this.#anchorQueue.push(version.id); this.#pumpAnchors();
-  }
   #pumpAnchors() {
+    if (this.#closed) return;
+    const versions = this.#session.status().versions;
+    // Walk insertion-ordered durable history once per runtime. Overflow waits
+    // in the vault, without a growing job queue or automatic retry loop. The
+    // committed boundary excludes a capture whose metadata is still saving.
+    while (this.#anchorCursor < this.#durableVersions && this.#anchorQueue.length + this.#anchoring.size < 512) {
+      const version = versions[this.#anchorCursor++];
+      if (!version.legacy && version.anchor === 'PENDING' && version.anchorAttempts < 3) this.#anchorQueue.push(version.id);
+    }
     while (!this.#closed && this.#anchoring.size < 2 && this.#anchorQueue.length) {
       const id = this.#anchorQueue.shift(); this.#anchoring.add(id);
       const work = this.#session.anchorManaged({ id }).catch(() => {

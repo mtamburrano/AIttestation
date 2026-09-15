@@ -40,8 +40,8 @@ are unchanged. Earlier active extension/control contracts reject.
 | Separate equal-text Sends versus identical delivery retry | `chatgpt-recording`: UUID/digest distinction, byte dedup, replay conflict and lost acknowledgement |
 | Durable save before acknowledgement; ordered OFF and stale rejection | `resident-engine` holds unfinished metadata save while queuing OFF and capture; `chatgpt-recording` storage/key/partial-write faults and OFF buffers |
 | Conservative idempotent/crash-safe migration; recovered OFF | `resident-engine`: legacy table, orphan snapshot, pointer publication/restart, recovery with fresh keys; `debug-session` actual killed child/restart |
-| Navigation, unsupported surface, permission, disconnect/reconnect gaps | `chatgpt-recording`, `native-bridge-lifecycle`: real framing/relay child, new epochs, stale callbacks, bounded backoff |
-| Queue/account/anchor failures independent of Send | `resident-engine`: 512-job saturation, two workers, persisted three-attempt ceiling, saved transaction reuse, six account/service failures and free export |
+| Navigation, unsupported surface, permission, disconnect/reconnect gaps | `chatgpt-recording`, `native-bridge-lifecycle`: real framing/relay child, new epochs, unavailable/OFF/ON indicator recovery, stale refresh/ack rejection, bounded backoff |
+| Queue/account/anchor failures independent of local evidence and Send | `resident-engine`: local save/export at 512-job saturation, two workers, bounded pending resumption while OFF and after restart, unfinished metadata exclusion, local account prerequisites versus durable external attempts, saved transaction reuse, six account/service failures |
 | Fast confirmation and later proof | `fast-confirmation`, fixed `algorand-archive`; synthetic consensus-transition test with actual signed-log portable proof kept FIXTURE_VERIFIED |
 | Legacy bytes/meaning, no executable authority | `resident-engine` immutable old observation and no submit/upgrade; `recipient` historical cancellation/unknown assertions; `legacy-archive` original/restored fixed proof |
 | Least-authority controls and removed commands/resources | `chatgpt-sidepanel`, `chatgpt-removal`, `chatgpt-browser-path`: source roles, old controls/endpoints/page/native messages rejected and no executor in selected shipping sources |
@@ -97,12 +97,15 @@ headless profiles with mock Keychain and external DNS blocked. Native compilatio
 and ad-hoc packaging use fresh output/cache paths; no Developer ID signing,
 installation or retained-key authority is exercised.
 
-Final complete Node run (`node --test test/*.test.mjs`): **301 passed,
+Final complete Node run (`node --test test/*.test.mjs`): **311 passed,
 0 failed, 0 skipped**. This includes real native host compilation, a fresh ad-hoc
 app/recipient package, removed-resource checks, fixed identity validation and
 offline verification from the packaged recipient. All six product scenarios
 also passed. The earlier focused ON/OFF/compatibility/debug/package run passed
-100 tests with no failures or skips.
+100 tests with no failures or skips. The focused recording/engine/account/
+dashboard/removal run passed 70 tests; the subsequent full run includes additional
+credential-checkpoint, ambiguous-request, metadata-save and stale-refresh
+regressions. All preserve the original accounting and consent bounds.
 Actual dashboard checks passed all eight disclosure-race scenarios and lifecycle,
 privacy, account/export/recovery paths. Recipient UI and both fixed proof/archive
 commands passed. The archive checks perform no network submission.

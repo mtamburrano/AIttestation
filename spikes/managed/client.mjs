@@ -84,10 +84,14 @@ export class ManagedAnchoringClient {
     try { return this.#validateAccount(await this.#request(this.#origin, '/v1/account', this.#token())); }
     catch (error) { return { state: managedError(error.code).code }; }
   }
-  async submit(payload) {
+  async submit(payload, { beforeSubmit = () => {} } = {}) {
     const body = validateAnchorRequest({ profile: MANAGED_PROFILE, payload });
+    const token = this.#token();
+    // Local credential failure is not an external attempt. The caller durably
+    // reserves its attempt here, before a request can have an ambiguous outcome.
+    beforeSubmit();
     try {
-      const value = await this.#request(this.#origin, '/v1/anchors', this.#token(), body);
+      const value = await this.#request(this.#origin, '/v1/anchors', token, body);
       keys(value, ['profile', 'network', 'payload', 'transactionId', 'state']);
       if (value.profile !== MANAGED_PROFILE || value.network !== MANAGED_NETWORK || value.payload !== payload
           || !TRANSACTION_PATTERN.test(value.transactionId) || value.state !== 'SUBMITTED_OR_UNKNOWN') throw Error('Invalid managed reply');

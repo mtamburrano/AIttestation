@@ -39,8 +39,14 @@ subscription, or transaction ID alone never establishes anchor assurance.
 | Recording OFF | Stop new capture; bounded work for already-durable evidence may finish |
 
 Each observation has at most three persisted client anchor attempts across restarts,
-committed before external work. At most two jobs run concurrently within a queue
-of 512; each startup schedules eligible pending work once. Saved transaction IDs
+committed before external work. An unconfigured client or missing local credential
+uses none of this budget. The client's synchronous `beforeSubmit` hook runs after
+payload/credential checks and before the request; failure to persist the attempt
+prevents submission. Remote rejection and ambiguous submission still consume an
+attempt. At most two jobs run concurrently within a queue of 512; each runtime
+considers eligible durable observations once, filling freed slots from history.
+Queue saturation leaves local saves PENDING and does not block evidence capture.
+Saved transaction IDs
 are reused without a new sponsor request and can still be observed after account
 disconnect. A renewed/recovered credential retains the same account and quotas.
 The service can return an existing reservation after expiry within request limits.

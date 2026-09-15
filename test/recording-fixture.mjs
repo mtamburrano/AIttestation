@@ -29,7 +29,9 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
   let captureFault = false, keyFault = false;
   const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, diagnostics, debugSession,
     installation, fastTrust: { profile: FAST_CONFIRM_PROFILE }, openBrowser: false,
-    managed: managed ?? { status: () => ({ state: 'ACTIVE' }), submit: async () => { anchorCalls++; return { transactionId: 'A'.repeat(52) }; } },
+    managed: managed ?? { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
+      beforeSubmit(); anchorCalls++; return { transactionId: 'A'.repeat(52) };
+    } },
     collectFast: async () => { confirmed++; return collectFast ? collectFast() : { synthetic: true }; },
     openDashboard,
     controllerTimeoutMs: 250,

@@ -177,10 +177,13 @@ export class ChatGPTRecordingSession {
       const started = performance.now(), version = this.#version(id);
       if (this.#closed || version.legacy || version.anchor !== 'PENDING') throw Error('Anchor work unavailable');
       if (version.anchorAttempts >= 3) throw Error('ANCHOR_RETRY_LIMIT');
-      // Commit the attempt budget before any external work, including ambiguous failures.
-      this.#event({ kind: 'anchor-attempt', version: id, recordDigest: version.recordDigest,
-        number: version.anchorAttempts + 1 });
-      version.anchorAttempts++;
+      let attempted = false;
+      const beforeSubmit = () => {
+        if (attempted) return;
+        this.#event({ kind: 'anchor-attempt', version: id, recordDigest: version.recordDigest,
+          number: version.anchorAttempts + 1 });
+        version.anchorAttempts++; attempted = true;
+      };
       if (managed) {
         const savedTransactionId = version.managed?.transactionId;
         emit(this.#diagnostics, 'SPONSOR_REQUESTED', { operationId: id });
@@ -188,7 +191,7 @@ export class ChatGPTRecordingSession {
         try {
           if (!this.#managed) throw managedError('NOT_CONFIGURED');
           const submitted = savedTransactionId ? { transactionId: savedTransactionId }
-            : await this.#managed.submit(this.anchorRequest(id).payload);
+            : await this.#managed.submit(this.anchorRequest(id).payload, { beforeSubmit });
           if (!TRANSACTION_PATTERN.test(submitted.transactionId ?? '')
               || (savedTransactionId && submitted.transactionId !== savedTransactionId)) {
             throw managedError('SERVICE_UNAVAILABLE');
@@ -213,7 +216,11 @@ export class ChatGPTRecordingSession {
         }
         transactionId = version.managed.transactionId;
       }
-      if (typeof transactionId !== 'string' || transactionId.length === 0) throw Error('Algorand transaction ID required');
+      if (!TRANSACTION_PATTERN.test(transactionId ?? '')) throw Error('Algorand transaction ID required');
+      // Confirmation of a saved transaction needs no account. A combined
+      // submission/confirmation consumes one attempt; confirmation alone also
+      // commits its budget before external work.
+      beforeSubmit();
       const confirmationId = randomUUID(), confirmationStarted = performance.now();
       const confirmationRefs = { operationId: id, confirmationId };
       emit(this.#diagnostics, 'CONFIRMATION_STARTED', confirmationRefs);

@@ -46,6 +46,9 @@ intents; the bridge bounds capture deliveries to 32. Delivery has a two-second
 worker deadline, 2.5-second page deadline and at most one retry of the original
 observation. Policy refresh is every second and expires locally after three
 seconds. OFF and invalidated policies discard pending page observations.
+The page indicator follows effective state changes even when both policies are
+empty: OFF clears an unavailable indicator. Stale refresh successes or failures
+cannot replace a newer policy; unchanged ON refreshes preserve saved/gap feedback.
 
 Storage, key, IPC, permission or markup failure produces a gap or unavailable
 status without acknowledging a save or replaying Send. Delayed old acknowledgements

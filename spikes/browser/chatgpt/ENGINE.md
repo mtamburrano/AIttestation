@@ -50,12 +50,19 @@ after the engine cutoff. A failed preference write also disables capture until
 restart. No provider action waits on storage, IPC, account or anchoring.
 
 The engine keeps at most 512 queued/active anchor jobs and runs at most two at a
-time. A full queue rejects new capture with a gap. Each durable observation has
-at most three persisted anchor attempts across restarts, committed before work;
-each startup schedules an eligible pending observation once, without a retry loop.
-A saved transaction is reused. OFF permits that bounded work to finish, but
-account disconnect separately removes service access. Old observation profiles
-are read-only and never enter this queue.
+time. A full anchor queue leaves new durable evidence saved with PENDING anchoring;
+it does not reject capture. An insertion-order cursor fills freed slots from
+durable history, considering each observation once per runtime. Metadata still
+being saved is excluded. Restart resumes eligible pending history without a retry
+loop or a backlog of unobserved text.
+
+Each observation has at most three persisted external submission/confirmation
+attempts across restarts. Missing local configuration or account credentials
+consumes no attempt. The attempt is committed immediately before an external
+request; remote rejection and ambiguous outcomes still count. A saved transaction
+is reused. OFF permits that bounded work to finish, but account disconnect
+separately removes service access. Old observation profiles are read-only and
+never enter this queue.
 
 ## Persistence and migration
 

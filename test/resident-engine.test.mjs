@@ -15,6 +15,9 @@ import { CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT } from '../spikes/browse
 import { CHATGPT_CAPTURE_PROFILE } from '../spikes/browser/chatgpt/capture.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { testTab } from './chrome-worker-fixture.mjs';
+import { ManagedAnchoringClient } from '../spikes/managed/client.mjs';
+import { MANAGED_PROFILE, MANAGED_NETWORK } from '../spikes/managed/protocol.mjs';
+import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 
 async function root(t) {
   const directory = await mkdtemp('/private/tmp/attestamp-onoff-test-');
@@ -129,7 +132,7 @@ test('OFF queued behind an unfinished durable save rejects the next capture and 
   assert.equal(f.runtime.session.receipts.list().length, 1); assert.equal(f.releases.length, 0);
 });
 
-test('the full 512-job queue runs only two workers, rejects capture before writing and remains controllable OFF', async t => {
+test('512 pending anchors cannot block durable capture; two workers resume saved work once, including while OFF', async t => {
   const directory = await root(t), epoch = randomUUID();
   const vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true }); t.after(() => vault.close());
   const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID, runtimeEpoch: epoch });
@@ -139,19 +142,71 @@ test('the full 512-job queue runs only two workers, rejects capture before writi
     permissionState: 'granted', permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', tabs: [testTab()] };
   adapter.pair(connection); adapter.synchronize(connection);
   const versions = Array.from({ length: 512 }, () => ({ id: randomUUID(), anchor: 'PENDING', anchorAttempts: 0 }));
-  let jobs = 0, captures = 0, finish; const held = new Promise(resolve => { finish = resolve; });
-  const session = { vault, status: () => ({ versions }), anchorManaged: () => { jobs++; return held; },
-    observeNormal: () => { captures++; throw Error('CAPTURE_MUST_NOT_WRITE'); } };
+  let finish, active = 0, maximum = 0, confirm = false;
+  const held = new Promise(resolve => { finish = resolve; }), jobs = [];
+  const options = { vault, fastTrust: { profile: FAST_CONFIRM_PROFILE },
+    managed: { submit: async (_payload, { beforeSubmit } = {}) => {
+      beforeSubmit?.(); return { transactionId: 'A'.repeat(52) };
+    } }, collectFast: async () => { if (!confirm) throw Error('SYNTHETIC_TIMEOUT'); return {}; },
+    verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
+      assurance: FAST_CONFIRM_PROFILE, round: 42 }) };
+  const session = await new ChatGPTRecordingSession(directory, adapter, options).init();
+  const status = session.status.bind(session), anchor = session.anchorManaged.bind(session);
+  session.status = () => ({ versions: [...versions, ...status().versions] });
+  session.anchorManaged = async request => {
+    jobs.push(request.id); maximum = Math.max(maximum, ++active);
+    try { await held; return versions.some(version => version.id === request.id) ? {} : await anchor(request); }
+    finally { active--; }
+  };
   const engine = await new ResidentEngine(directory, session, adapter, epoch).init();
   t.after(async () => { engine.stop(); finish(); await engine.drain(); });
-  assert.equal(jobs, 2); await engine.command(command(engine, true), { surface: 'desktop' });
+  assert.equal(jobs.length, 2); await engine.command(command(engine, true), { surface: 'desktop' });
   const policy = engine.capturePolicy()[0], source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
     runtimeEpoch: epoch, browserSessionId: policy.browserSessionId, scope: policy.scope, tabId: policy.tabId,
     windowId: policy.windowId, tabEpoch: policy.tabEpoch, documentId: 'queue-document', destination: policy.destination };
-  await assert.rejects(engine.observe({ profile: CHATGPT_CAPTURE_PROFILE, kind: 'send-intent', token: policy.token,
-    eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'send-button' }), /CAPTURE_QUEUE_FULL/);
-  assert.equal(captures, 0); assert.equal(jobs, 2);
+  const observation = { profile: CHATGPT_CAPTURE_PROFILE, kind: 'send-intent', token: policy.token,
+    eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'send-button' };
+  const ack = await engine.observe(observation);
+  assert.equal(ack.state, 'PROMPT_SAVED');
+  assert.deepEqual(await engine.observe(observation), ack);
+  await engine.observe({ ...observation, eventId: randomUUID(), text: 'SECOND_DURABLE_CAPTURE' });
+  assert.equal(session.receipts.list().length, 2); assert.equal(jobs.length, 2);
+  assert.ok(status().versions.every(version => version.anchor === 'PENDING' && version.anchorAttempts === 0));
+  const preview = session.receipts.prepare({ ids: [ack.receiptId] });
+  assert.equal(preview.texts[0].preview, observation.text);
+  assert.ok(verifyPortable(session.receipts.export(preview.previewId)).records.length > 0);
   await engine.command(command(engine, false), { surface: 'desktop' }); assert.deepEqual(engine.capturePolicy(), []);
+  await assert.rejects(engine.observe({ ...observation, eventId: randomUUID() }), /CAPTURE_NOT_ENABLED/);
+  finish(); await engine.drain();
+  assert.equal(maximum, 2); assert.equal(jobs.length, 514); assert.equal(new Set(jobs).size, 514);
+  assert.ok(status().versions.every(version => version.anchor === 'PENDING' && version.anchorAttempts === 1));
+  engine.stop(); session.close(); confirm = true;
+  const restored = await new ChatGPTRecordingSession(directory, adapter, options).init();
+  const reopened = await new ResidentEngine(directory, restored, adapter, randomUUID()).init();
+  t.after(() => { reopened.stop(); restored.close(); });
+  await reopened.drain();
+  assert.equal(reopened.state().recording, false); assert.equal(restored.receipts.list().length, 2);
+  assert.ok(restored.status().versions.every(version => version.anchor === 'SOURCE_CORROBORATED' && version.anchorAttempts === 2));
+});
+
+test('a freed anchor slot cannot schedule capture while its engine metadata save is unfinished', async t => {
+  let finishAnchor, finishSave, enteredSave;
+  const heldAnchor = new Promise(resolve => { finishAnchor = resolve; });
+  const heldSave = new Promise(resolve => { finishSave = resolve; });
+  const saving = new Promise(resolve => { enteredSave = resolve; });
+  let confirmations = 0;
+  const f = await fixture(t, { collectFast: () => ++confirmations === 1 ? heldAnchor : { synthetic: true } });
+  const save = EngineStateStore.prototype.save;
+  t.after(() => { EngineStateStore.prototype.save = save; finishSave(); finishAnchor({ synthetic: true }); });
+  await f.recording(true); f.send('FIRST_DURABLE_SYNTHETIC'); await until(() => f.confirmed === 1);
+  EngineStateStore.prototype.save = async function (state) { enteredSave(); await heldSave; return save.call(this, state); };
+  f.send('STILL_SAVING_SYNTHETIC'); await saving;
+  finishAnchor({ synthetic: true }); await f.runtime.session.drain(); await new Promise(setImmediate);
+  assert.equal(f.anchorCalls, 1); assert.equal(f.confirmed, 1);
+  assert.equal(f.results.filter(value => value.result.kind === 'send-intent').length, 1);
+  EngineStateStore.prototype.save = save; finishSave(); await f.runtime.engine.drain();
+  await until(() => f.results.filter(value => value.result.kind === 'send-intent').length === 2);
+  assert.equal(f.anchorCalls, 2); assert.equal(f.confirmed, 2); assert.equal(f.prevention, 0);
 });
 
 test('legacy normal observations stay byte-identical and independently readable without new anchor or capture authority', async t => {
@@ -188,8 +243,8 @@ test('the resident lock prevents two recorders loading one directory', async t =
 
 test('anchor retries retain their transaction and durable attempt budget across restart', async t => {
   let submissions = 0;
-  const f = await fixture(t, { managed: { status: () => ({ state: 'ACTIVE' }), submit: async () => {
-    submissions++; return { transactionId: 'A'.repeat(52) };
+  const f = await fixture(t, { managed: { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
+    beforeSubmit(); submissions++; return { transactionId: 'A'.repeat(52) };
   } }, collectFast: async () => { throw Error('SYNTHETIC_TIMEOUT'); } });
   await f.recording(true); f.send('PENDING_SYNTHETIC'); await until(() => f.confirmed === 1); await f.runtime.engine.drain();
   const id = f.runtime.session.status().versions[0].id;
@@ -201,9 +256,115 @@ test('anchor retries retain their transaction and durable attempt budget across 
   assert.equal(submissions, 1); assert.equal(f.runtime.session.receipts.list().length, 1);
 });
 
+for (const retry of ['explicit', 'reopen']) test(`disconnected account preserves attempts across reopens until ${retry} retry after connection`, async t => {
+  let requests = 0, submissions = 0;
+  const client = new ManagedAnchoringClient({ origin: 'https://managed.example', keyStore: new MemoryKeyStore(),
+    request: async (_origin, path, _token, body) => {
+      requests++;
+      if (path === '/v1/account') return { profile: MANAGED_PROFILE, accountId: randomUUID(), state: 'ACTIVE',
+        paidThrough: 1, month: '2026-09', remaining: 5 };
+      submissions++;
+      return { profile: MANAGED_PROFILE, network: MANAGED_NETWORK, payload: body.payload,
+        transactionId: 'A'.repeat(52), state: 'SUBMITTED_OR_UNKNOWN' };
+    } });
+  const f = await fixture(t, { managed: client, collectFast: async () => { throw Error('SYNTHETIC_TIMEOUT'); } });
+  await f.recording(true); f.send('ACCOUNT_PREREQUISITE_SYNTHETIC');
+  await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
+  const id = f.runtime.session.status().versions[0].id;
+  for (let index = 0; index < 3; index++) { await f.restart(); await f.runtime.engine.drain(); }
+  for (let index = 0; index < 3; index++) await f.runtime.session.anchorManaged({ id });
+  assert.equal(requests, 0); assert.equal(submissions, 0);
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 0);
+  assert.equal(f.runtime.session.status().versions[0].managed.state, 'ACCOUNT_REQUIRED');
+  const payload = f.runtime.session.anchorRequest(id).payload;
+  await f.runtime.session.connectManaged({ accessCode: 'a'.repeat(43) });
+  if (retry === 'reopen') { await f.restart(); await f.runtime.engine.drain(); }
+  else await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 1);
+  client.disconnect();
+  await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
+  await f.restart(); await f.runtime.engine.drain();
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 3);
+  await assert.rejects(f.runtime.session.anchorManaged({ id }), /ANCHOR_RETRY_LIMIT/);
+  assert.equal(requests, 2); assert.equal(submissions, 1); assert.equal(f.confirmed, 3);
+  assert.equal(f.runtime.session.anchorRequest(id).payload, payload);
+  assert.equal(f.runtime.session.status().versions[0].managed.transactionId, 'A'.repeat(52));
+  assert.equal(f.runtime.session.receipts.list().length, 1);
+  assert.equal(f.userSends, 1); assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+});
+
+test('an unconfigured client consumes no attempts across restart and can later anchor the same local evidence', async t => {
+  const directory = await root(t), vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true });
+  t.after(() => vault.close());
+  const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
+  const options = { vault, fastTrust: { profile: FAST_CONFIRM_PROFILE } };
+  let session = await new ChatGPTRecordingSession(directory, adapter, options).init();
+  const id = randomUUID(), source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
+    runtimeEpoch: randomUUID(), browserSessionId: 'synthetic-unconfigured', scope: randomUUID(), tabId: 17,
+    windowId: 1, tabEpoch: 'synthetic-epoch', documentId: 'synthetic-document', destination: 'conversation:synthetic' };
+  const original = session.observeNormal({ kind: 'send-intent', eventId: id, source,
+    text: 'UNCONFIGURED_SYNTHETIC', inputMethod: 'send-button' });
+  await assert.rejects(session.confirmFast({ id, transactionId: 'invalid' }), /Algorand transaction ID required/);
+  assert.equal(session.status().versions[0].anchorAttempts, 0);
+  for (let index = 0; index < 4; index++) {
+    const engine = await new ResidentEngine(directory, session, adapter, randomUUID()).init();
+    await engine.drain(); engine.stop();
+    assert.equal((await session.anchorManaged({ id })).anchorAttempts, 0);
+    session.close(); session = await new ChatGPTRecordingSession(directory, adapter, options).init();
+  }
+  session.close(); let submissions = 0;
+  session = await new ChatGPTRecordingSession(directory, adapter, { ...options,
+    managed: { submit: async (_payload, { beforeSubmit } = {}) => {
+      beforeSubmit?.(); submissions++; return { transactionId: 'A'.repeat(52) };
+    } }, collectFast: async () => { throw Error('SYNTHETIC_TIMEOUT'); } }).init();
+  t.after(() => session.close());
+  await assert.rejects(session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
+  assert.equal(submissions, 1); assert.equal(session.status().versions[0].anchorAttempts, 1);
+  assert.equal(session.status().versions[0].recordDigest, original.recordDigest);
+  assert.equal(session.receipts.list().length, 1);
+});
+
+for (const failure of ['ACCOUNT_REQUIRED', 'SERVICE_UNAVAILABLE']) test(`external ${failure} consumes a durable attempt and retries the same anchor identity`, async t => {
+  let f; const payloads = [];
+  const client = new ManagedAnchoringClient({ origin: 'https://managed.example', keyStore: new MemoryKeyStore(),
+    request: async (_origin, path, _token, body) => {
+      if (path === '/v1/account') return { profile: MANAGED_PROFILE, accountId: randomUUID(), state: 'ACTIVE',
+        paidThrough: 1, month: '2026-09', remaining: 5 };
+      payloads.push(body.payload);
+      if (payloads.length === 1) {
+        const { vault } = f.runtime.session, version = f.runtime.session.status().versions[0];
+        const attempts = vault.inspect().records.filter(record => record.manifest.type === 'observation')
+          .map(record => JSON.parse(vault.read(record.manifest.evidence[0].objectDigest)))
+          .filter(value => value.kind === 'anchor-attempt');
+        assert.equal(attempts.at(-1).number, 1); assert.equal(version.anchorAttempts, 1);
+        throw Object.assign(Error(failure), { code: failure });
+      }
+      return { profile: MANAGED_PROFILE, network: MANAGED_NETWORK, payload: body.payload,
+        transactionId: 'B'.repeat(52), state: 'SUBMITTED_OR_UNKNOWN' };
+    } });
+  f = await fixture(t, { managed: client, collectFast: async () => { throw Error('SYNTHETIC_TIMEOUT'); } });
+  await f.runtime.session.connectManaged({ accessCode: 'b'.repeat(43) });
+  await f.recording(true); f.send('AMBIGUOUS_ANCHOR_SYNTHETIC');
+  await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
+  const id = f.runtime.session.status().versions[0].id;
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 1);
+  await f.restart(); await f.runtime.engine.drain();
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 2);
+  assert.equal(f.runtime.session.status().versions[0].managed.transactionId, 'B'.repeat(52));
+  client.disconnect(); await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
+  await f.restart(); await f.runtime.engine.drain();
+  await assert.rejects(f.runtime.session.anchorManaged({ id }), /ANCHOR_RETRY_LIMIT/);
+  assert.deepEqual(payloads, [f.runtime.session.anchorRequest(id).payload, f.runtime.session.anchorRequest(id).payload]);
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 3);
+  assert.equal(f.runtime.session.status().versions[0].managed.transactionId, 'B'.repeat(52));
+  assert.equal(f.confirmed, 2); assert.equal(f.runtime.session.receipts.list().length, 1);
+  assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+});
+
 for (const code of ['ACCOUNT_REQUIRED', 'UNPAID', 'QUOTA_EXHAUSTED', 'RATE_LIMITED', 'SERVICE_UNAVAILABLE', 'SUBMISSION_INTERRUPTED']) {
   test(`${code} leaves durable evidence, normal Send and free export available`, async t => {
-    const f = await fixture(t, { managed: { status: () => ({ state: code }), submit: async () => {
+    const f = await fixture(t, { managed: { status: () => ({ state: code }), submit: async (_payload, { beforeSubmit }) => {
+      if (code !== 'ACCOUNT_REQUIRED') beforeSubmit();
       throw Object.assign(Error(code), { code });
     } } });
     await f.recording(true); f.send('ACCOUNT_FAILURE_SYNTHETIC'); await until(() => f.runtime.session.receipts.list().length === 1);
