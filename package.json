@@ -14,6 +14,7 @@
     "test": "node --test test/*.test.mjs",
     "test:chatgpt": "node --test test/resident-engine.test.mjs test/chatgpt-browser-path.test.mjs test/chatgpt-removal.test.mjs test/chatgpt-recording.test.mjs test/chatgpt-sidepanel.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
     "test:dashboard-browser": "node test/dashboard-browser.mjs",
+    "test:sidepanel-browser": "node test/sidepanel-browser.mjs",
     "test:algorand": "cd spikes/anchor/algorand && make build test && cd ../../.. && node test/algorand-archive.mjs",
     "build:chatgpt": "node spikes/browser/chatgpt/build-macos.mjs",
     "build:distribution": "node spikes/distribution/build-macos.mjs",

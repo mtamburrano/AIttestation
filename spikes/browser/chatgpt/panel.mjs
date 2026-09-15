@@ -1,6 +1,9 @@
 import { keys } from '../../vault/format.mjs';
 
 export const CHATGPT_PANEL_PROFILE = 'pap-chatgpt-panel/2';
+export const CHATGPT_PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
+export const PANEL_REJECTION_CODES = Object.freeze(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
+  'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
 const errors = new Set(['STALE_RUNTIME_EPOCH', 'STALE_ENGINE_REVISION', 'ENGINE_UNAVAILABLE',
   'COMMAND_REPLAY_CONFLICT', 'COMMAND_LIMIT']);
 export const panelError = error => errors.has(error?.code ?? error?.message) ? error.code ?? error.message : 'PANEL_REQUEST_REJECTED';

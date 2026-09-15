@@ -3,6 +3,9 @@ const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-15';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/2';
 const PANEL_PROFILE = 'pap-chatgpt-panel/2';
+const PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
+const PANEL_REJECTIONS = new Set(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
+  'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
 let policyRevision = 0;
 const documents = new Map();
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
@@ -111,7 +114,8 @@ function connect() {
   catch { scheduleReconnect(); return; }
   const context = { port, closed: false, ready: false, epoch: null, revision: 0, dirty: false,
     publishing: false,
-    policies: new Map(), states: new Map(), captures: new Map(), panels: new Map(), panelReady: false };
+    policies: new Map(), states: new Map(), captures: new Map(), panels: new Map(), panelReady: false,
+    panelDiagnosticsReady: false, panelDiagnostics: new Set() };
   connection = context;
   context.handshakeTimer = setTimeout(() => retire(context), 10_000);
   port.onMessage.addListener(message => {
@@ -121,6 +125,7 @@ function connect() {
           || typeof message.runtimeEpoch !== 'string' || !message.runtimeEpoch.length) return retire(context);
       context.ready = true; context.epoch = message.runtimeEpoch;
       context.panelReady = message.panelProfile === PANEL_PROFILE;
+      context.panelDiagnosticsReady = message.panelDiagnosticProfile === PANEL_DIAGNOSTIC_PROFILE;
       clearTimeout(context.handshakeTimer); reconnectDelay = 1000; publishState(); return;
     }
     if (context.ready && message?.kind === 'PAP_CAPTURE_POLICY') {
@@ -163,23 +168,59 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   } catch {}
 });
 
-async function panelMessage(message, sender) {
-  const origin = `chrome-extension://${chrome.runtime.id}`, url = `${origin}/sidepanel.html`;
-  // Sender metadata belongs to Chrome, never to the submitted message. Checking
-  // the live context also rejects this HTML opened as a regular tab or iframe.
-  if (sender.id !== chrome.runtime.id || sender.tab || sender.origin !== origin || sender.url !== url
-      || sender.documentLifecycle !== 'active' || typeof sender.documentId !== 'string'
-      || !/^[a-f0-9-]{36}$/.test(sender.documentId) || message.profile !== PANEL_PROFILE
-      || !['STATE', 'COMMAND', 'OPEN_DASHBOARD'].includes(message.action)
-      || Object.keys(message).sort().join(',') !== ['kind', 'profile', 'action',
-        ...(message.action === 'COMMAND' ? ['command'] : [])].sort().join(',')) return { error: 'UNTRUSTED_PANEL' };
+function rejectPanel(stage, error = 'UNTRUSTED_PANEL') {
   const context = connection;
-  if (!current(context) || !context.ready || !context.panelReady || context.panels.size >= 8) return { error: 'PANEL_UNAVAILABLE' };
-  const contexts = await bounded(chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'], documentIds: [sender.documentId],
-    documentUrls: [url], documentOrigins: [origin], incognito: false }));
-  if (contexts.length !== 1 || contexts[0].contextType !== 'SIDE_PANEL' || contexts[0].documentId !== sender.documentId
-      || contexts[0].documentUrl !== url || contexts[0].documentOrigin !== origin || contexts[0].incognito !== false
-      || !current(context) || context.panels.size >= 8 || await permissionState() !== 'granted') return { error: 'UNTRUSTED_PANEL' };
+  // A fixed, once-per-stage vocabulary bounds even hostile polling. No sender
+  // metadata or submitted data crosses the diagnostic/native boundary.
+  if (PANEL_REJECTIONS.has(stage) && current(context) && context.ready && context.panelDiagnosticsReady
+      && !context.panelDiagnostics.has(stage)) {
+    context.panelDiagnostics.add(stage);
+    post(context, { kind: 'PAP_PANEL_DIAGNOSTIC', profile: PANEL_DIAGNOSTIC_PROFILE, code: stage });
+  }
+  return { error, stage };
+}
+
+async function panelMessage(message, sender) {
+  const origin = `chrome-extension://${chrome.runtime.id}`, base = `${origin}/sidepanel.html?view=`;
+  const opaqueId = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
+  if (sender.id !== chrome.runtime.id || sender.tab || sender.origin !== origin || sender.nativeApplication
+      || sender.frameId !== undefined && sender.frameId !== 0
+      || sender.documentLifecycle !== undefined && sender.documentLifecycle !== 'active'
+      || sender.documentId !== undefined && !opaqueId(sender.documentId)) {
+    return rejectPanel('PANEL_SENDER_REJECTED');
+  }
+  const url = sender.url;
+  if (typeof url !== 'string' || !url.startsWith(base) || !/^[a-f0-9-]{36}$/.test(url.slice(base.length))) {
+    return rejectPanel('PANEL_URL_REJECTED');
+  }
+  if (message.profile !== PANEL_PROFILE || !['STATE', 'COMMAND', 'OPEN_DASHBOARD'].includes(message.action)
+      || Object.keys(message).sort().join(',') !== ['kind', 'profile', 'action',
+        ...(message.action === 'COMMAND' ? ['command'] : [])].sort().join(',')) return rejectPanel('PANEL_MESSAGE_REJECTED');
+  const context = connection;
+  if (!current(context) || !context.ready || !context.panelReady || context.panels.size >= 8) {
+    return rejectPanel('PANEL_CONNECTION_UNAVAILABLE', 'PANEL_UNAVAILABLE');
+  }
+  let identity;
+  try {
+    // Chrome 153 omits documentId/lifecycle from non-tab MessageSenders. Each
+    // panel navigates to a fresh document URL before messaging. Enumerate ALL
+    // context types: a popup copying a live panel URL must cause rejection too.
+    const inspect = async () => {
+      const contexts = await bounded(chrome.runtime.getContexts({ documentUrls: [url] }));
+      const value = contexts.length === 1 ? contexts[0] : null;
+      return value?.contextType === 'SIDE_PANEL' && value.documentUrl === url && value.documentOrigin === origin
+        && value.incognito === false && value.frameId === 0 && value.tabId === -1
+        && opaqueId(value.contextId) && opaqueId(value.documentId)
+        && (sender.documentId === undefined || sender.documentId === value.documentId) ? value : null;
+    };
+    identity = await inspect();
+    if (!identity) return rejectPanel('PANEL_CONTEXT_REJECTED');
+    if (await permissionState() !== 'granted') return rejectPanel('PANEL_PERMISSION_REJECTED');
+    const live = await inspect();
+    if (!live || live.contextId !== identity.contextId || live.documentId !== identity.documentId) {
+      return rejectPanel('PANEL_CONTEXT_REJECTED');
+    }
+  } catch { return rejectPanel('PANEL_CONTEXT_UNAVAILABLE'); }
   let command;
   if (message.action === 'COMMAND') {
     if (!['SET_RECORDING'].includes(message.command?.kind)) {

@@ -1,12 +1,13 @@
 import { emit } from '../../diagnostics/local.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
-import { CHATGPT_PANEL_PROFILE, panelRequest, panelError } from './panel.mjs';
+import { CHATGPT_PANEL_PROFILE, CHATGPT_PANEL_DIAGNOSTIC_PROFILE, PANEL_REJECTION_CODES, panelRequest, panelError } from './panel.mjs';
 
 export class ChromeBridgeController {
   #diagnostics;
   #adapter; #write; #connected = true; #localBrowser; #localPlatform; #paired = false;
   #engine; #policy = null; #observations = 0;
   #panelRequests = 0; #openDashboard;
+  #panelDiagnostics = new Set();
 
   constructor(adapter, write, { timeoutMs = 5_000, localBrowser, localPlatform, diagnostics = null, engine = null, openDashboard = null } = {}) {
     if (!adapter || typeof write !== 'function' || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 20_000) {
@@ -33,12 +34,22 @@ export class ChromeBridgeController {
       this.#adapter.synchronize(hello);
       this.#paired = true;
       this.#write({ kind: 'PAP_READY', runtimeEpoch, browserSessionId: message.browserSessionId,
-        ...(this.#adapter.capabilities.privilegedPanel ? { panelProfile: CHATGPT_PANEL_PROFILE } : {}) });
+        ...(this.#adapter.capabilities.privilegedPanel ? { panelProfile: CHATGPT_PANEL_PROFILE,
+          panelDiagnosticProfile: CHATGPT_PANEL_DIAGNOSTIC_PROFILE } : {}) });
       this.publishCapturePolicy();
       emit(this.#diagnostics, 'BRIDGE_HELLO');
       return;
     }
     if (!this.#paired) throw Error('Chrome bridge is not paired');
+    if (message.kind === 'PAP_PANEL_DIAGNOSTIC') {
+      if (!this.#adapter.capabilities.privilegedPanel || message.profile !== CHATGPT_PANEL_DIAGNOSTIC_PROFILE
+          || Object.keys(message).sort().join(',') !== 'code,kind,profile'
+          || !PANEL_REJECTION_CODES.includes(message.code)) throw Error('Invalid panel diagnostic');
+      if (!this.#panelDiagnostics.has(message.code)) {
+        this.#panelDiagnostics.add(message.code); emit(this.#diagnostics, message.code);
+      }
+      return;
+    }
     if (message.kind === 'PAP_PANEL_REQUEST') {
       if (!this.#engine || !this.#adapter.capabilities.privilegedPanel || this.#panelRequests >= 8) throw Error('Panel unavailable');
       this.#panelRequests++;

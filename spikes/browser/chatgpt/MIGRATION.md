@@ -131,3 +131,8 @@ other OS/browser versions and production-toolchain rebuilds remain unexecuted.
 No retained kit, operational vault/Keychain/browser, ledger, provider account or
 external transaction was touched. A synthetic PASS does not establish installed
 acceptance.
+
+Subsequent sidebar work reproduces the false rejection after authenticated fixture
+pairing in real Chrome 153, then verifies the repaired control boundary. The
+[sidebar evidence guide](SIDEBAR.md) records the actual metadata, control checks
+and synthetic/OS-bound limits separately from the rework evidence above.

@@ -1,0 +1,147 @@
+{
+  "evidence": "REAL_CHROME_CONTEXT_WITH_SYNTHETIC_NATIVE_PEER",
+  "toolbar": "MANUAL_TOOLBAR",
+  "baseline": false,
+  "providerOperations": 0,
+  "sponsorOperations": 0,
+  "checks": [
+    "SIDEBAR_DASHBOARD_RESIDENT_PIPE_AND_TWO_WINDOWS_SHARE_ON_OFF",
+    "REAL_EXTENSION_TAB_TEST_PAGE_AND_ACTION_POPUP_REJECTED",
+    "REAL_IFRAME_HAS_NO_CONTROL_AUTHORITY_AND_INCOGNITO_ACCESS_IS_DISABLED",
+    "RELOAD_PRESERVES_CONSENT_AND_ROTATES_DOCUMENT_WITHOUT_CAPTURE"
+  ],
+  "browser": "Chrome/153.0.8010.37",
+  "initialControl": {
+    "error": null,
+    "stage": null,
+    "hasState": true
+  },
+  "metadata": {
+    "senderKeys": [
+      "id",
+      "origin",
+      "url"
+    ],
+    "senderOriginMatches": true,
+    "contexts": [
+      {
+        "type": "SIDE_PANEL",
+        "urlMatches": true,
+        "originMatches": true,
+        "frameId": 0,
+        "tabId": -1,
+        "windowId": -1,
+        "incognito": false,
+        "hasDocumentId": true,
+        "documentIdLength": 32,
+        "documentIdUUID": false
+      }
+    ]
+  },
+  "framedControl": {
+    "runtimeAccessible": false
+  },
+  "diagnostics": {
+    "profile": "pap-local-diagnostics/1",
+    "mode": "SYNTHETIC_FIXTURE",
+    "detailed": false,
+    "limits": {
+      "events": 512,
+      "bytes": 262144,
+      "ageMs": 1800000,
+      "previews": 4,
+      "previewAgeMs": 120000
+    },
+    "droppedEvents": 0,
+    "selection": {
+      "operationIds": [],
+      "components": []
+    },
+    "events": [
+      {
+        "sequence": 1,
+        "elapsedMs": 235,
+        "component": "engine",
+        "code": "ENGINE_STARTED",
+        "epochId": "p_49528221a3e4eba5c9db8529"
+      },
+      {
+        "sequence": 2,
+        "elapsedMs": 268,
+        "component": "bridge",
+        "code": "BRIDGE_LISTENING",
+        "epochId": "p_49528221a3e4eba5c9db8529"
+      },
+      {
+        "sequence": 3,
+        "elapsedMs": 6755,
+        "component": "bridge",
+        "code": "BRIDGE_CONNECTED",
+        "epochId": "p_49528221a3e4eba5c9db8529",
+        "bridgeId": "p_160dcfe18e90b50cca4d058b"
+      },
+      {
+        "sequence": 4,
+        "elapsedMs": 6755,
+        "component": "bridge",
+        "code": "BRIDGE_AUTHENTICATED",
+        "epochId": "p_49528221a3e4eba5c9db8529",
+        "bridgeId": "p_160dcfe18e90b50cca4d058b",
+        "durationMs": 1
+      },
+      {
+        "sequence": 5,
+        "elapsedMs": 6786,
+        "component": "bridge",
+        "code": "BRIDGE_HELLO",
+        "epochId": "p_49528221a3e4eba5c9db8529",
+        "bridgeId": "p_160dcfe18e90b50cca4d058b"
+      },
+      {
+        "sequence": 6,
+        "elapsedMs": 69340,
+        "component": "engine",
+        "code": "RECORDING_ENABLED",
+        "epochId": "p_49528221a3e4eba5c9db8529"
+      },
+      {
+        "sequence": 7,
+        "elapsedMs": 69552,
+        "component": "engine",
+        "code": "RECORDING_DISABLED",
+        "epochId": "p_49528221a3e4eba5c9db8529"
+      },
+      {
+        "sequence": 8,
+        "elapsedMs": 70344,
+        "component": "engine",
+        "code": "RECORDING_ENABLED",
+        "epochId": "p_49528221a3e4eba5c9db8529"
+      },
+      {
+        "sequence": 9,
+        "elapsedMs": 71614,
+        "component": "engine",
+        "code": "RECORDING_DISABLED",
+        "epochId": "p_49528221a3e4eba5c9db8529"
+      },
+      {
+        "sequence": 10,
+        "elapsedMs": 72431,
+        "component": "bridge",
+        "code": "PANEL_SENDER_REJECTED",
+        "epochId": "p_49528221a3e4eba5c9db8529",
+        "bridgeId": "p_160dcfe18e90b50cca4d058b"
+      },
+      {
+        "sequence": 11,
+        "elapsedMs": 72770,
+        "component": "bridge",
+        "code": "PANEL_CONTEXT_REJECTED",
+        "epochId": "p_49528221a3e4eba5c9db8529",
+        "bridgeId": "p_160dcfe18e90b50cca4d058b"
+      }
+    ]
+  },
+  "result": "PASS"
+}

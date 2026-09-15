@@ -1,0 +1,90 @@
+{
+  "evidence": "REAL_CHROME_CONTEXT_WITH_SYNTHETIC_NATIVE_PEER",
+  "toolbar": "MANUAL_TOOLBAR",
+  "baseline": true,
+  "providerOperations": 0,
+  "sponsorOperations": 0,
+  "checks": [
+    "AUTHENTICATED_BRIDGE_WITH_REAL_SIDEBAR_FALSE_REJECTION"
+  ],
+  "browser": "Chrome/153.0.8010.37",
+  "metadata": {
+    "senderKeys": [
+      "id",
+      "origin",
+      "url"
+    ],
+    "senderOriginMatches": true,
+    "contexts": [
+      {
+        "type": "SIDE_PANEL",
+        "urlMatches": true,
+        "originMatches": true,
+        "frameId": 0,
+        "tabId": -1,
+        "windowId": -1,
+        "incognito": false,
+        "hasDocumentId": true
+      }
+    ]
+  },
+  "diagnostics": {
+    "profile": "pap-local-diagnostics/1",
+    "mode": "SYNTHETIC_FIXTURE",
+    "detailed": false,
+    "limits": {
+      "events": 512,
+      "bytes": 262144,
+      "ageMs": 1800000,
+      "previews": 4,
+      "previewAgeMs": 120000
+    },
+    "droppedEvents": 0,
+    "selection": {
+      "operationIds": [],
+      "components": []
+    },
+    "events": [
+      {
+        "sequence": 1,
+        "elapsedMs": 235,
+        "component": "engine",
+        "code": "ENGINE_STARTED",
+        "epochId": "p_5a0cf90341cb08f844ca4997"
+      },
+      {
+        "sequence": 2,
+        "elapsedMs": 271,
+        "component": "bridge",
+        "code": "BRIDGE_LISTENING",
+        "epochId": "p_5a0cf90341cb08f844ca4997"
+      },
+      {
+        "sequence": 3,
+        "elapsedMs": 6752,
+        "component": "bridge",
+        "code": "BRIDGE_CONNECTED",
+        "epochId": "p_5a0cf90341cb08f844ca4997",
+        "bridgeId": "p_7ac88774a140ce6b5d1eb1ab"
+      },
+      {
+        "sequence": 4,
+        "elapsedMs": 6753,
+        "component": "bridge",
+        "code": "BRIDGE_AUTHENTICATED",
+        "epochId": "p_5a0cf90341cb08f844ca4997",
+        "bridgeId": "p_7ac88774a140ce6b5d1eb1ab",
+        "durationMs": 0
+      },
+      {
+        "sequence": 5,
+        "elapsedMs": 6782,
+        "component": "bridge",
+        "code": "BRIDGE_HELLO",
+        "epochId": "p_5a0cf90341cb08f844ca4997",
+        "bridgeId": "p_7ac88774a140ce6b5d1eb1ab"
+      }
+    ]
+  },
+  "result": "PASS"
+}

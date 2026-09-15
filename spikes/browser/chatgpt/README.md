@@ -36,9 +36,11 @@ bundle identities and cryptographic domains are unchanged.
 The extension has only `nativeMessaging`, `sidePanel` and
 `https://chatgpt.com/*` host permission. Its manifest key pins Store item
 `medilhopfckldjgdnchfkpmfmfnkadca`; the upload omits the key. Incognito is disabled.
-The sidebar keeps its existing trusted-context checks. Installed-context false
-rejection and real sidebar interaction require their separate installed check;
-fixture sender shapes do not resolve or validate that boundary.
+The sidebar binds Chrome's sender URL to one live top-level SIDE_PANEL document.
+Each document gets a fresh URL; matching considers every context type, so copied
+popup URLs also fail closed. Origin, permissions, incognito exclusion and native
+authentication remain required. Rejection diagnostics separately negotiate
+`pap-chatgpt-panel-diagnostic/1`. See [sidebar trust and evidence](SIDEBAR.md).
 
 Browser JavaScript reports identity as UNVERIFIED. The fixed native host verifies
 its live Google-signed Chrome Stable parent. The app's peer validator independently
@@ -88,3 +90,7 @@ scripts, native framing, engine and encrypted temporary vault with explicitly
 synthetic browser/platform/provider/anchor dependencies. They establish no live
 provider, installed native ancestry or sidebar interaction acceptance.
 The [testing guide](../../development/PRODUCT-TESTING.md) records those limits.
+`npm run test:sidepanel-browser -- --manual-toolbar` additionally exercises real
+Chrome 153 sidebar contexts in a disposable app/profile with a synthetic native
+peer and memory keys. Its report distinguishes actual browser evidence from
+fixture behavior; it does not establish signed macOS or live-provider acceptance.
