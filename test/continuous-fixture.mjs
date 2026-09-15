@@ -22,12 +22,12 @@ export async function until(check) {
 // scripts. Only page/browser/platform identity and anchoring are synthetic.
 export async function continuousFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
   collectFast, managed, enroll = true, defaultMode = 'Off', panelContexts = async () => [], openDashboard = async () => {},
-  dropPanelAck = false, dropReleaseReply = false, installation = null } = {}) {
+  dropPanelAck = false, dropReleaseReply = false, installation = null, debugSession = null } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
   let captureFault = false, keyFault = false;
-  const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, diagnostics,
+  const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, diagnostics, debugSession,
     installation, fastTrust: { profile: FAST_CONFIRM_PROFILE }, openBrowser: false,
     managed: managed ?? { status: () => ({ state: 'ACTIVE' }), submit: async () => { anchorCalls++; return { transactionId: 'A'.repeat(52) }; } },
     collectFast: async () => { confirmed++; return collectFast ? collectFast() : { synthetic: true }; },

@@ -56,6 +56,7 @@ export async function dashboardState(runtime) {
   const state = runtime.engine.state();
   return { profile: 'pap-dashboard/1', runtimeEpoch: state.runtimeEpoch, revision: state.revision,
     adapterProfile: state.adapterProfile, available: state.available, preferences: state.preferences,
+    ...(runtime.debugSession ? { debugSession: runtime.debugSession.status() } : {}),
     integration: integrationStatus(state, installation, runtime.browserState() !== null),
     scopes: state.scopes.map(({ scope, tabId, windowId, destination, requestedMode, effectiveMode, reason }) =>
       ({ scope, tabId, windowId, destination, requestedMode, effectiveMode, reason })),

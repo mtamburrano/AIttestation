@@ -57,6 +57,18 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
       if (request.method !== 'POST' || request.headers.origin !== origin
           || request.headers.authorization !== `Bearer ${secret}`) throw Error('Unpaired local composer');
       const data = await requestBody(request, request.url === '/upgrade' ? 12 * 1024 * 1024 : BODY_LIMIT); let value;
+      if (request.url.startsWith('/debug-session/')) {
+        try {
+          if (!runtime.debugSession) throw Error('Private debug session unavailable');
+          if (request.url === '/debug-session/recording' && Object.keys(data).join(',') === 'enabled') {
+            return reply(response, 200, runtime.debugSession.setEnabled(data.enabled));
+          }
+          if (request.url === '/debug-session/export' && !Object.keys(data).length) {
+            return reply(response, 200, { content: runtime.debugSession.export() });
+          }
+          throw Error('Unsupported private debug action');
+        } catch { return reply(response, 400, { error: 'Private debug recording is unavailable. Existing journal files have been left in place.' }); }
+      }
       if (request.url.startsWith('/diagnostics/')) {
         try {
           if (!runtime.diagnostics) throw Error('Diagnostics unavailable');

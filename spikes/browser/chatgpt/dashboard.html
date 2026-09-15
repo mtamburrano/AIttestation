@@ -6,6 +6,7 @@
 <p>The menu app keeps working when you close this dashboard.</p></div>
 <section class="status"><h2 id="effective-state">Checking Attestamp…</h2><p id="effective-help">Waiting for the engine's current state.</p><button id="pause" disabled>Pause all conversations</button><button id="refresh">Refresh status</button></section>
 <p id="message" role="status" aria-live="polite"></p>
+<p id="debug-session-banner" role="status" hidden></p>
 <section id="history"><h2>Prompt history</h2><div class="stats">
 <div><strong id="prompt-count">0</strong><span>Prompts</span></div><div><strong id="conversation-count">0</strong><span>Known conversations</span></div>
 <div><strong id="anchor-count">0</strong><span>Pending anchors</span></div><div><strong id="attention-count">0</strong><span>Need attention</span></div></div>
@@ -31,6 +32,7 @@
 <label>Access code <input id="access-code" type="password" autocomplete="off" maxlength="43"></label><div class="actions"><button id="connect-account">Connect account</button><button id="refresh-account">Refresh account</button><button id="disconnect-account">Disconnect account</button></div>
 <h3>Recovery copy</h3><p>Create an encrypted snapshot of retained evidence and a separate recovery key. Store the key securely, separately from the snapshot. Recovery restores history, never old send authority, and cannot prove this was the latest snapshot.</p>
 <label><input id="recovery-consent" type="checkbox"> I will keep the recovery key separate and private</label><button id="prepare-recovery">Prepare recovery copy</button><div id="recovery" hidden><button id="save-recovery">Save encrypted snapshot</button><button id="save-recovery-key">Save separate recovery key</button><button id="clear-recovery">Clear prepared copy</button><p>Prepared downloads expire in one minute. Existing documented recovery tools restore into a new vault and leave this vault untouched.</p></div>
+<section id="debug-session" hidden aria-label="Private debug session"><h3>Private debug session</h3><p id="debug-session-status" role="status"></p><p>Record content-free diagnostics automatically across restarts. Older events roll off after 24 hours or when storage limits are reached. Nothing is uploaded. Save the session once after testing.</p><button id="debug-session-toggle">Start debug recording</button><button id="debug-session-save" disabled>Save debug session</button></section>
 <details><summary>Local support report</summary><p>Preview content-free lifecycle codes and timings. Nothing is uploaded. Prompt bytes, URLs, digests, account details and keys are excluded.</p><button id="preview-support">Preview support report</button><button id="save-support" disabled>Save reviewed report</button><pre id="support"></pre></details>
 <details><summary>Developer tools</summary><p>The technical composer remains available for explicitly bounded private checks.</p><button id="development">Open development view</button></details></section>
 </main><footer>Local evidence. Explicit boundaries. Independent verification.</footer><script type="module" src="/dashboard.js"></script></body></html>

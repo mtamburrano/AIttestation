@@ -38,6 +38,8 @@ function controls() {
   $('store').disabled ||= !state?.integration.storeAvailable;
   $('check-update').disabled ||= !state?.integration.updatesAvailable;
   $('download-update').disabled ||= !state?.integration.updatesAvailable || !updateAvailable;
+  $('debug-session-toggle').disabled ||= !state?.available || !state?.debugSession || state.debugSession.state === 'UNAVAILABLE';
+  $('debug-session-save').disabled ||= !state?.available || !state?.debugSession?.exportAvailable;
 }
 function action(id, run) {
   $(id).onclick = async () => {
@@ -71,6 +73,17 @@ function choice(id, text) {
 }
 function render(value) {
   state = value;
+  $('debug-session').hidden = !state.debugSession;
+  $('debug-session-banner').hidden = !state.debugSession || state.debugSession.state === 'STOPPED';
+  $('debug-session-banner').textContent = state.debugSession?.state === 'RECORDING'
+    ? 'Private debug recording active. Save the session from Settings after testing.' : 'Private debug recording unavailable. Check Settings.';
+  if (state.debugSession) {
+    const debug = state.debugSession;
+    $('debug-session-status').textContent = debug.state === 'UNAVAILABLE'
+      ? 'Debug recording unavailable. Existing journal files need inspection; they will not be repaired automatically.'
+      : `${debug.state === 'RECORDING' ? 'Debug recording active' : 'Debug recording stopped'} · ${debug.retainedEvents} retained events · ${debug.segments} segments · ${debug.droppedEvents} older events removed.`;
+    $('debug-session-toggle').textContent = debug.state === 'RECORDING' ? 'Stop debug recording' : 'Start debug recording';
+  }
   const [title, help] = states[state.integration.code] ?? states.ENGINE_UNAVAILABLE;
   $('effective-state').textContent = title; $('effective-help').textContent = help;
   $('pause').textContent = state.preferences.paused ? 'Resume preferences' : 'Pause all conversations';
@@ -132,6 +145,10 @@ function render(value) {
 async function refresh() {
   try { const value = await api('/dashboard/state'); if (!closed) { render(value); controls(); } }
   catch { if (state) state.available = false; $('effective-state').textContent = 'Engine connection unavailable';
+    if (state?.debugSession) {
+      $('debug-session-banner').hidden = false;
+      $('debug-session-banner').textContent = $('debug-session-status').textContent = 'Debug recording status unavailable. Reopen Attestamp and refresh.';
+    }
     $('effective-help').textContent = 'Reopen Attestamp and refresh. No current recording or protection is confirmed.'; controls(); }
 }
 action('refresh', refresh);
@@ -192,6 +209,16 @@ action('save-recovery-key', async () => download(Uint8Array.from(atob(recovery.r
 action('clear-recovery', async () => clearRecovery());
 action('preview-support', async () => { supportId = null; const preview = await api('/diagnostics/preview', { operationIds: [], components: [] }); supportId = preview.previewId; $('support').textContent = JSON.stringify(preview.report, null, 2); });
 action('save-support', async () => { const result = await api('/diagnostics/export', { previewId: supportId }); download(result.content, 'attestamp-support.json'); });
+action('debug-session-toggle', async () => {
+  try { await api('/debug-session/recording', { enabled: state.debugSession.state !== 'RECORDING' }); }
+  finally { await refresh(); }
+});
+action('debug-session-save', async () => {
+  try {
+    const result = await api('/debug-session/export'); download(result.content, 'attestamp-debug-session.json');
+    $('message').textContent = 'Private debug session saved. Attach this file after testing when you choose to share it.';
+  } finally { await refresh(); }
+});
 action('development', async () => { location.href = `/#${token}`; });
 action('close', async () => {
   await api('/close'); closed = true; clearInterval(timer); invalidatePreview(); clearRecovery();

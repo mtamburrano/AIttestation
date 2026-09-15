@@ -8,6 +8,7 @@
     "dev:sponsor": "node spikes/development/sponsor.mjs",
     "test:private-dev": "node --test test/private-development.test.mjs",
     "test:product": "node spikes/development/product-test.mjs",
+    "test:debug-session": "node --test test/debug-session.test.mjs",
     "test": "node --test test/*.test.mjs",
     "test:chatgpt": "node --test test/resident-engine.test.mjs test/chatgpt-browser-path.test.mjs test/chatgpt-composer.test.mjs test/chatgpt-continuous.test.mjs test/chatgpt-sidepanel.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
     "test:sidepanel-browser": "node test/sidepanel-browser.mjs",

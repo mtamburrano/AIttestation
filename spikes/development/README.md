@@ -4,6 +4,64 @@ For routine development, start with `npm run test:product` in your current user.
 The [local product testing guide](PRODUCT-TESTING.md) covers labelled isolated
 fixtures, correlated diagnostics and targeted failure reports. It creates fresh
 temporary resources and leaves the retained private installation untouched.
+
+## Persistent private debug sessions
+
+New private builds expose **Settings → Private debug session** in the dashboard.
+Choose **Start debug recording** once before testing. A visible dashboard banner
+confirms recording; events then append automatically, including bridge failures
+and later runtime restarts. **Stop debug recording** persists that choice.
+Starting again resumes the same retained session. **Save debug session** downloads
+one immutable JSON snapshot of all retained segments; later recording cannot
+change that downloaded snapshot. Share it explicitly after testing if needed.
+There is no upload or per-operation export requirement.
+
+This uses the existing content-free diagnostic vocabulary and per-runtime HMAC
+correlation IDs. Each restart gets a fresh engine epoch and correlation key; no
+key or send authority is restored from diagnostics. Prompt bytes, URLs, raw
+digests, DOM/error dumps, provider replies, access codes, tokens and recovery keys
+are not diagnostic fields. Exports are unencrypted content-free support data;
+the downloaded copy remains until the owner deletes it.
+
+The private launcher alone supplies the journal under the validated test control
+area, in `debug-session/journal.sqlite`. Recording is off until explicitly enabled.
+The journal directory is mode 0700, and its database/WAL files are mode 0600.
+An empty owner-only SQLite index marker is temporarily mode 0400 to keep read-only
+inspection in memory; malformed session data is rejected before SQLite can
+checkpoint it on close. Either owner-only mode (0400 or 0600) can survive an
+interrupted inspection. A nonempty or unsafe index file is refused.
+SQLite FULL-synchronous WAL commits preserve earlier events after process exit;
+each append checkpoints and truncates the WAL. No production launcher loads this
+module or reads a debug environment switch. Building these sources does not
+update an existing private installation.
+
+After a crash, reopen the already consented private app in Finder. Once the new
+engine holds its normal instance lock, it replaces only a validated stale private
+runtime locator with its fresh local endpoint. It does not contact the old
+endpoint, recover old grants or change integration configuration. The CLI's
+explicit stop/start and recovery guards remain in force.
+
+Retention is bounded to 2,048 events, 512 KiB of session JSON, 16 segments and
+24 hours; segments hold at most 128 events / 64 KiB. Oldest whole segments rotate
+first. Expiry is checked on append, status/export, startup and at least once per
+minute while running. Closed apps prune on their next launch. Database and WAL
+ceilings are 2 MiB and 4 MiB, including transaction overhead; exports are at most
+513 KiB. Invalid paths, permissions, schema, events or clock rollback make debug
+recording unavailable. Existing resources are not adopted or repaired. Inspect
+the saved files separately before deciding any manual recovery; recording
+failure does not change protection behavior.
+
+Run the deterministic private tests without installing or launching the retained
+test kit:
+
+```sh
+npm run test:debug-session
+```
+
+The suite allocates fresh `/private/tmp/pap-debug-test-*` resources, uses synthetic
+provider/anchor dependencies, checks process crashes and authority revocation,
+rotation/expiry, unsafe files and privacy canaries, and compares recording on/off
+against the same product scenarios. It requires local loopback/Unix-socket access.
 The signed, installed workflow below is for explicitly scheduled platform checks.
 
 This route prepares the actual trusted composer, encrypted durable vault, native

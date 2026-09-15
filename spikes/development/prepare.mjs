@@ -109,7 +109,7 @@ export async function prepareDevelopment(configPath, output) {
       '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
       join(root, 'spikes/vault/native/macos-app-host.swift'), '-o', join(contents, 'MacOS/provenance-app-host')]);
     const dev = join(contents, 'Resources/spikes/development'); await mkdir(dev);
-    for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs', 'startup.mjs', 'integration.mjs']) {
+    for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs', 'startup.mjs', 'integration.mjs', 'debug-session.mjs', 'runtime-state.mjs']) {
       await copyFile(join(root, 'spikes/development', name), join(dev, name));
     }
     await writeNewJSON(join(dev, 'private-development.json'), { profile: DEVELOPMENT_PROFILE,

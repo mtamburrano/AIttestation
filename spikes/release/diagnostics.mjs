@@ -33,21 +33,35 @@ function object(value, allowed) {
 }
 const boundedTime = value => Math.min(86_400_000, Math.max(0, Math.round(value)));
 
-// This collector has no file, console or transport sink. Raw data is never a
-// record field; identifiers use a fresh, unexported HMAC key for each lifetime.
+// Persistence consumers validate the same vocabulary, never their own schema.
+export function validateDiagnosticEvent(event) {
+  object(event, new Set(['sequence', 'elapsedMs', 'component', 'code', ...fields]));
+  if (!Number.isSafeInteger(event.sequence) || event.sequence < 1
+      || !Number.isInteger(event.elapsedMs) || event.elapsedMs < 0 || event.elapsedMs > 86_400_000
+      || !codes.has(event.code) || codes.get(event.code) !== event.component) throw invalid();
+  for (const field of identifiers) if (Object.hasOwn(event, field)
+      && (typeof event[field] !== 'string' || !pseudonym.test(event[field]))) throw invalid();
+  if (Object.hasOwn(event, 'durationMs') && (!Number.isInteger(event.durationMs)
+      || event.durationMs < 0 || event.durationMs > 86_400_000)) throw invalid();
+  return event;
+}
+
+// No default file, console or transport sink. Observers receive only immutable,
+// sanitized events; the fresh HMAC key never leaves this collector's lifetime.
 export class LocalDiagnostics {
   #key = randomBytes(32); #events = []; #bytes = 0; #sequence = 0; #dropped = 0;
-  #previews = new Map(); #now; #started; #mode; #detailed; #limits;
-  constructor({ mode = 'LOCAL_RUNTIME', detailed = false, limits = {}, now = () => performance.now() } = {}) {
+  #previews = new Map(); #now; #started; #mode; #detailed; #limits; #onEvent;
+  constructor({ mode = 'LOCAL_RUNTIME', detailed = false, limits = {}, now = () => performance.now(), onEvent = null } = {}) {
     if (!['LOCAL_RUNTIME', 'SYNTHETIC_FIXTURE'].includes(mode) || typeof detailed !== 'boolean'
-        || detailed && mode !== 'SYNTHETIC_FIXTURE' || typeof now !== 'function') throw invalid();
+        || detailed && mode !== 'SYNTHETIC_FIXTURE' || typeof now !== 'function'
+        || onEvent !== null && typeof onEvent !== 'function') throw invalid();
     object(limits, new Set(['events', 'bytes', 'ageMs']));
     for (const [key, value] of Object.entries(limits)) {
       if (!Number.isSafeInteger(value) || value < (key === 'bytes' ? 1024 : 1)
           || value > DIAGNOSTIC_LIMITS[key]) throw invalid();
     }
     this.#limits = { ...DIAGNOSTIC_LIMITS, ...limits }; this.#mode = mode; this.#detailed = detailed;
-    this.#now = now; this.#started = now();
+    this.#now = now; this.#started = now(); this.#onEvent = onEvent;
   }
   id(field, value) {
     if (!identifiers.includes(field) || typeof value !== 'string' || value.length < 1 || value.length > 256) throw invalid();
@@ -80,12 +94,13 @@ export class LocalDiagnostics {
     }
     if (detailCodes.has(code) && !this.#detailed) return;
     this.#prune();
-    const time = this.#now(), event = { sequence: ++this.#sequence, elapsedMs: boundedTime(time - this.#started),
+    const time = this.#now(), event = Object.freeze({ sequence: ++this.#sequence, elapsedMs: boundedTime(time - this.#started),
       component: codes.get(code), code, ...refs,
-      ...(data.durationMs === undefined ? {} : { durationMs: boundedTime(data.durationMs) }) };
+      ...(data.durationMs === undefined ? {} : { durationMs: boundedTime(data.durationMs) }) });
     const bytes = Buffer.byteLength(JSON.stringify(event)) + 1;
     this.#events.push({ time, bytes, event }); this.#bytes += bytes;
     while (this.#events.length > this.#limits.events || this.#bytes > this.#limits.bytes) this.#drop();
+    try { this.#onEvent?.(event); } catch {}
   }
   selection() {
     this.#prune();

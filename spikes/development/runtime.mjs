@@ -10,8 +10,10 @@ import { checkPlatform, launchDevelopmentChrome } from './chrome.mjs';
 import { localTLSRequest } from './tls.mjs';
 import { backupDevelopment, restoreDevelopment } from './recovery.mjs';
 import { startupFailure } from './startup.mjs';
+import { OwnerDebugSession } from './debug-session.mjs';
+import { publishRuntimeState } from './runtime-state.mjs';
 
-let runtime, statePath;
+let runtime, statePath, debugSession;
 try {
   const paths = await validateAccount();
   const launchPath = join(paths.control, 'launch.json'), desktopPath = join(paths.control, 'desktop.json');
@@ -42,21 +44,23 @@ try {
     origin: config.sponsorOrigin, keyStore,
     request: localTLSRequest(await readFile(new URL('sponsor-certificate.pem', import.meta.url)), config.sponsorOrigin),
   });
+  debugSession = new OwnerDebugSession(paths.control);
   runtime = await startPackagedChatGPT({ supportDirectory: paths.support, keyStore, managed,
+    diagnostics: debugSession.diagnostics, debugSession,
     installation: privateInstallation(paths, join(dirname(process.execPath), 'provenance-browser-host')),
     desktopChannel: process.argv.includes('--resident') ? { requestFD: 6, responseFD: 7 } : null,
     openDashboard: url => launchDevelopmentChrome(chrome, paths, url) });
   // Reopening restores only the consented browser location, never a scope or send.
   if (explicitLaunch) await atomicWrite(desktopPath, JSON.stringify(request));
   await launchDevelopmentChrome(chrome, paths, 'about:blank');
-  statePath = join(paths.control, 'runtime.json');
-  await writeNewJSON(statePath, { profile: DEVELOPMENT_PROFILE, composerURL: runtime.composerURL });
+  statePath = await publishRuntimeState(paths.control, runtime);
   process.once('beforeExit', () => unlink(statePath).catch(() => {}));
   const stop = async code => {
-    await runtime.close(); await unlink(statePath).catch(() => {}); process.exit(code);
+    await runtime.close(); debugSession.close(); await unlink(statePath).catch(() => {}); process.exit(code);
   };
   process.once('SIGINT', () => stop(0)); process.once('SIGTERM', () => stop(0));
 } catch (error) {
   await runtime?.close();
+  debugSession?.close();
   process.stderr.write(`${startupFailure(error)}\n`); process.exitCode = 1;
 }

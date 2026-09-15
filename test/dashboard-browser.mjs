@@ -6,10 +6,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { continuousFixture, until } from './continuous-fixture.mjs';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { disclosureRegressions } from './dashboard-disclosure-browser.mjs';
+import { OwnerDebugSession } from '../spikes/development/debug-session.mjs';
 
 // Real local UI, fresh browser profile/vault and synthetic provider and sponsor.
 const root = await mkdtemp('/private/tmp/attestamp-dashboard-browser-test-');
-let f, browser, socket;
+let f, browser, socket, debugSession;
 try {
   const installation = await new InstallationLifecycle({ supportDirectory: join(root, 'installation'),
     chromeSupportDirectory: join(root, 'chrome'), browserHost: join(root, 'synthetic-host'), sequence: 1 }).init();
@@ -17,7 +18,9 @@ try {
   const installStatus = installation.status.bind(installation);
   installation.status = async () => ({ ...await installStatus(), releaseClass: 'SYNTHETIC_FIXTURE', releaseChannel: null });
   let connected = true; const opened = [];
-  f = await continuousFixture(root, { installation, openDashboard: async url => { opened.push(url); }, managed: {
+  debugSession = new OwnerDebugSession(root);
+  f = await continuousFixture(root, { installation, debugSession, diagnostics: debugSession.diagnostics,
+    openDashboard: async url => { opened.push(url); }, managed: {
     status: () => ({ state: connected ? 'ACTIVE' : 'ACCOUNT_REQUIRED' }),
     disconnect: () => { connected = false; return { state: 'ACCOUNT_REQUIRED' }; },
     submit: async () => ({ transactionId: 'A'.repeat(52) }),
@@ -75,6 +78,11 @@ try {
   await wait("document.querySelector('#prompt-count')?.textContent === '1'");
   assert.equal(await evaluate('document.title'), 'Attestamp · Your prompts');
   assert.doesNotMatch(await evaluate('document.body.innerText'), /SYNTHETIC_DASHBOARD_CANARY/);
+  assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), true);
+  await click('debug-session-toggle'); await wait("document.querySelector('#debug-session-status').textContent.startsWith('Debug recording active')");
+  assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), false);
+  await click('debug-session-toggle'); await wait("document.querySelector('#debug-session-status').textContent.startsWith('Debug recording stopped')");
+  await click('debug-session-toggle'); await wait("document.querySelector('#debug-session-status').textContent.startsWith('Debug recording active')");
   await click('pause'); await wait("document.querySelector('#effective-state').textContent === 'Paused for all conversations'");
   await disclosureRegressions({ call, evaluate, wait, click, root });
   await evaluate("document.querySelector('#prompts input').click()"); await click('preview-export');
@@ -90,6 +98,7 @@ try {
   await click('close'); await wait("document.querySelector('#message').textContent.startsWith('Dashboard closed.')");
   assert.equal(f.runtime.engine.state().preferences.paused, true);
   await call('Page.reload'); await wait("document.querySelector('#effective-state')?.textContent === 'Paused for all conversations'");
+  assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), false);
   assert.equal(await evaluate("document.querySelector('#prompt-count').textContent"), '1');
   await click('disable'); await wait("document.querySelector('#effective-state').textContent === 'Chrome connection disabled'");
   await click('enable'); await wait("document.querySelector('#message').textContent.startsWith('Connection enabled.')");
@@ -99,6 +108,11 @@ try {
   assert.equal(await evaluate("document.querySelector('#prompt-count').textContent"), '1');
   await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 850, deviceScaleFactor: 1, mobile: false });
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+  await click('debug-session-save');
+  await until(async () => { try { return (await readFile(join(root, 'attestamp-debug-session.json'))).length > 0; } catch { return false; } });
+  const debugExport = await readFile(join(root, 'attestamp-debug-session.json'), 'utf8');
+  assert.ok(JSON.parse(debugExport).segments.flatMap(segment => segment.events).some(event => event.code === 'BRIDGE_DISCONNECTED'));
+  assert.doesNotMatch(debugExport, /SYNTHETIC_DASHBOARD_CANARY|https:\/\/|token|digest|DOM/);
   await click('verifier'); await until(() => opened.length === 1);
   await call('Page.navigate', { url: opened[0] }); await wait("document.querySelector('#bundle') !== null");
   const dom = await call('DOM.getDocument'), field = await call('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#bundle' });
@@ -113,5 +127,5 @@ try {
 } finally {
   socket?.close();
   if (browser && browser.exitCode === null) { const exited = new Promise(resolve => browser.once('exit', resolve)); browser.kill(); await exited; }
-  await f?.close(); await rm(root, { recursive: true, force: true });
+  await f?.close(); debugSession?.close(); await rm(root, { recursive: true, force: true });
 }
