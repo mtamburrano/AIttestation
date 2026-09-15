@@ -187,12 +187,11 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
     "ENGINE_UNAVAILABLE": "Recording unavailable — restart Attestamp",
     "CONFIGURATION_CONFLICT": "Chrome configuration needs attention",
     "DISABLED": "Chrome connection disabled — open Integrations",
-    "PAUSED": "Paused for all conversations",
     "DISCONNECTED": "Chrome disconnected — open Integrations",
     "COVERAGE_UNAVAILABLE": "Coverage unavailable — check your conversation",
-    "SCOPES_READY": "Conversation inputs ready",
-    "OFF": "Capture off for current conversations",
-    "SELECT_CONVERSATION": "Choose a conversation in the Chrome panel",
+    "SOURCES_READY": "ON · Supported tabs ready",
+    "OFF": "Attestamp is OFF",
+    "WAITING_FOR_TABS": "ON · Waiting for supported ChatGPT tabs",
     "ACTION_FAILED": "Action failed — refresh and try again"
   ]
   init(control: Int32) { self.control = control; super.init() }
@@ -204,15 +203,14 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
   }
   func receive(_ value: [String: Any]) -> Bool {
-    let expected = Set(["profile", "runtimeEpoch", "revision", "paused", "defaultMode", "available", "code",
-      "continuousScopes", "sealedScopes", "unavailableScopes"])
-    guard Set(value.keys) == expected, value["profile"] as? String == "pap-desktop-event/1",
+    let expected = Set(["profile", "runtimeEpoch", "revision", "recording", "available", "code",
+      "readySources", "unavailableSources"])
+    guard Set(value.keys) == expected, value["profile"] as? String == "pap-desktop-event/2",
       let epoch = value["runtimeEpoch"] as? String, UUID(uuidString: epoch) != nil,
       let revision = value["revision"] as? Int, revision >= 0,
-      value["paused"] is Bool, value["available"] is Bool,
-      let mode = value["defaultMode"] as? String, ["Off", "Continuous", "Sealed"].contains(mode),
+      value["recording"] is Bool, value["available"] is Bool,
       let code = value["code"] as? String, labels[code] != nil,
-      ["continuousScopes", "sealedScopes", "unavailableScopes"].allSatisfy({ key in
+      ["readySources", "unavailableSources"].allSatisfy({ key in
         guard let count = value[key] as? Int else { return false }; return count >= 0 && count <= 32
       }) else { return false }
     state = value; lastUpdate = Date(); render(); return true
@@ -222,23 +220,16 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
     result.target = self; result.representedObject = value; return result
   }
   private func render() {
-    statusItem.button?.title = state == nil ? "Attestamp !" : state?["paused"] as? Bool == true ? "Attestamp ‖" : "Attestamp"
+    statusItem.button?.title = state == nil ? "Attestamp !" : state?["recording"] as? Bool == true ? "Attestamp ON" : "Attestamp OFF"
     let menu = NSMenu(); menu.delegate = self
     let code = state?["code"] as? String ?? "ENGINE_UNAVAILABLE"
     menu.addItem(item(labels[code]!, nil))
     if let state {
-      menu.addItem(item("\(state["continuousScopes"]!) Continuous · \(state["sealedScopes"]!) Sealed panel", nil))
+      menu.addItem(item("\(state["readySources"]!) supported tabs ready", nil))
     }
     menu.addItem(NSMenuItem.separator())
-    let pause = item(state?["paused"] as? Bool == true ? "Resume preferences" : "Pause all conversations", #selector(togglePause))
-    pause.isEnabled = state?["available"] as? Bool == true; menu.addItem(pause)
-    let modes = NSMenu(), modeItem = item("Chrome / ChatGPT default", nil)
-    for mode in ["Off", "Continuous", "Sealed"] {
-      let entry = item(mode, #selector(setMode(_:)), value: mode)
-      entry.state = state?["defaultMode"] as? String == mode ? .on : .off
-      entry.isEnabled = state?["available"] as? Bool == true; modes.addItem(entry)
-    }
-    modes.autoenablesItems = false; modeItem.submenu = modes; menu.addItem(modeItem)
+    let recording = item(state?["recording"] as? Bool == true ? "Turn OFF" : "Turn ON", #selector(toggleRecording))
+    recording.isEnabled = state?["available"] as? Bool == true; menu.addItem(recording)
     menu.addItem(NSMenuItem.separator())
     for (title, section) in [("Prompt history…", "history"), ("Integrations…", "integrations"),
       ("Settings and recovery…", "settings"), ("Open free verifier…", "verifier")] {
@@ -250,19 +241,15 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
     statusItem.button?.toolTip = labels[code]
   }
   private func send(_ kind: String, _ data: [String: Any] = [:]) {
-    var request = data; request["profile"] = "pap-desktop-command/1"; request["kind"] = kind
+    var request = data; request["profile"] = "pap-desktop-command/2"; request["kind"] = kind
     guard let bytes = try? JSONSerialization.data(withJSONObject: request), framedWrite(control, bytes) else {
       state = nil; render(); return
     }
   }
   @objc private func refresh() { send("REFRESH") }
-  @objc private func togglePause() {
+  @objc private func toggleRecording() {
     guard let state else { return }
-    send("PAUSE", ["runtimeEpoch": state["runtimeEpoch"]!, "revision": state["revision"]!, "paused": !(state["paused"] as! Bool)])
-  }
-  @objc private func setMode(_ sender: NSMenuItem) {
-    guard let state, let mode = sender.representedObject as? String else { return }
-    send("MODE", ["runtimeEpoch": state["runtimeEpoch"]!, "revision": state["revision"]!, "mode": mode])
+    send("RECORDING", ["runtimeEpoch": state["runtimeEpoch"]!, "revision": state["revision"]!, "enabled": !(state["recording"] as! Bool)])
   }
   @objc private func openSection(_ sender: NSMenuItem) { send("OPEN", ["section": sender.representedObject as! String]) }
   @objc private func quit() { send("QUIT") }
@@ -302,10 +289,8 @@ do {
 #endif
 #if PRIVATE_DEVELOPMENT
   let scriptURL = contents.appendingPathComponent("Resources/spikes/development/runtime.mjs")
-#elseif PRODUCT_CHATGPT
-  let scriptURL = contents.appendingPathComponent("Resources/spikes/browser/chatgpt/runtime-main.mjs")
 #else
-  let scriptURL = contents.appendingPathComponent("Resources/spikes/demonstrator/main.mjs")
+  let scriptURL = contents.appendingPathComponent("Resources/spikes/browser/chatgpt/runtime-main.mjs")
 #endif
 #if PRODUCT_RELEASE
   let (child, requestFD, responseFD, controlFD, eventFD) = try spawnFixedRuntime(nodeURL: nodeURL, scriptURL: scriptURL, instanceLock: instanceLock)

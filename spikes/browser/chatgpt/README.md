@@ -1,300 +1,90 @@
-# Supported ChatGPT release path
+# Attestamp for ChatGPT
 
-This directory implements the first narrow browser contract: Apple-silicon macOS
-15.7 or later, Chrome Stable (fixture baseline 153), and `https://chatgpt.com`.
-Continuous observes explicit normal Send actions in consented ChatGPT conversations.
-Sealed text originates in the privileged extension side panel; its content script
-receives bytes only after the runtime records a release attempt and consumes the
-exact version's authorization. Attachments are unsupported. See [panel Sealed](SEALED.md)
-for the one-action workflow and [normal-send capture](CONTINUOUS.md)
-for its supported inputs, gaps and retrospective assertion contract.
+The supported integration is Apple-silicon macOS 15.7+, Chrome Stable major 153
+and `https://chatgpt.com`. Turn recording ON in the existing sidebar or resident
+Mac menu. All supported existing and new tabs/windows are followed automatically.
+Use ChatGPT's normal composer and Send. Turn OFF to stop new capture; saved
+evidence and bounded pending anchoring remain available.
 
-The [resident engine contract](ENGINE.md) defines independent conversation scopes,
-versioned commands, preferences, operation lifetime and restart behavior. The local
-composer is a labelled development view of that engine. The [resident Mac menu
-and optional dashboard](DASHBOARD.md) provide everyday state, pause, integration
-management, prompt history, recovery and export. Launching the app leaves browser
-views closed; normal capture uses Chrome's existing flow or the trusted panel.
+ON is a preference, separate from connection, supported input, successful local
+save and anchor assurance. Capture is retrospective, prospective-only and best
+effort. A gap does not establish how many unobserved prompts were lost. No
+component injects prompt text, clicks Send, blocks the user's event or backfills
+history.
 
-## Boundaries and development modes
+## Components
 
-[`runtime-main.mjs`](runtime-main.mjs) is the fixed packaged entrypoint. It opens
-or creates the app-bound Keychain vault, starts the authenticated native bridge,
-and serves the bearer-paired local dashboard and development view. [`session.mjs`](session.mjs)
-composes that encrypted vault with the durable release state machine; there is no
-implicit ephemeral production key. The session accepts well-formed
-UTF-8 text through 256 KiB without Unicode normalization. A trusted-composer edit
-revision accompanies the digest, so editing and then restoring the same visible
-text cannot reuse a stale authorization.
+`runtime-main.mjs` is the fixed packaged entrypoint. It starts the app-bound
+Keychain vault, authenticated native bridge, resident engine and optional
+bearer-paired dashboard. `ChatGPTRecordingSession` in `session.mjs` stores exact
+text and signed observations, groups receipts and manages bounded asynchronous
+anchoring. The engine orders capture against the global recording preference.
+Views have no arbitrary prompt-writing command.
 
-- Continuous observes normal user Send and durably records the captured text, then
-  requests anchoring without dispatching anything. The labelled development composer
-  retains the historical Continuous dispatch path for compatibility and regressions.
-- Sealed persists exact bytes and fast-confirmation evidence, consumes one durable
-  authorization, and only then calls the browser adapter.
-- Always Protect is the persistent scoped Sealed preference in the panel. Each
-  prompt still requires an explicit Protect and send action. The historical
-  development mode retains its existing receipt semantics.
+See [ENGINE.md](ENGINE.md) for control, migration and OFF ordering,
+[RECORDING.md](RECORDING.md) for extraction and delivery bounds,
+[DASHBOARD.md](DASHBOARD.md) for the retained sidebar/menu/dashboard, and
+[MIGRATION.md](MIGRATION.md) for removal and legacy compatibility inventories.
 
-`PAP_ALGORAND_FAST_CONFIRM_V1` is verified locally by the fixed-purpose Go verifier.
-It checks the expected TestNet/genesis, exact bounded self-payment transaction and
-note, transaction ID and valid round, two configured operators with distinct
-organizations and hosts, matching transaction/round/header reports, and the local
-SHA-256 transaction-inclusion proof against that header. Success is reported only
-as `SOURCE_CORROBORATED` with `SOURCE_REPORTED` time. A later valid State-Proof
-archive adds a monotonic `CONSENSUS_VERIFIED` / `BLOCK_HASH_BOUND` receipt without
-rewriting the evidence that authorized the historical release.
+## Authenticated Chrome transport
 
-The bundled trust profile pins independent AlgoNode and Nodely TestNet algod
-origins. [`fast-observe`](../../anchor/algorand/cmd/fastobserve/main.go) performs
-three GET-only reads per operator (pending transaction, exact round block, and
-SHA-256 transaction proof). It requires HTTPS, disables environment proxies,
-rejects redirects and origin/path/query escapes, bounds connect/TLS/header/body
-work, and has an 18-second process budget inside the collector's hard 20-second
-two-source budget. The two operators are launched concurrently. An operator's
-pending-transaction HTTP 404 with a valid error body, or an intact signed
-transaction still in the pool with no pool error, permits another observation.
-Backoff is 100, 200, 400, 800, then at most 1,000 ms, inside that same deadline;
-a successful operator is retained. Backoff is never shortened to fit the remaining
-budget: the shared deadline aborts it before another observation can begin.
-Retry outcomes use the additive
-`pap-algod-observer-retry/1` profile and exit status 2, bound to the requested
-transaction ID. The request and evidence profiles remain unchanged.
+Extension 2.0.0 negotiates adapter `pap-chatgpt-chrome/6`, page contract
+`chatgpt-web-text/2026-09-15`, capture `pap-chatgpt-capture/2` and sidebar
+`pap-chatgpt-panel/2`. Old active contracts reject. Native bridge profile 3,
+bundle identities and cryptographic domains are unchanged.
 
-Retries never call sponsorship or broadcast. Once an operator reports a confirmed
-round, a failed block/proof read is terminal for that attempt; partial evidence is
-not discarded and retried. Other HTTP errors, observer failures, pool rejection,
-expiry, disagreement and malformed proof provide no authorization. Protected
-releases stay pending; they never fall back to Continuous. Correlated local
-diagnostics record only fixed transient, expiry and outcome codes.
+The extension has only `nativeMessaging`, `sidePanel` and
+`https://chatgpt.com/*` host permission. Its manifest key pins Store item
+`medilhopfckldjgdnchfkpmfmfnkadca`; the upload omits the key. Incognito is disabled.
+The sidebar keeps its existing trusted-context checks. Installed-context false
+rejection and real sidebar interaction require their separate installed check;
+fixture sender shapes do not resolve or validate that boundary.
 
-## Managed account and sponsorship
+Browser JavaScript reports identity as UNVERIFIED. The fixed native host verifies
+its live Google-signed Chrome Stable parent. The app's peer validator independently
+checks the exact signed Node relay, signed browser host and Chrome ancestry using
+the paused socket's peer PID. Only that chain supplies browser/platform identity.
 
-The composer connects an anchoring account using an access code stored in a
-separate app-bound Keychain item. Freezing automatically requests a sponsored
-transaction from the packaged HTTPS service origin; the user needs no wallet,
-seed phrase or manually entered transaction ID. The service receives only a
-blinded 36-byte commitment payload plus account/operational metadata. The same
-local independent fast-confirmation gate still controls release.
+Each runtime creates an owner-only Unix socket, 256-bit token, epoch and
+atomically published short-lived rendezvous. Peer authentication precedes exact,
+constant-time token validation. The framing relay exposes no filesystem,
+clipboard, signer or general command API. Authentication has an eight-second
+deadline; pairing is explicitly acknowledged. EOF, malformed frames and failed
+handshakes close transport. Worker reconnect delay is 1, 2, 4, 8, 16 then at most
+30 seconds, reset only after pairing. Late callbacks retain their original port
+and epoch. Reconnection never replays provider actions.
 
-Outage, exhausted allowance and subscription expiry remain explicit. Continuous
-keeps local evidence with an anchor pending; Sealed and Always Protect wait or
-cancel without releasing. Existing transaction IDs can still be observed without
-the account, and local receipts/export/verification remain free. See the
-[managed service contract](../../managed/README.md) for durable quotas, replay,
-account recovery, privacy boundaries and operator configuration. The default
-`managed-config.json` has a null origin; configure it before signing a connected
-build. The service database and sponsor executable are never bundled in the app.
+Up to 32 tabs have independent window/document/source identities, including
+duplicate conversation tabs. URL/document changes, removal, permission or
+transport loss revoke affected capture policies. Temporary unsupported markup
+retains source identity but provides no capture eligibility. Restored capability
+only allows future genuine Sends. Provider content cannot choose selectors,
+control recording or supply signed extension updates.
 
-Cancellation is terminal for the frozen version. The session API returns `actions`
-for each version; views combine these state-based capabilities with current scope,
-draft and connection checks. Cancelling clears every action and stale account or
-retry guidance. The engine rejects further cancellation, anchor requests,
-confirmation, release, retries and consensus upgrades for that version. Starting
-a new version remains possible. Previously obtained anchor evidence stays intact;
-cancellation cannot recall an already submitted transaction or prove non-egress.
-The durable release state retains cancellation across restart without restoring
-authorization. The signed `release-cancelled` observation links its version ID to
-the frozen record digest for receipt grouping and selective export. See the
-[recipient contract](../../recipient/README.md) for its assertion limits and legacy handling.
+## Anchoring, packaging and validation
 
-## Least-authority Chrome adapter
+After a durable local save, the engine attempts blinded managed anchoring.
+Two independent configured operators must agree on the exact transaction, note,
+round and header, with locally verified inclusion. Fast assurance is
+SOURCE_CORROBORATED with SOURCE_REPORTED time; a later valid State-Proof archive
+can add CONSENSUS_VERIFIED / BLOCK_HASH_BOUND assurance without rewriting history.
+Timeout, disagreement and account/quota failure leave explicit pending status.
+Neither an account nor a transaction ID alone supplies proof.
 
-The consumer-facing Manifest V3 package is named **Attestamp for ChatGPT** and
-uses **Attestamp** as its short name. It pairs with the Attestamp desktop app
-for the one supported ChatGPT path described below.
+The collector's hard 20-second budget contains bounded concurrent GET-only
+observers, no proxies or redirects. Observation retry reuses a transaction;
+it never invokes sponsorship or broadcast. See the
+[managed contract](../../managed/README.md) and
+[Algorand verifier](../../anchor/algorand/README.md).
 
-The Manifest V3 extension has only `nativeMessaging`, `sidePanel` and the single
-`https://chatgpt.com/*` host permission. Its public manifest key pins the assigned
-Web Store item ID `medilhopfckldjgdnchfkpmfmfnkadca`; the generated upload removes
-that key. Host-scoped tab access replaces the broad `tabs` permission; incognito
-access is disabled. The draft item is not yet a published or verified Web Store
-listing. Adapter profile version 5 requires an acknowledged runtime epoch and
-fresh engine checks before insertion and click. It rejects older extension
-contracts; extension version 1.6.0 uses page contract `chatgpt-web-text/2026-09-14`
-and separately negotiates `pap-chatgpt-capture/1` for normal-send observation and
-`pap-chatgpt-panel/1` for privileged panel admission.
-Its JavaScript state explicitly reports browser identity as
-`UNVERIFIED`; it cannot self-assert Chrome Stable. The native executable accepts
-only a running parent whose macOS code signature is Google's Stable identifier and
-team. Independently, the app-side peer validator derives the installed major version
-and local OS/architecture from that same live process chain. The local controller
-uses only this runtime-side identity and fails closed unless the exact supported
-baseline matches; browser or platform fields sent over the bridge are not accepted.
+The fixed Mac launcher validates the complete signed bundle and runs only the
+bundled Node and entrypoint with a sanitized environment. The
+[distribution runbook](../../distribution/README.md) preserves signing,
+Keychain entitlements, owned registration, package inventories and update trust.
+Building does not install a native manifest into a user's profile.
 
-The background worker pins each release to one enrolled tab, window and document
-among up to 32 ChatGPT targets, and forwards its versioned command to that exact
-top-level frame. Detection recognizes one
-supported `#prompt-textarea` independently of Send rendering, and reports draft
-and attachment state separately. A detected provider-side draft remains in place
-and cannot gain pre-disclosure protection. Dispatch still requires an empty
-composer, no attachments and an exact transported SHA-256 text digest.
-
-After one authorized insertion, the content script polls every 25 ms for at most
-one second for one visible, enabled `data-testid="send-button"`. The entire
-content request has a 1.5-second deadline, inside the worker's two-second reply
-budget. Expiry checks use a monotonic clock, including after delayed callbacks.
-Ambiguous controls, text/attachment/editor/destination drift, page suspension or
-lost visibility abort the attempt. Each click follows fresh exact URL,
-destination, editor identity, text and attachment checks with no intervening await.
-
-`PAP_CHECK_RELEASE` checks the already-consumed, still-pending engine attempt
-before insertion and again before click. The worker binds both checks to the
-same content document, top-level frame, tab, phase and native connection, and
-rechecks Chrome permissions and the active destination. Navigation or reload of the selected document and disconnect invalidate the
-in-flight check even if capability later returns. Unrelated tabs remain independent.
-The engine verifies the exact draft revision, scope and durable attempt; it
-cannot restore or create authorization through this check. `PAP_RELEASE_CHECKED`
-contains only the correlated check result. Dispatch uses `pap-chatgpt-release/2` with window and document-epoch correlation.
-Native peer checks and evidence/export formats are unchanged; older release
-records remain historical evidence.
-
-The bridge carries exact UTF-8 bytes as bounded base64. Success records a local
-click observation; provider receipt remains unknown. Once text may have reached
-the provider DOM, readiness expiry, changed state and lost or mismatched replies
-produce `OUTCOME_UNKNOWN`. Late readiness and duplicate attempts never cause a
-blind resend or a second insertion.
-
-[`bridge-runtime.mjs`](bridge-runtime.mjs) creates a fresh owner-only Unix socket,
-256-bit token, runtime epoch, and atomically published short-lived rendezvous. The
-accepted socket is paused before any bytes are parsed and duplicated into the fixed
-[`macos-peer-validator`](native/macos-peer-validator.swift). Using `LOCAL_PEERPID`,
-the validator requires the exact signed bundled Node relay, its exact signed
-`provenance-browser-host` parent, and that host's live Google-signed Chrome Stable
-parent. It derives browser/platform identity from that chain. Only after peer
-validation and constant-time verification of an exact `PAP_BRIDGE_AUTH` does the
-runtime construct `ChromeBridgeController → ChatGPTChromeAdapter →
-ChatGPTProtectionSession`. Thus the rendezvous token is a second factor, not a
-same-user process identity claim. [`native-host.mjs`](native-host.mjs) is the bounded
-native-framing relay used behind the compiled
-[`provenance-browser-host`](native/macos-browser-host.swift). It exposes no vault,
-filesystem, clipboard, signer, or generic command API to the extension.
-
-Native bridge profile version 3 acknowledges authentication with
-`PAP_BRIDGE_READY`; the relay allows eight seconds for connection and authentication.
-The controller then acknowledges the extension's hello with `PAP_READY`, bound to
-the same runtime epoch used by release commands. Both ends bound the hello wait.
-Backend EOF, socket errors, malformed frames and failed handshakes close the
-relay's socket and stdio, allowing its native wrapper to exit and Chrome to
-reconnect. Fixed `NATIVE_*` reason codes go to stderr without paths or error text.
-The worker retries after 1, 2, 4, 8, 16 and at most 30 seconds; only successful
-pairing resets the delay. Async observations and replies remain bound to their
-originating port. Reconnection never queues or replays a release.
-
-Eligibility is revoked on destination/scope change, browser/runtime restart,
-permission loss, protocol mismatch or transport loss. Edit-revision mismatches
-still reject stale versions. Temporary markup loss, an unavailable content script,
-a nonempty composer, attachments or inactivity of the selected tab
-produce `TEMPORARILY_UNAVAILABLE` while retaining the enrolled scope. They block
-admission and release until the same pinned destination is healthy again. Tab URL
-changes, tab removal or an observed different destination invalidate that scope;
-an unknown destination during failed surface inspection cannot establish a change.
-Each enrolled tab has an independent context. The resident engine ends affected
-pending authority on capability loss; a recovered surface permits a fresh action,
-not automatic continuation of an interrupted send.
-Unknown and interrupted attempts are never resent automatically; an explicit retry
-creates a new attempt and consumes a new authorization.
-
-DOM/input changes trigger a fixed content-free surface notification, followed by
-the runtime's ordinary capability check. Recovering the same supported surface
-restores capability without automatically sending. The provider cannot download
-new selectors or authorize a release through an unsigned configuration update.
-
-## macOS package boundary
-
-For ordinary iteration, run the [local product fixtures](../../development/PRODUCT-TESTING.md)
-with `npm run test:product`. They reuse this runtime, product API and native relay
-with explicitly injected synthetic provider, sponsor, confirmation and platform
-identity. No installed Chrome or native Keychain authority is claimed by fixtures.
-
-The local product page offers **Local diagnostics** in development and packaged
-builds. Choose an operation/component, preview the exact bounded report, then
-save that snapshot. The collector shares pseudonymous operation, epoch, connection,
-capture, confirmation and dispatch references across the existing components.
-Only fixed event codes and relative timings leave the collector; raw identifiers,
-URLs, content digests, prompt bytes and arbitrary errors are excluded.
-Details and retention limits are in the [testing guide](../../development/PRODUCT-TESTING.md).
-
-For installed platform checks, use the [dedicated test-user workflow](../../development/README.md).
-It retains Developer ID/Keychain provisioning and native peer authentication while
-avoiding per-build notarization, a published Store listing and a public backend.
-Its separate entrypoint and local TLS certificate are excluded from distribution
-packages; the installed checks and current limitations are recorded there.
-
-The [distribution builder and support runbook](../../distribution/README.md) adds
-consented registration/removal, export opportunity, signed update verification,
-rollback/schema gates, dependency inventory and build provenance. Consumer controls
-remain unavailable until a fully provisioned release is packaged. The local
-development builder below remains ad-hoc and never installs a native manifest.
-
-First build the pinned Algorand tools, then create a new output directory:
-
-```sh
-make -C spikes/anchor/algorand build
-npm run build:chatgpt -- /tmp/attestamp-chatgpt-test-UNIQUE
-```
-
-The builder produces `Attestamp.app` plus
-`NativeMessagingHosts/ai.provenance.consumer.json`. The manifest targets the
-compiled executable inside the signed app—not a source script or `/usr/bin/env`
-runtime—and allows only the pinned extension origin. It is intentionally not
-installed into a user's Chrome profile by the build. Distribution must sign the
-app with the Keychain access-group entitlement, install that exact manifest via a
-consented installer, and package the extension without changing its pinned ID.
-The local ad-hoc build validates structure and sealing but correctly lacks
-production Keychain authority and is not a public installer.
-
-The fixed app host validates the complete bundle and launches only the bundled
-Node runtime and `runtime-main.mjs` with a sanitized environment. The native
-messaging host independently validates the complete app and its live Google Chrome
-Stable parent before launching only the bundled relay. A separately signed peer
-validator performs the runtime-side ancestry check before the relay may authenticate.
-The local composer exposes status, account connection, enrollment, draft revisions,
-freeze, blinded sponsorship/transaction observation, release, cancellation, local
-receipts/export and later proof-upgrade operations. Account access cannot invoke
-vault-key operations or change the release policy.
-
-## Validation
-
-`npm run test:chatgpt` includes an isolated end-to-end path through actual native
-message framing, a fresh rendezvous and Unix socket, authentication, the controller,
-adapter, durable Sealed session, and correlated release response. It also proves a
-client holding the exact current token cannot proceed when peer authorization fails.
-The macOS packaging regression invokes the real peer validator against a direct
-same-user socket client and confirms rejection before bridge pairing. Other cases
-use fresh temporary encrypted stores and explicit local fixtures. `npm run
-test:algorand` builds the observer and both offline verifiers, exercises the real
-observer against a fresh loopback TLS algod fixture, and checks the recorded public
-TestNet archive, fast corroboration, conflict cases, and later State-Proof upgrade.
-Neither command opens a user Chrome profile, accesses a ChatGPT account, submits a
-transaction, or touches an operational evidence store.
-
-`node --test test/native-bridge-lifecycle.test.mjs` also runs the real relay in
-isolated child processes with Chrome's stdin held open. A synthetic Chrome API
-executes the actual extension worker across normal engine stop/start, including
-an interrupted dispatch, a new epoch, late replies, transient capability recovery
-and bounded reconnect backoff. It uses fresh encrypted stores and memory keys;
-no retained installation, browser profile or account is accessed. Native macOS
-ancestry and actual provider behavior remain separately labelled platform checks.
-
-The content-script fixture is deliberately selector-pinned. A release candidate
-still needs a bounded owner-run check through the installed manifest and actual
-Chrome Stable native-messaging process chain, followed by synthetic text in an
-explicitly designated test/owner ChatGPT account. Automated tests do not establish
-that external parent/DOM boundary; any provider drift disables protection.
-
-## Receipts and recipient export
-
-The local composer retains a selectable receipt history across vault reopen and
-recovery. Preview the exact disclosed records, metadata and bytes before saving;
-unselected activity is not included. Redacted text creates a new signed derivative
-with an explicit source link and independent assurance. Shared archive bodies are
-encrypted once in the vault and included once in each export, with per-record
-references. Fast confirmation stays a historical client assertion for recipients;
-archival verification uses a separately selected checkpoint.
-
-The build's `Recipient` folder contains **Attestamp Verifier.app** with
-the runtime and native proof verifier needed on a clean Mac. It has no vault,
-Keychain broker, account, subscription or company endpoint. See the
-[recipient format and verification guide](../../recipient/README.md) for limits,
-trust assumptions, supported older exports and the seven report dimensions.
+`npm run test:chatgpt` and `npm run test:product` exercise actual page/worker
+scripts, native framing, engine and encrypted temporary vault with explicitly
+synthetic browser/platform/provider/anchor dependencies. They establish no live
+provider, installed native ancestry or sidebar interaction acceptance.
+The [testing guide](../../development/PRODUCT-TESTING.md) records those limits.

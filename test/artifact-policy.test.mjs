@@ -96,7 +96,7 @@ test('missing app and recipient imports or assets reject even after inventories 
     const f = await fixture(t, channel), policy = structuredClone(f.policy);
     assert.equal((await f.run()).status, 'PASSED');
     for (const path of [
-      `${resources}/spikes/browser/chatgpt/bridge-runtime.mjs`, `${resources}/spikes/browser/chatgpt/composer.html`,
+      `${resources}/spikes/browser/chatgpt/bridge-runtime.mjs`, `${resources}/spikes/browser/chatgpt/dashboard.html`,
       `${resources}/spikes/managed/client.mjs`, `${extension}/content-script.js`,
       `${verifier}/Contents/Resources/spikes/recipient/server.mjs`, `${verifier}/Contents/Resources/spikes/recipient/recipient.css`,
       `${verifier}/Contents/Resources/spikes/vault/records.mjs`,

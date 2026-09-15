@@ -5,10 +5,10 @@ export const identity = () => generateKeyPairSync('ed25519');
 export const publicBytes = key => key.export({ format: 'jwk' }).x;
 export const publicProofDigest = bytes => b64(hash('PAP/public-proof/v1\0', bytes));
 export function makeRecord(bytes, signing, sequence, previous, { type = 'capture', relationships = [] } = {}) {
-  const manifest = { profile: type === 'capture' ? 'pap-poc/1' : 'pap-local-record/1', eventId: b64(randomBytes(16)), type, mode: 'Continuous',
+  const manifest = { profile: 'pap-local-record/2', eventId: b64(randomBytes(16)), type, mode: 'LOCAL_RECORD',
     sequence: String(sequence), localClaimedTime: new Date().toISOString(), previousRecordDigest: previous,
-    signingPublicKey: publicBytes(signing.publicKey), boundary: 'trusted_local_composer',
-    adapter: { id: 'local-vault-spike', version: '1' }, coverage: 'exact', policy: null, relationships,
+    signingPublicKey: publicBytes(signing.publicKey), boundary: 'local_evidence_store',
+    adapter: { id: 'local-vault-spike', version: '2' }, coverage: 'exact', policy: null, relationships,
     evidence: [{ role: 'input', objectDigest: objectDigest(bytes), byteLength: String(bytes.length), mediaType: 'application/octet-stream', coverage: 'exact' }] };
   const opening = randomBytes(32);
   const commitment = hash('PAP/commit/v1\0', opening, canonical(manifest));
@@ -24,12 +24,13 @@ export function verifyRecord(record, evidence = null) {
     const m = record.manifest;
     if (m === null) { result.integrity = 'INCOMPLETE'; result.keyAttribution = 'KEY_MISSING'; result.timestamp = 'INDETERMINATE'; result.releaseControl = 'UNKNOWN'; return result; }
     keys(m, ['profile', 'eventId', 'type', 'mode', 'sequence', 'localClaimedTime', 'previousRecordDigest', 'signingPublicKey', 'boundary', 'adapter', 'coverage', 'policy', 'relationships', 'evidence']);
-    if (m.profile !== 'pap-poc/1' && m.profile !== 'pap-local-record/1') fail('UNSUPPORTED');
+    if (!['pap-poc/1', 'pap-local-record/1', 'pap-local-record/2'].includes(m.profile)) fail('UNSUPPORTED');
     if (Buffer.byteLength(canonical(m)) > LIMITS.manifest) fail('LIMIT_EXCEEDED');
     unb64(m.eventId, 16);
     if (typeof m.sequence !== 'string' || !/^[1-9][0-9]{0,19}$/.test(m.sequence)
-        || (m.profile === 'pap-poc/1' ? m.type !== 'capture' : !['observation', 'derivative', 'public-proof'].includes(m.type))
-        || m.mode !== 'Continuous' || m.boundary !== 'trusted_local_composer' || m.coverage !== 'exact'
+        || (m.profile === 'pap-poc/1' ? m.type !== 'capture' : ![...(m.profile === 'pap-local-record/2' ? ['capture'] : []), 'observation', 'derivative', 'public-proof'].includes(m.type))
+        || m.mode !== (m.profile === 'pap-local-record/2' ? 'LOCAL_RECORD' : 'Continuous')
+        || m.boundary !== (m.profile === 'pap-local-record/2' ? 'local_evidence_store' : 'trusted_local_composer') || m.coverage !== 'exact'
         || m.policy !== null || !Array.isArray(m.relationships)) fail('UNSUPPORTED');
     if (m.type === 'derivative') {
       if (m.relationships.length !== 1) fail('INVALID');
@@ -38,7 +39,7 @@ export function verifyRecord(record, evidence = null) {
       unb64(source.recordDigest, 32); unb64(source.objectDigest, 32);
     } else if (m.relationships.length) fail('UNSUPPORTED');
     keys(m.adapter, ['id', 'version']);
-    if (m.adapter.id !== 'local-vault-spike' || m.adapter.version !== '1' || typeof m.localClaimedTime !== 'string'
+    if (m.adapter.id !== 'local-vault-spike' || m.adapter.version !== (m.profile === 'pap-local-record/2' ? '2' : '1') || typeof m.localClaimedTime !== 'string'
         || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(m.localClaimedTime)) fail('INVALID');
     if (m.previousRecordDigest !== null) unb64(m.previousRecordDigest, 32);
     if (!Array.isArray(m.evidence) || m.evidence.length !== 1) fail('UNSUPPORTED');

@@ -32,7 +32,7 @@ export class LocalReceipts {
       return { record, value: signedObservation(record, bytes, verifyRecord(record, bytes)) };
     }).filter(entry => entry.value);
     const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version'
-      || entry.value.profile === 'pap-chatgpt-observation/2' && entry.value.kind === 'normal-send-intent').map(({ record, value }) => {
+      || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3'].includes(entry.value.profile) && entry.value.kind === 'normal-send-intent').map(({ record, value }) => {
       const text = records.find(r => r.manifest.eventId === value.textRecord
         && r.manifest.evidence[0].objectDigest === value.textObject);
       if (!text) throw Error('Receipt text reference missing');

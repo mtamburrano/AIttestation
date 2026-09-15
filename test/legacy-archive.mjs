@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { verifyBundle } from '../spikes/demonstrator/verification.mjs';
+import { verifyBundle } from '../spikes/recipient/legacy-demo.mjs';
 import { parseCanonical, canonical } from '../spikes/vault/format.mjs';
 
 // Recorded synthetic disclosures and public TestNet proof only. No account,
@@ -24,4 +24,4 @@ const before = parseCanonical(Buffer.from(original.disclosure)).records;
 const after = parseCanonical(Buffer.from(restored.disclosure)).records;
 assert.equal(after.length, before.length + 1, 'restore includes the explicit snapshot export index');
 assert.deepEqual(after.slice(0, before.length), before, 'all baseline records and signatures survived recovery');
-console.log('PASS: three live TestNet mode commitments, standalone original/restored verification, exact recovery baseline, missing trust, wrong network and inclusion tampering.');
+console.log('PASS: three fixed historical TestNet commitments (read-only), standalone original/restored verification, exact recovery baseline, missing trust, wrong network and inclusion tampering.');

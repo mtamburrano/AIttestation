@@ -6,8 +6,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DurableVault, MacOSKeychainStore } from '../../vault/key-lifecycle.mjs';
 import { parseCanonical } from '../../vault/format.mjs';
-import { startChromeProtectionRuntime } from './bridge-runtime.mjs';
-import { startProductComposer } from './product-server.mjs';
+import { startChromeRecordingRuntime } from './bridge-runtime.mjs';
+import { startProductDashboard } from './product-server.mjs';
 import { ManagedAnchoringClient } from '../../managed/client.mjs';
 import { MANAGED_NETWORK, MANAGED_GENESIS } from '../../managed/protocol.mjs';
 import { InstallationLifecycle, STORE_URL } from '../../distribution/lifecycle.mjs';
@@ -65,7 +65,7 @@ export async function startPackagedChatGPT({
       : DurableVault.create(vaultDirectory, keyStore === undefined ? {} : { keyStore });
     ownedVault = true;
   }
-  let bridge, composer, desktop, recipient, recipientStarting;
+  let bridge, dashboard, desktop, recipient, recipientStarting;
   try {
     const openLocal = path => new Promise((resolve, reject) => {
       const child = spawn('/usr/bin/open', [path], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
@@ -73,12 +73,12 @@ export async function startPackagedChatGPT({
       child.once('exit', code => code === 0 ? resolve() : reject(Error('Unable to open the selected release resource')));
     });
     const showDashboard = (section = '') => {
-      if (!composer) throw Error('Dashboard unavailable');
-      const url = new URL(composer.dashboardURL);
+      if (!dashboard) throw Error('Dashboard unavailable');
+      const url = new URL(dashboard.dashboardURL);
       if (section) url.searchParams.set('section', section);
       return (openDashboard ?? openLocal)(url.href);
     };
-    bridge = await startChromeProtectionRuntime(supportDirectory, {
+    bridge = await startChromeRecordingRuntime(supportDirectory, {
       fastTrust: trust, vault, managed,
       openDashboard: () => showDashboard(),
       integrationEnabled: installation ? (await installation.status()).integration === 'ENABLED' : true,
@@ -108,8 +108,7 @@ export async function startPackagedChatGPT({
       async store() { await installation.record('storeOpened'); await openLocal(STORE_URL); return { opened: true }; },
       async offerExport() { await installation.record('exportOffered'); return { evidence: 'RETAINED', exportAvailable: true }; },
       async remove(data) {
-        // End bridge authority before removing the registration. A concurrent
-        // admitted attempt is drained by the ordinary close path, never retried.
+        // Revoke capture before removing the browser registration.
         bridge.disableIntegration();
         return changeIntegration(() => { bridge.disableIntegration(); return installation.remove(data); });
       },
@@ -118,7 +117,7 @@ export async function startPackagedChatGPT({
       async downloadUpdate() {
         if (!updater) throw Error('Updates are not configured');
         const result = await updater.download(); await openLocal(result.path);
-        return { state: result.state, instruction: 'Close Attestamp, replace the app in Finder, then reopen and pair your tab. Evidence stays on this Mac.' };
+        return { state: result.state, instruction: 'Close Attestamp, replace the app in Finder, then reopen Chrome. Evidence stays on this Mac.' };
       },
     } : null;
     bridge.openVerifier = async () => {
@@ -138,20 +137,20 @@ export async function startPackagedChatGPT({
       // Revoke authority before draining; closing a browser view never calls this.
       bridge.engine.stop();
       desktop?.close(); await recipientStarting?.catch(() => {}); await recipient?.close();
-      await composer?.close(); await bridge.close(); if (ownedVault) vault.close();
+      await dashboard?.close(); await bridge.close(); if (ownedVault) vault.close();
     })();
-    composer = await startProductComposer(bridge, { onExit: close });
+    dashboard = await startProductDashboard(bridge, { onExit: close });
     if (desktopChannel) desktop = startDesktopChannel(bridge, { ...desktopChannel, onExit: close });
     if (openBrowser) {
       await showDashboard();
     }
     return {
-      ...bridge, composerURL: composer.url, dashboardURL: composer.dashboardURL,
+      ...bridge, dashboardURL: dashboard.dashboardURL,
       close,
     };
   } catch (error) {
     desktop?.close(); await recipient?.close();
-    try { await composer?.close(); } catch {}
+    try { await dashboard?.close(); } catch {}
     try { await bridge?.close(); } catch {}
     if (ownedVault) vault.close();
     throw error;

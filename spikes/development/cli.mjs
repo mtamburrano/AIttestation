@@ -1,3 +1,4 @@
+import { RUNTIME_STATE_PROFILE } from './runtime-state.mjs';
 import { readFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -18,9 +19,9 @@ export { registerNativeHost, removeNativeHost };
 export async function stopDevelopment() {
   const paths = await validateAccount(), state = join(paths.control, 'runtime.json');
   if (await exists(state)) {
-    const entry = await privateJSON(state), url = new URL(entry.composerURL);
-    if (entry.profile !== DEVELOPMENT_PROFILE || url.protocol !== 'http:' || url.hostname !== '127.0.0.1'
-        || url.pathname !== '/' || url.search || url.username || url.password || !/^#[A-Za-z0-9_-]{43}$/.test(url.hash)) {
+    const entry = await privateJSON(state), url = new URL(entry.dashboardURL);
+    if (entry.profile !== RUNTIME_STATE_PROFILE || url.protocol !== 'http:' || url.hostname !== '127.0.0.1'
+        || url.pathname !== '/dashboard' || url.search || url.username || url.password || !/^#[A-Za-z0-9_-]{43}$/.test(url.hash)) {
       throw Error('INVALID_PRIVATE_RUNTIME_STATE');
     }
     let alreadyExited = false;

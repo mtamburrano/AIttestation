@@ -1,17 +1,17 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { continuousFixture, until } from '../../test/continuous-fixture.mjs';
+import { recordingFixture, until } from '../../test/recording-fixture.mjs';
 import { verifyPortable } from '../recipient/portable.mjs';
 
-const prompt = 'SYNTHETIC_CONTINUOUS_e\u0301\r\n☕  ';
+const prompt = 'SYNTHETIC_RECORDING_e\u0301\r\n☕  ';
 const check = condition => { if (!condition) throw Object.assign(Error('SCENARIO_ASSERTION_FAILED'), { code: 'SCENARIO_ASSERTION_FAILED' }); };
 
-export async function continuousProductFixture(directory, scenario, diagnostics, network) {
-  const f = await continuousFixture(directory, { diagnostics, network, dropAck: scenario === 'continuous-normal-send' });
+export async function recordingProductFixture(directory, scenario, diagnostics, network) {
+  const f = await recordingFixture(directory, { diagnostics, network, dropAck: scenario === 'recording-normal-send' });
   let observed, operationId = null;
   try {
-    await f.mode('Continuous');
-    if (scenario === 'continuous-normal-send') {
+    await f.recording(true);
+    if (scenario === 'recording-normal-send') {
       const page = f.pages.get(17);
       page.text = prompt; f.appear(prompt, 17, 'hydrated');
       f.send(prompt, { method: 'enter', isComposing: true });
@@ -23,7 +23,7 @@ export async function continuousProductFixture(directory, scenario, diagnostics,
       operationId = f.deliveries[0].observation.eventId;
       f.appear(prompt); await until(() => f.results.some(value => value.result.kind === 'message-observed'));
       f.send(prompt); await until(() => f.runtime.session.receipts.list().length === 2);
-      await f.mode('Continuous', 18); f.send('SYNTHETIC_OTHER_TAB', { id: 18 });
+      f.send('SYNTHETIC_OTHER_TAB', { id: 18 });
       await until(() => f.runtime.session.receipts.list().length === 3);
       f.navigate(); await until(() => !f.runtime.adapter.scopes().some(value => value.scope === f.scopes.get(17)));
       const before = f.results.length; f.replay(f.deliveries[0]);
@@ -38,13 +38,13 @@ export async function continuousProductFixture(directory, scenario, diagnostics,
       check(f.anchorCalls === 3 && f.confirmed === 3);
       observed = 'NORMAL_PROMPT_SAVED';
     } else {
-      if (scenario === 'continuous-storage-gap') f.storageFault();
-      else if (scenario === 'continuous-key-gap') f.keyFault();
-      else if (scenario === 'continuous-connection-gap') f.disconnect();
+      if (scenario === 'recording-storage-gap') f.storageFault();
+      else if (scenario === 'recording-key-gap') f.keyFault();
+      else if (scenario === 'recording-connection-gap') f.disconnect();
       else check(false);
       f.send(prompt);
       await until(() => /gap|unavailable/.test(f.pages.get(17).feedback));
-      if (scenario === 'continuous-connection-gap') {
+      if (scenario === 'recording-connection-gap') {
         await until(() => !f.runtime.browserState()); observed = 'BRIDGE_DISCONNECTED';
       } else {
         await until(() => f.results.length > 0);
@@ -55,7 +55,7 @@ export async function continuousProductFixture(directory, scenario, diagnostics,
     }
     check(f.releases.length === 0 && f.prevention === 0);
     for (const page of f.pages.values()) check(page.clicks() === 0 && page.injections() === 0);
-    check(Object.keys(f.runtime.session.runtime.snapshot().attempts).length === 0);
+    check(f.runtime.session.runtime === undefined);
     const report = JSON.stringify(diagnostics.preview().report);
     for (const value of [prompt, 'conversation:fixture-', f.runtime.runtimeEpoch, ...f.scopes.values()]) check(!report.includes(value));
     const encrypted = async path => {

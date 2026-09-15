@@ -1,19 +1,16 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { validateProtectedTextPayload } from '../../release/runtime.mjs';
-import { emit } from '../../release/diagnostics.mjs';
+import { randomUUID } from 'node:crypto';
+import { emit } from '../../diagnostics/local.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
 import { CHATGPT_PANEL_PROFILE } from './panel.mjs';
 
-export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/5';
-export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-14';
-export const CHATGPT_RELEASE_PROTOCOL = 'pap-chatgpt-release/2';
+export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/6';
+export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-15';
 export const CHATGPT_ADAPTER_ID = 'chrome-chatgpt';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
 export const CHATGPT_EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
 export const CHROME_BASELINE_MAJOR = 153;
 
 const requiredPermissions = ['nativeMessaging'];
-const textDigest = text => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
 
 function fail(message) {
   const error = Error(`UNSUPPORTED_PATH: ${message}`);
@@ -40,18 +37,16 @@ function macOSSupported(version) {
 }
 
 export class ChatGPTChromeAdapter {
-  #send; #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
-  #enrollments = new Map(); #generation = 0; #attempts = new Set(); #listeners = new Set();
+  #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
+  #sources = new Map(); #generation = 0; #listeners = new Set();
   #diagnostics;
-  #dispatchChecks = new Map();
-  #dispatchScopes = new Map();
 
-  constructor(send, { extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
-    if (typeof send !== 'function' || typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
+  constructor({ extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
+    if (typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
         || typeof runtimeEpoch !== 'string' || runtimeEpoch.length < 1 || runtimeEpoch.length > 128) {
       throw Error('Invalid ChatGPT adapter construction');
     }
-    this.#send = send; this.#extensionId = extensionId;
+    this.#extensionId = extensionId;
     this.#diagnostics = diagnostics;
     this.#runtimeEpoch = runtimeEpoch;
   }
@@ -59,8 +54,7 @@ export class ChatGPTChromeAdapter {
   get capabilities() {
     return Object.freeze({
       adapter: CHATGPT_ADAPTER_PROFILE,
-      releaseProtocol: CHATGPT_RELEASE_PROTOCOL,
-      boundary: 'trusted_local_composer',
+      boundary: 'provider_dom',
       provider: CHATGPT_ORIGIN,
       payload: 'exact UTF-8 text up to 256 KiB',
       attachments: 'UNSUPPORTED',
@@ -69,7 +63,6 @@ export class ChatGPTChromeAdapter {
       signerAPI: false,
       observation: this.#connection?.captureProfile === CHATGPT_CAPTURE_PROFILE,
       captureProfile: CHATGPT_CAPTURE_PROFILE,
-      strictAdmission: true,
       privilegedPanel: this.#connection?.panelProfile === CHATGPT_PANEL_PROFILE,
     });
   }
@@ -77,7 +70,8 @@ export class ChatGPTChromeAdapter {
   pair(connection) {
     const invalid = !connection || connection.extensionId !== this.#extensionId
         || connection.adapterProfile !== CHATGPT_ADAPTER_PROFILE
-        || connection.releaseProtocol !== CHATGPT_RELEASE_PROTOCOL
+        || Object.hasOwn(connection, 'releaseProtocol')
+        || connection.captureProfile !== CHATGPT_CAPTURE_PROFILE
         || connection.pageContract !== CHATGPT_PAGE_CONTRACT
         || connection.browser?.product !== 'Google Chrome'
         || connection.browser.channel !== 'stable'
@@ -105,12 +99,12 @@ export class ChatGPTChromeAdapter {
     return { runtimeEpoch: this.#runtimeEpoch, capabilities: this.capabilities };
   }
 
-  synchronize({ browserSessionId, permissionState, adapterProfile, releaseProtocol, pageContract, tabs }) {
+  synchronize({ browserSessionId, permissionState, adapterProfile, captureProfile, pageContract, tabs, releaseProtocol }) {
     if (!this.#connection || browserSessionId !== this.#connection.browserSessionId) {
       this.disconnect(); fail('browser session changed');
     }
     if (permissionState !== 'granted') { this.disconnect(); fail('Chrome permission lost'); }
-    if (adapterProfile !== CHATGPT_ADAPTER_PROFILE || releaseProtocol !== CHATGPT_RELEASE_PROTOCOL
+    if (releaseProtocol !== undefined || adapterProfile !== CHATGPT_ADAPTER_PROFILE || captureProfile !== CHATGPT_CAPTURE_PROFILE
         || pageContract !== CHATGPT_PAGE_CONTRACT) {
       this.disconnect(); fail('adapter or provider contract mismatch');
     }
@@ -122,7 +116,7 @@ export class ChatGPTChromeAdapter {
             || !Number.isSafeInteger(tab.windowId) || tab.windowId < 0
             || typeof tab.tabEpoch !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(tab.tabEpoch)
             || typeof tab.active !== 'boolean' || typeof tab.destination !== 'string' || tab.destination.length > 256
-            || typeof tab.surfaceSupported !== 'boolean' || typeof tab.composerEmpty !== 'boolean'
+            || typeof tab.surfaceSupported !== 'boolean'
             || typeof tab.attachmentsPresent !== 'boolean') fail('invalid tab state');
         return structuredClone(tab);
       });
@@ -130,51 +124,39 @@ export class ChatGPTChromeAdapter {
     if (new Set(nextTabs.map(tab => tab.id)).size !== nextTabs.length) {
       this.disconnect(); fail('duplicate tab identity');
     }
-    const previous = new Map([...this.#enrollments.keys()].map(scope => [scope, this.eligibility(scope)]));
+    const previous = new Map([...this.#sources.keys()].map(scope => [scope, this.eligibility(scope)]));
     this.#tabs = nextTabs;
-    for (const enrolled of this.#enrollments.values()) {
-      const tab = nextTabs.find(value => value.id === enrolled.tabId);
+    for (const followed of this.#sources.values()) {
+      const tab = nextTabs.find(value => value.id === followed.tabId);
       // A missing observation is not a new destination. Chrome's tab identity
       // and URL still bind the scope while a content script is unavailable.
-      if (!tab || tab.url !== enrolled.url || !supportedURL(tab.url)
-          || tab.windowId !== enrolled.windowId || tab.tabEpoch !== enrolled.tabEpoch
-          || tab.destination !== enrolled.destination && (tab.destination !== '' || tab.surfaceSupported)) {
-        emit(this.#diagnostics, 'SCOPE_DESTINATION_CHANGED'); this.#enrollments.delete(enrolled.scope);
+      if (!tab || tab.url !== followed.url || !supportedURL(tab.url)
+          || tab.windowId !== followed.windowId || tab.tabEpoch !== followed.tabEpoch
+          || tab.destination !== followed.destination && (tab.destination !== '' || tab.surfaceSupported)) {
+        emit(this.#diagnostics, 'SCOPE_DESTINATION_CHANGED'); this.#sources.delete(followed.scope);
       } else {
-        const next = this.eligibility(enrolled.scope);
-        if (next !== previous.get(enrolled.scope)) emit(this.#diagnostics, next === 'ELIGIBLE' ? 'CAPABILITY_RESTORED' : 'CAPABILITY_UNAVAILABLE');
+        const next = this.eligibility(followed.scope);
+        if (next !== previous.get(followed.scope)) emit(this.#diagnostics, next === 'ELIGIBLE' ? 'CAPABILITY_RESTORED' : 'CAPABILITY_UNAVAILABLE');
       }
+    }
+    for (const tab of this.#observableTabs()) {
+      if (![...this.#sources.values()].some(source => source.tabId === tab.id)) this.#follow(tab);
     }
     const chatGPTTabs = this.#chatGPTTabs();
     this.#changed();
-    return { eligible: this.#eligibleTabs().length > 0,
+    return { eligible: this.#observableTabs().length > 0,
       tabCount: chatGPTTabs.length,
       scopes: this.scopes() };
   }
 
   onChange(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
   #changed() { for (const listener of this.#listeners) listener(); }
-  targets({ surfaceDetails = false } = {}) {
-    if (!this.#connection) return [];
-    return this.#tabs.filter(tab => supportedURL(tab.url)).map(tab => ({
-      adapterId: CHATGPT_ADAPTER_ID, adapterEpoch: this.#connection?.browserSessionId,
-      tabId: tab.id, windowId: tab.windowId, tabEpoch: tab.tabEpoch, destination: tab.destination,
-      eligible: [...this.#eligibleTabs(), ...this.#observableTabs()].some(value => value.id === tab.id),
-      ...(surfaceDetails ? { sealedEligible: this.#eligibleTabs().some(value => value.id === tab.id),
-        active: tab.active, composerEmpty: tab.composerEmpty, attachmentsPresent: tab.attachmentsPresent,
-        surfaceSupported: tab.surfaceSupported } : {}),
-    }));
-  }
   scopes() {
-    return [...this.#enrollments.values()].map(value => ({ ...structuredClone(value),
+    return [...this.#sources.values()].map(value => ({ ...structuredClone(value),
       adapterId: CHATGPT_ADAPTER_ID, adapterEpoch: value.browserSessionId, eligibility: this.eligibility(value.scope) }));
   }
 
   #chatGPTTabs() { return this.#tabs.filter(tab => chatGPTURL(tab.url)); }
-  #eligibleTabs() {
-    return this.#chatGPTTabs().filter(tab => supportedURL(tab.url) && tab.active && tab.surfaceSupported
-      && !tab.attachmentsPresent && tab.composerEmpty);
-  }
   #observableTabs() {
     return this.capabilities.observation ? this.#chatGPTTabs().filter(tab => supportedURL(tab.url)
       && tab.surfaceSupported && !tab.attachmentsPresent && tab.destination === (new URL(tab.url).pathname === '/'
@@ -182,7 +164,7 @@ export class ChatGPTChromeAdapter {
   }
   #invalidate(reason) {
     emit(this.#diagnostics, 'SCOPE_INVALIDATED');
-    this.#generation++; this.#enrollments.clear(); this.#changed();
+    this.#generation++; this.#sources.clear(); this.#changed();
     return reason;
   }
   invalidate(reason = 'scope invalidated') { this.#invalidate(reason); }
@@ -193,131 +175,29 @@ export class ChatGPTChromeAdapter {
     this.#runtimeEpoch = randomUUID(); this.disconnect();
   }
 
-  enroll({ tabId, destination }) {
-    if (!this.#connection) fail('extension is not paired');
-    const tab = [...this.#eligibleTabs(), ...this.#observableTabs()].find(value => value.id === tabId && value.destination === destination);
-    if (!tab) fail('an active, empty, supported ChatGPT target is required');
-    const existing = [...this.#enrollments.values()].find(value => value.tabId === tabId);
-    if (existing) return this.#publicEnrollment(existing);
+  #follow(tab) {
     const scope = randomUUID();
-    const enrolled = {
-      scope, tabId, destination, url: tab.url, windowId: tab.windowId, tabEpoch: tab.tabEpoch,
-      browserSessionId: this.#connection.browserSessionId,
-      runtimeEpoch: this.#runtimeEpoch, generation: this.#generation,
-    };
-    this.#enrollments.set(scope, enrolled);
-    emit(this.#diagnostics, 'SCOPE_ENROLLED');
-    this.#changed(); return this.#publicEnrollment(enrolled);
+    this.#sources.set(scope, { scope, tabId: tab.id, destination: tab.destination, url: tab.url,
+      windowId: tab.windowId, tabEpoch: tab.tabEpoch, browserSessionId: this.#connection.browserSessionId,
+      runtimeEpoch: this.#runtimeEpoch, generation: this.#generation });
+    emit(this.#diagnostics, 'SOURCE_FOLLOWED');
   }
 
-  #publicEnrollment(enrolled) { return { ...structuredClone(enrolled), adapterId: CHATGPT_ADAPTER_ID,
-    adapterEpoch: enrolled.browserSessionId, capabilities: this.capabilities }; }
-
-  #assertHealthy(scope) {
-    const enrolled = this.#enrollments.get(scope);
-    if (!this.#connection || !enrolled || enrolled.scope !== scope
-        || enrolled.runtimeEpoch !== this.#runtimeEpoch
-        || enrolled.browserSessionId !== this.#connection.browserSessionId
-        || enrolled.generation !== this.#generation) fail('scope is not enrolled in this runtime and browser session');
-    const tabs = this.#chatGPTTabs(), tab = tabs.find(value => value.id === enrolled.tabId);
-    if (!tab || !tab.active || !tab.surfaceSupported
-        || tab.attachmentsPresent || !tab.composerEmpty || tab.destination !== enrolled.destination
-        || tab.url !== enrolled.url || tab.tabEpoch !== enrolled.tabEpoch || tab.windowId !== enrolled.windowId) {
-      const error = Error('Provider capability is temporarily unavailable');
-      error.code = 'CAPABILITY_UNAVAILABLE'; throw error;
-    }
-    return { enrolled, tab };
-  }
-
-  assertEligible(scope) { this.#assertHealthy(scope); return true; }
-  eligibility(scope) {
-    try { this.#assertHealthy(scope); return 'ELIGIBLE'; }
-    catch (error) { return error.code === 'CAPABILITY_UNAVAILABLE' ? 'TEMPORARILY_UNAVAILABLE' : 'REVOKED'; }
-  }
+  eligibility(scope) { return this.observationEligible(scope) ? 'ELIGIBLE' : 'TEMPORARILY_UNAVAILABLE'; }
 
   observationEligible(scope) {
-    const enrolled = this.#enrollments.get(scope);
-    return Boolean(enrolled && this.#connection && this.#observableTabs().some(tab => tab.id === enrolled.tabId
-      && tab.windowId === enrolled.windowId && tab.tabEpoch === enrolled.tabEpoch && tab.url === enrolled.url
-      && tab.destination === enrolled.destination));
+    const followed = this.#sources.get(scope);
+    return Boolean(followed && this.#connection && this.#observableTabs().some(tab => tab.id === followed.tabId
+      && tab.windowId === followed.windowId && tab.tabEpoch === followed.tabEpoch && tab.url === followed.url
+      && tab.destination === followed.destination));
   }
 
   assertObservationSource(source) {
-    const enrolled = this.#enrollments.get(source.scope);
+    const followed = this.#sources.get(source.scope);
     if (!this.observationEligible(source.scope) || source.runtimeEpoch !== this.#runtimeEpoch
-        || source.browserSessionId !== enrolled.browserSessionId || source.tabId !== enrolled.tabId
-        || source.windowId !== enrolled.windowId || source.tabEpoch !== enrolled.tabEpoch
-        || source.destination !== enrolled.destination) fail('capture source changed');
+        || source.browserSessionId !== followed.browserSessionId || source.tabId !== followed.tabId
+        || source.windowId !== followed.windowId || source.tabEpoch !== followed.tabEpoch
+        || source.destination !== followed.destination) fail('capture source changed');
   }
 
-  isDispatchCurrent(attemptId) {
-    try { return this.#dispatchChecks.get(attemptId)?.() === true; }
-    catch { return false; }
-  }
-  isScopeDispatchCurrent(scope) {
-    return [...this.#dispatchScopes].some(([attemptId, target]) => target === scope && this.isDispatchCurrent(attemptId));
-  }
-
-  async dispatch(attempt, isCurrent = () => true) {
-    let snapshot;
-    try {
-      const health = this.#assertHealthy(attempt.scope);
-      const payload = validateProtectedTextPayload(attempt.payload);
-      if (attempt.protocol !== CHATGPT_RELEASE_PROTOCOL || typeof attempt.attemptId !== 'string'
-          || !/^[a-f0-9]{64}$/.test(attempt.digest ?? '') || this.#attempts.has(attempt.attemptId) || this.#attempts.size >= 4096) {
-        emit(this.#diagnostics, 'ADAPTER_REJECTED', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
-        return 'FAILED_BEFORE_EGRESS';
-      }
-      snapshot = {
-        generation: this.#generation, tabId: health.tab.id, text: payload.text,
-        windowId: health.tab.windowId, tabEpoch: health.tab.tabEpoch,
-        expectedUrl: health.enrolled.url, destination: health.enrolled.destination,
-      };
-      this.#attempts.add(attempt.attemptId);
-    } catch {
-      emit(this.#diagnostics, 'ADAPTER_REJECTED', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
-      return 'FAILED_BEFORE_EGRESS';
-    }
-    let response;
-    const command = {
-      profile: CHATGPT_RELEASE_PROTOCOL, runtimeEpoch: this.#runtimeEpoch,
-      browserSessionId: this.#connection.browserSessionId, scope: attempt.scope,
-      tabId: snapshot.tabId, expectedUrl: snapshot.expectedUrl, destination: snapshot.destination,
-      windowId: snapshot.windowId, tabEpoch: snapshot.tabEpoch,
-      attemptId: attempt.attemptId, payloadDigest: attempt.digest,
-      textDigest: textDigest(snapshot.text), textBytes: Buffer.from(snapshot.text, 'utf8').toString('base64'),
-    };
-    this.#dispatchChecks.set(attempt.attemptId, () => {
-      const tab = this.#chatGPTTabs().find(value => value.id === snapshot.tabId);
-      // The exact authorized insertion makes the composer nonempty. The page
-      // checks its bytes; this guard retains engine, scope and draft authority.
-      return this.#generation === snapshot.generation && this.#enrollments.has(attempt.scope)
-        && this.#connection?.browserSessionId === command.browserSessionId && Boolean(tab)
-        && tab.windowId === snapshot.windowId && tab.tabEpoch === snapshot.tabEpoch
-        && tab.id === snapshot.tabId && tab.url === snapshot.expectedUrl && tab.destination === snapshot.destination
-        && tab.active && tab.surfaceSupported && !tab.attachmentsPresent && isCurrent() === true;
-    });
-    this.#dispatchScopes.set(attempt.attemptId, attempt.scope);
-    try {
-      emit(this.#diagnostics, 'ADAPTER_DISPATCH', { operationId: attempt.sealId, dispatchId: attempt.attemptId });
-      response = await this.#send(command, { operationId: attempt.sealId });
-    } catch (error) {
-      return error?.exposure === 'NONE' ? 'FAILED_BEFORE_EGRESS' : 'OUTCOME_UNKNOWN';
-    } finally { this.#dispatchChecks.delete(attempt.attemptId); this.#dispatchScopes.delete(attempt.attemptId); }
-    if (!response || response.profile !== command.profile || response.runtimeEpoch !== command.runtimeEpoch
-        || response.browserSessionId !== command.browserSessionId || response.scope !== command.scope
-        || response.tabId !== command.tabId || response.expectedUrl !== command.expectedUrl
-        || response.windowId !== command.windowId || response.tabEpoch !== command.tabEpoch
-        || response.destination !== command.destination || response.attemptId !== command.attemptId
-        || response.payloadDigest !== command.payloadDigest || response.textDigest !== command.textDigest) {
-      return 'OUTCOME_UNKNOWN';
-    }
-    if (this.#generation !== snapshot.generation || !this.#enrollments.has(attempt.scope)) {
-      return response.exposure === 'NONE' ? 'FAILED_BEFORE_EGRESS' : 'OUTCOME_UNKNOWN';
-    }
-    if (response.exposure === 'NONE' && response.submitted === false) return 'FAILED_BEFORE_EGRESS';
-    if (response.exposure === 'DOM_INJECTED' && response.submitted === true
-        && response.observation === 'LOCAL_CLICK_DISPATCHED') return 'SUBMISSION_OBSERVED';
-    return 'OUTCOME_UNKNOWN';
-  }
 }

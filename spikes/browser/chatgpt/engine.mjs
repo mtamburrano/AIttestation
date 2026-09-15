@@ -1,117 +1,48 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { canonical, keys } from '../../vault/format.mjs';
-import { validateProtectedTextPayload } from '../../release/runtime.mjs';
-import { emit } from '../../release/diagnostics.mjs';
-import { CHATGPT_ADAPTER_ID, CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
-import { EngineStateStore } from './engine-store.mjs';
+import { emit } from '../../diagnostics/local.mjs';
+import { CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
+import { EngineStateStore, migrateRecordingState } from './engine-store.mjs';
 import { CHATGPT_CAPTURE_PROFILE, validateCapture } from './capture.mjs';
 
-export const ENGINE_COMMAND_PROFILE = 'pap-resident-command/1';
-export const ENGINE_EVENT_PROFILE = 'pap-resident-event/1';
-const modes = ['Off', 'Continuous', 'Sealed'];
+export const ENGINE_COMMAND_PROFILE = 'pap-resident-command/2';
+export const ENGINE_EVENT_PROFILE = 'pap-resident-event/2';
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const reject = code => { throw Object.assign(Error(code), { code }); };
-const fields = {
-  ENROLL_SCOPE: ['target'], SET_PAUSE: ['paused'], SET_DEFAULT: ['mode'],
-  SET_CONVERSATION_MODE: ['scope', 'mode'], PROTECT_AND_SEND: ['scope', 'operationId', 'text', 'editRevision'],
-  DEVELOPMENT_FREEZE: ['scope', 'operationId', 'text', 'editRevision', 'mode'],
-  CANCEL_OPERATION: ['operationId'],
-};
 
-function commandEnvelope(command) {
-  if (!command || !Object.hasOwn(fields, command.kind)) reject('INVALID_ENGINE_COMMAND');
-  keys(command, ['profile', 'runtimeEpoch', 'adapterProfile', 'commandId', 'expectedRevision', 'kind', ...fields[command.kind]]);
-  if (command.profile !== ENGINE_COMMAND_PROFILE || command.adapterProfile !== CHATGPT_ADAPTER_PROFILE
-      || !uuid(command.commandId) || !Number.isSafeInteger(command.expectedRevision) || command.expectedRevision < 0) {
-    reject('ENGINE_CONTRACT_MISMATCH');
-  }
-  if (['PROTECT_AND_SEND', 'DEVELOPMENT_FREEZE'].includes(command.kind)) {
-    if (!uuid(command.operationId) || !Number.isSafeInteger(command.editRevision) || command.editRevision < 0) reject('INVALID_OPERATION');
-    validateProtectedTextPayload({ text: command.text, attachments: [] });
-  }
-  if (command.kind === 'DEVELOPMENT_FREEZE' && !['Continuous', 'Sealed', 'Always Protect'].includes(command.mode)) reject('INVALID_MODE');
-  if (Object.hasOwn(command, 'scope') && !uuid(command.scope)) reject('INVALID_SCOPE');
-  if (command.kind === 'CANCEL_OPERATION' && !uuid(command.operationId)) reject('INVALID_OPERATION');
-  if (command.kind === 'SET_PAUSE' && typeof command.paused !== 'boolean') reject('INVALID_POLICY');
-  if (['SET_DEFAULT', 'SET_CONVERSATION_MODE'].includes(command.kind)
-      && !modes.includes(command.mode) && !(command.kind === 'SET_CONVERSATION_MODE' && command.mode === null)) reject('INVALID_POLICY');
-  return structuredClone(command);
-}
-
-// The engine alone runs the workflow. Views hold selections and render snapshots;
-// disconnecting one view cannot stop, retarget or replay an admitted operation.
+// One queue orders consent and capture. Anchor work starts only after a durable
+// save and never has permission to collect text or interact with provider Send.
 export class ResidentEngine {
   #session; #adapter; #epoch; #store; #state; #diagnostics;
-  #commands = new Map(); #control = Promise.resolve(); #writes = Promise.resolve(); #work = new Set();
-  #listeners = new Set(); #knownScopes = new Map(); #unsubscribe; #closed = false; #failed = false;
-  #operationIds = new Set(); #temporaryPreferences = new Map();
-  #captureTokens = new Map();
+  #commands = new Map(); #control = Promise.resolve(); #work = new Set();
+  #listeners = new Set(); #unsubscribe; #closed = false; #failed = false;
+  #captureTokens = new Map(); #anchorQueue = []; #anchoring = new Set();
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
     this.#session = session; this.#adapter = adapter; this.#epoch = runtimeEpoch; this.#diagnostics = diagnostics;
     this.#store = new EngineStateStore(directory, session.vault);
   }
   async init() {
-    this.#state = await this.#store.load() ?? { revision: 0,
-      preferences: { paused: false, defaultMode: 'Sealed', conversations: {} }, operations: [] };
-    const preferences = this.#state.preferences;
-    if (!Number.isSafeInteger(this.#state.revision) || this.#state.revision < 0
-        || typeof preferences?.paused !== 'boolean' || !modes.includes(preferences.defaultMode)
-        || !preferences.conversations || Array.isArray(preferences.conversations)
-        || Object.keys(preferences.conversations).length > 256 || Object.values(preferences.conversations).some(mode => !modes.includes(mode))
-        || !Array.isArray(this.#state.operations) || this.#state.operations.length > 512) reject('INVALID_ENGINE_HISTORY');
-    const durable = this.#session.runtime.snapshot();
-    for (const operation of this.#state.operations) {
-      this.#operationIds.add(operation.id);
-      const seal = durable.seals[operation.versionId], attempt = seal && durable.attempts[seal.priorAttempt];
-      operation.stopped = true; operation.restored = true;
-      operation.state = operation.observation ? 'PROMPT_SAVED' : attempt?.state ?? (seal?.cancelled ? 'CANCELLED' : 'INTERRUPTED');
-      if (operation.result) operation.result.actions = Object.fromEntries(Object.keys(operation.result.actions).map(key => [key, false]));
-    }
-    this.#session.setAuthorityCheck(version => !this.#closed && !this.#failed
-      && this.#requested(version.scope) !== 'Off' && !this.#state.preferences.paused);
-    this.#unsubscribe = this.#adapter.onChange(() => this.#adapterChanged());
-    await this.#commit(); return this;
-  }
-
-  #requested(scope) {
-    const target = this.#adapter.scopes().find(value => value.scope === scope);
-    if (target?.destination === 'new-chat') return this.#temporaryPreferences.get(scope) ?? this.#state.preferences.defaultMode;
-    const preferences = this.#state.preferences.conversations;
-    return target && Object.hasOwn(preferences, target.destination) ? preferences[target.destination] : this.#state.preferences.defaultMode;
-  }
-  #scope(scope) {
-    const target = this.#adapter.scopes().find(value => value.scope === scope);
-    if (!target) reject('SCOPE_REVOKED');
-    return target;
-  }
-  state({ surfaceDetails = false } = {}) {
-    const liveVersions = new Map(this.#session.status().versions.map(value => [value.id, value]));
-    const durable = this.#session.runtime.snapshot();
-    return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, adapterProfile: CHATGPT_ADAPTER_PROFILE,
-      revision: this.#state.revision, available: !this.#closed && !this.#failed, preferences: this.#state.preferences,
-      capabilities: this.#adapter.capabilities, targets: this.#adapter.targets({ surfaceDetails }),
-      scopes: this.#adapter.scopes().map(target => {
-        const requestedMode = this.#requested(target.scope);
-        const effectiveMode = this.#state.preferences.paused || requestedMode === 'Off' ? 'Off'
-          : this.#failed || this.#closed || (requestedMode === 'Continuous'
-            ? !this.#adapter.observationEligible(target.scope) : target.eligibility !== 'ELIGIBLE') ? 'Unavailable' : requestedMode;
-        return { ...target, requestedMode, effectiveMode,
-          editRevision: this.#session.status().scopes.find(value => value.scope === target.scope)?.editRevision ?? 0,
-          reason: this.#state.preferences.paused ? 'GLOBAL_PAUSE' : effectiveMode === 'Unavailable' ? 'CAPABILITY_UNAVAILABLE' : 'CURRENT' };
-      }),
-      operations: this.#state.operations.map(operation => {
-        const result = structuredClone(liveVersions.get(operation.versionId) ?? operation.result);
-        const seal = durable.seals[operation.versionId], attempt = seal && durable.attempts[seal.priorAttempt];
-        const state = attempt ? (attempt.state === 'DISPATCHING' ? 'OUTCOME_UNKNOWN' : attempt.state)
-          : result?.state === 'CANCELLED' ? 'CANCELLED' : operation.state;
-        if (result && attempt) result.state = state;
-        if (result && (operation.stopped || operation.restored || attempt)) {
-          result.actions = Object.fromEntries(Object.keys(result.actions).map(key => [key, false]));
-        }
-        return { ...operation, state, ...(result ? { result } : {}) };
-      }),
+    this.#state = migrateRecordingState(await this.#store.load());
+    this.#unsubscribe = this.#adapter.onChange(() => {
+      this.capturePolicy(); this.#publish();
     });
+    await this.#commit();
+    // Recovery has no engine pointer and stays OFF. Only durable observations,
+    // never old Send journals, can contribute bounded pending anchor work.
+    for (const version of this.#session.status().versions.slice(-512)) this.#queueAnchor(version);
+    return this;
+  }
+  state() {
+    const scopes = this.#adapter.scopes().map(source => ({ ...source,
+      effectiveRecording: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
+        || !this.#adapter.observationEligible(source.scope) ? 'UNAVAILABLE' : 'ON' }));
+    return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, adapterProfile: CHATGPT_ADAPTER_PROFILE,
+      revision: this.#state.revision, available: !this.#closed && !this.#failed,
+      recording: this.#state.recording, migration: this.#state.migration,
+      capabilities: this.#adapter.capabilities, scopes,
+      operations: this.#session.status().versions.slice(-512).map(version => ({ id: version.id, scope: version.scope,
+        observation: true, state: 'PROMPT_SAVED', result: version })) });
   }
   subscribe(listener) {
     if (typeof listener !== 'function' || this.#listeners.size >= 32) reject('VIEW_LIMIT');
@@ -121,266 +52,109 @@ export class ResidentEngine {
   #publish() {
     for (const listener of this.#listeners) { try { listener(this.state()); } catch {} }
   }
-  #commit() {
+  async #commit() {
     this.#state.revision++;
-    const snapshot = structuredClone(this.#state);
-    const write = this.#writes.then(() => this.#store.save(snapshot));
-    this.#writes = write.catch(() => { this.#failed = true; emit(this.#diagnostics, 'VAULT_WRITE_FAILED'); this.#publish(); });
-    return write.then(() => { this.#publish(); });
+    try { await this.#store.save(structuredClone(this.#state)); }
+    catch (error) { this.#failed = true; this.#captureTokens.clear(); emit(this.#diagnostics, 'VAULT_WRITE_FAILED'); throw error; }
+    finally { this.#publish(); }
   }
-  #track(promise) {
-    const work = promise.catch(() => { emit(this.#diagnostics, 'OPERATION_REJECTED'); })
-      .finally(() => this.#work.delete(work));
-    this.#work.add(work); return work;
+  #serial(operation) {
+    const next = this.#control.then(operation); this.#control = next.catch(() => {}); return next;
   }
-  #stopScopes(scopes, revokeCapture = true) {
-    if (revokeCapture) for (const scope of scopes) this.#captureTokens.delete(scope);
-    for (const operation of this.#state.operations) {
-      if (scopes.includes(operation.scope) && !operation.stopped && !operation.observation) operation.stopped = true;
-    }
-    for (const scope of scopes) this.#track(this.#session.interruptScope(scope).then(() => this.#syncOperations()));
-  }
-  #adapterChanged() {
-    if (this.#closed) return;
-    const current = new Map(this.#adapter.scopes().map(value => [value.scope, value.eligibility]));
-    // An authorized insertion temporarily makes its own composer nonempty.
-    // Only the pending consumed attempt's exact current guard permits this;
-    // identity, destination and permission failures still end authority.
-    for (const [scope, eligibility] of current) {
-      if (eligibility === 'TEMPORARILY_UNAVAILABLE' && this.#adapter.isScopeDispatchCurrent?.(scope)) current.set(scope, 'ELIGIBLE');
-    }
-    const ended = [...this.#knownScopes].filter(([scope, eligibility]) =>
-      eligibility === 'ELIGIBLE' && current.get(scope) !== 'ELIGIBLE').map(([scope]) => scope);
-    this.#knownScopes = current;
-    this.#stopScopes(ended, false);
-    this.capturePolicy();
-    this.#publish();
-  }
-  async #syncOperations() {
-    const versions = new Map(this.#session.status().versions.map(value => [value.id, value]));
-    const durable = this.#session.runtime.snapshot();
-    for (const operation of this.#state.operations) {
-      const result = versions.get(operation.versionId);
-      const seal = durable.seals[operation.versionId], attempt = seal && durable.attempts[seal.priorAttempt];
-      if (result) { operation.result = result;
-        operation.state = attempt ? (attempt.state === 'DISPATCHING' ? 'OUTCOME_UNKNOWN' : attempt.state) : result.state;
-      }
-    }
-    await this.#commit();
-  }
-
   capturePolicy() {
-    const scopes = this.#adapter.scopes().filter(target => !this.#closed && !this.#failed
-      && !this.#state.preferences.paused && this.#requested(target.scope) === 'Continuous'
-      && this.#adapter.observationEligible(target.scope));
-    for (const scope of this.#captureTokens.keys()) if (!scopes.some(target => target.scope === scope)) this.#captureTokens.delete(scope);
-    return scopes.map(target => {
-      if (!this.#captureTokens.has(target.scope)) this.#captureTokens.set(target.scope, randomUUID());
-      return { profile: CHATGPT_CAPTURE_PROFILE, token: this.#captureTokens.get(target.scope),
-        runtimeEpoch: this.#epoch, browserSessionId: target.browserSessionId, scope: target.scope,
-        tabId: target.tabId, windowId: target.windowId, tabEpoch: target.tabEpoch,
-        expectedUrl: target.url, destination: target.destination };
+    const sources = this.#adapter.scopes().filter(source => !this.#closed && !this.#failed && this.#state.recording
+      && this.#adapter.observationEligible(source.scope));
+    for (const scope of this.#captureTokens.keys()) if (!sources.some(source => source.scope === scope)) this.#captureTokens.delete(scope);
+    return sources.map(source => {
+      if (!this.#captureTokens.has(source.scope)) this.#captureTokens.set(source.scope, randomUUID());
+      return { profile: CHATGPT_CAPTURE_PROFILE, token: this.#captureTokens.get(source.scope),
+        runtimeEpoch: this.#epoch, browserSessionId: source.browserSessionId, scope: source.scope,
+        tabId: source.tabId, windowId: source.windowId, tabEpoch: source.tabEpoch,
+        expectedUrl: source.url, destination: source.destination };
     });
   }
-
   captureStates() {
-    return this.#adapter.scopes().map(target => ({ tabId: target.tabId,
-      state: this.#requested(target.scope) !== 'Continuous' || this.#state.preferences.paused ? 'OFF'
-        : this.#closed || this.#failed || !this.#adapter.observationEligible(target.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
+    return this.#adapter.scopes().map(source => ({ tabId: source.tabId,
+      state: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
+        || !this.#adapter.observationEligible(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
   }
-
   observe(input) {
     let observation;
     try { observation = validateCapture(input); } catch (error) { return Promise.reject(error); }
-    const run = this.#control.then(async () => {
+    return this.#serial(async () => {
       const { eventId, source } = observation;
       const policy = this.capturePolicy().find(value => value.scope === source.scope);
       if (!policy || policy.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
       this.#adapter.assertObservationSource(source);
-      const existing = this.#state.operations.find(value => value.id === eventId);
-      if (existing && !existing.observation) reject('CAPTURE_REPLAY_CONFLICT');
-      if (!existing && this.#state.operations.length >= 512) {
-        const index = this.#state.operations.findIndex(value => value.settled || value.stopped || value.restored);
-        if (index < 0) reject('OPERATION_LIMIT');
-        this.#state.operations.splice(index, 1);
-      }
+      const prior = this.#session.status().versions.some(value => value.id === eventId);
+      if (!prior && this.#anchorQueue.length + this.#anchoring.size >= 512) reject('CAPTURE_QUEUE_FULL');
       let version;
-      try { version = this.#session.observeNormal(observation); }
-      catch (error) {
+      try {
+        version = this.#session.observeNormal(observation);
+        if (!prior) await this.#commit();
+      } catch (error) {
         if (!['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
-          this.#failed = true; this.#publish();
+          this.#failed = true; this.#captureTokens.clear(); this.#publish();
         }
         emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;
       }
-      let operation = this.#state.operations.find(value => value.id === eventId);
-      const first = !operation;
-      if (first) {
-        operation = { id: eventId, scope: source.scope, target: this.#scope(source.scope), observation: true,
-          mode: 'Continuous', versionId: version.id, state: 'PROMPT_SAVED', stopped: true, restored: false, settled: true };
-        this.#state.operations.push(operation); this.#operationIds.add(eventId);
-      }
-      if (first || canonical(operation.result) !== canonical(version)) {
-        operation.result = version;
-        await this.#commit();
-      }
-      if (first) this.#track(this.#anchorObservation(version));
+      if (!prior) this.#queueAnchor(version);
+      this.#publish();
       return { profile: CHATGPT_CAPTURE_PROFILE, eventId, kind: observation.kind,
         state: 'PROMPT_SAVED', receiptId: version.descriptorId };
     });
-    this.#control = run.catch(() => {}); return run;
   }
-
-  async #anchorObservation(version) {
-    try { await this.#session.anchorManaged({ id: version.id, scope: version.scope }); }
-    catch { emit(this.#diagnostics, 'CONFIRMATION_PENDING', { operationId: version.id }); }
-    finally { await this.#syncOperations(); }
+  #queueAnchor(version) {
+    if (version.legacy || version.anchor !== 'PENDING' || version.anchorAttempts >= 3 || this.#closed
+        || this.#anchoring.has(version.id) || this.#anchorQueue.includes(version.id)) return;
+    if (this.#anchorQueue.length + this.#anchoring.size >= 512) return;
+    this.#anchorQueue.push(version.id); this.#pumpAnchors();
   }
-
+  #pumpAnchors() {
+    while (!this.#closed && this.#anchoring.size < 2 && this.#anchorQueue.length) {
+      const id = this.#anchorQueue.shift(); this.#anchoring.add(id);
+      const work = this.#session.anchorManaged({ id }).catch(() => {
+        emit(this.#diagnostics, 'CONFIRMATION_PENDING', { operationId: id });
+      }).finally(() => {
+        this.#anchoring.delete(id); this.#work.delete(work); this.#publish(); this.#pumpAnchors();
+      });
+      this.#work.add(work);
+    }
+  }
   command(input, { surface } = {}) {
     let command;
     try {
       if (!['development', 'desktop', 'extension_panel'].includes(surface)) reject('UNTRUSTED_COMMAND_ORIGIN');
-      command = commandEnvelope(input);
-      if (command.kind === 'DEVELOPMENT_FREEZE' && surface !== 'development') reject('UNTRUSTED_COMMAND_ORIGIN');
-      if (command.runtimeEpoch !== this.#epoch) reject('STALE_RUNTIME_EPOCH');
+      if (input?.kind !== 'SET_RECORDING') reject('INVALID_ENGINE_COMMAND');
+      keys(input, ['profile', 'runtimeEpoch', 'adapterProfile', 'commandId', 'expectedRevision', 'kind', 'enabled']);
+      if (input.profile !== ENGINE_COMMAND_PROFILE || input.adapterProfile !== CHATGPT_ADAPTER_PROFILE
+          || !uuid(input.commandId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0
+          || typeof input.enabled !== 'boolean') reject('ENGINE_CONTRACT_MISMATCH');
+      if (input.runtimeEpoch !== this.#epoch) reject('STALE_RUNTIME_EPOCH');
+      command = structuredClone(input);
     } catch (error) { return Promise.reject(error); }
-    const run = this.#control.then(() => this.#command(command));
-    this.#control = run.catch(() => {}); return run;
-  }
-  async #command(command) {
-    if (this.#closed || this.#failed) reject('ENGINE_UNAVAILABLE');
-    const fingerprint = createHash('sha256').update(canonical(command)).digest('hex');
-    const prior = this.#commands.get(command.commandId);
-    if (prior) {
-      if (prior.fingerprint !== fingerprint) reject('COMMAND_REPLAY_CONFLICT');
-      if (!prior.ack) reject('COMMAND_INTERRUPTED');
-      return structuredClone(prior.ack);
-    }
-    if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
-    if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
-    let enrolled, operation;
-    const allScopes = () => this.#adapter.scopes().map(value => value.scope);
-    switch (command.kind) {
-      case 'ENROLL_SCOPE': {
-        keys(command.target, ['adapterId', 'adapterEpoch', 'tabId', 'windowId', 'tabEpoch', 'destination']);
-        const target = this.#adapter.targets().find(value => value.tabId === command.target.tabId);
-        if (!target || command.target.adapterId !== CHATGPT_ADAPTER_ID
-            || Object.keys(command.target).some(key => command.target[key] !== target[key])) reject('ADAPTER_TARGET_MISMATCH');
-        enrolled = this.#session.enroll(command.target); break;
+    return this.#serial(async () => {
+      if (this.#closed || this.#failed) reject('ENGINE_UNAVAILABLE');
+      const fingerprint = createHash('sha256').update(canonical(command)).digest('hex');
+      const prior = this.#commands.get(command.commandId);
+      if (prior) {
+        if (prior.fingerprint !== fingerprint) reject('COMMAND_REPLAY_CONFLICT');
+        return structuredClone(prior.ack);
       }
-      case 'SET_PAUSE':
-        if (command.paused !== this.#state.preferences.paused) {
-          this.#state.preferences.paused = command.paused;
-          if (command.paused) this.#stopScopes(allScopes());
-        }
-        break;
-      case 'SET_DEFAULT': {
-        const before = new Map(allScopes().map(scope => [scope, this.#requested(scope)]));
-        this.#state.preferences.defaultMode = command.mode;
-        this.#stopScopes(allScopes().filter(scope => before.get(scope) !== this.#requested(scope))); break;
-      }
-      case 'SET_CONVERSATION_MODE': {
-        const target = this.#scope(command.scope), preferences = this.#state.preferences.conversations;
-        if (target.destination === 'new-chat') {
-          const before = this.#requested(command.scope);
-          if (command.mode === null) this.#temporaryPreferences.delete(command.scope);
-          else this.#temporaryPreferences.set(command.scope, command.mode);
-          if (before !== this.#requested(command.scope)) this.#stopScopes([command.scope]);
-          break;
-        }
-        if (!Object.hasOwn(preferences, target.destination) && Object.keys(preferences).length >= 256) reject('PREFERENCE_LIMIT');
-        const before = this.#requested(command.scope);
-        if (command.mode === null) delete preferences[target.destination];
-        else Object.defineProperty(preferences, target.destination, { value: command.mode, configurable: true, enumerable: true, writable: true });
-        if (before !== this.#requested(command.scope)) this.#stopScopes(this.#adapter.scopes()
-          .filter(value => value.destination === target.destination).map(value => value.scope));
-        break;
-      }
-      case 'PROTECT_AND_SEND':
-      case 'DEVELOPMENT_FREEZE': {
-        const target = this.#scope(command.scope);
-        if (this.#state.preferences.paused || this.#requested(command.scope) === 'Off') reject('PROTECTION_PAUSED');
-        this.#adapter.assertEligible(command.scope);
-        if (this.#operationIds.has(command.operationId)) reject('OPERATION_ALREADY_EXISTS');
-        if (command.kind === 'PROTECT_AND_SEND' && this.#state.operations.some(value => value.scope === command.scope
-            && !value.observation && !value.settled && !value.stopped && !value.restored)) reject('OPERATION_IN_PROGRESS');
-        if (this.#state.operations.length >= 512) {
-          const index = this.#state.operations.findIndex(value => value.stopped || value.restored
-            || ['SUBMISSION_OBSERVED', 'OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS', 'CANCELLED'].includes(value.state));
-          if (index < 0) reject('OPERATION_LIMIT');
-          this.#state.operations.splice(index, 1);
-        }
-        operation = { id: command.operationId, scope: command.scope, target, editRevision: command.editRevision,
-          mode: command.mode ?? 'Sealed', state: 'ADMITTED', versionId: null, stopped: false, restored: false, settled: false };
-        this.#operationIds.add(command.operationId);
-        this.#state.operations.push(operation); break;
-      }
-      case 'CANCEL_OPERATION': {
-        operation = this.#state.operations.find(value => value.id === command.operationId);
-        if (!operation || operation.restored || operation.stopped) reject('OPERATION_UNAVAILABLE');
-        if (operation.versionId) {
-          const version = this.#session.status().versions.find(value => value.id === operation.versionId);
-          const durable = this.#session.runtime.snapshot(), seal = durable.seals[operation.versionId];
-          const attempt = seal && durable.attempts[seal.priorAttempt];
-          // Live outcomes and the release journal can precede engine snapshots.
-          // Only a still-running consumed attempt can be interrupted; its
-          // eventual outcome must retain any possible exposure.
-          if (!version || !seal || version.state === 'CANCELLED' || seal.cancelled || version.attempt
-              || (seal.priorAttempt && (attempt?.state !== 'DISPATCHING' || operation.settled))) reject('OPERATION_UNAVAILABLE');
-        } else if (operation.settled) reject('OPERATION_UNAVAILABLE');
-        operation.stopped = true;
-        if (operation.versionId) this.#track(this.#session.interruptVersion(operation.versionId).then(() => this.#syncOperations()));
-        break;
-      }
-    }
-    this.#commands.set(command.commandId, { fingerprint });
-    await this.#commit();
-    const ack = { profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, revision: this.#state.revision,
-      commandId: command.commandId, ...(enrolled ? { scope: enrolled.scope } : {}),
-      ...(operation ? { operationId: operation.id } : {}) };
-    this.#commands.set(command.commandId, { fingerprint, ack });
-    if (['PROTECT_AND_SEND', 'DEVELOPMENT_FREEZE'].includes(command.kind)) {
-      this.#track(this.#run(operation, command.text, command.kind === 'PROTECT_AND_SEND'));
-    }
-    return structuredClone(ack);
-  }
-
-  async #run(operation, text, autoRelease) {
-    try {
-      if (operation.stopped || this.#closed) { operation.state = 'INTERRUPTED'; return; }
-      const version = await this.#session.freeze({ text, attachments: [], mode: operation.mode,
-        scope: operation.scope, editRevision: operation.editRevision });
-      operation.versionId = version.id; operation.result = version; operation.state = version.state;
+      if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
+      if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
+      if (this.#state.recording !== command.enabled) this.#captureTokens.clear();
+      this.#state.recording = command.enabled;
+      // Publish revocation immediately; acknowledge the setting only after fsync.
+      this.#publish();
       await this.#commit();
-      if (operation.stopped || this.#closed) { await this.#session.interruptVersion(version.id); return; }
-      const request = { id: version.id, scope: operation.scope, currentText: text, attachments: [], editRevision: operation.editRevision };
-      const confirmed = await this.#session.anchorManaged(request);
-      operation.result = confirmed; operation.state = confirmed.state; await this.#commit();
-      if (operation.stopped || this.#closed) { await this.#session.interruptVersion(version.id); return; }
-      if (autoRelease && confirmed.state === 'SEALED_NOT_SENT') await this.#session.release(request);
-    } catch {
-      // The durable release journal is authoritative even if recording the
-      // outcome or publishing a view update failed after possible exposure.
-      const seal = this.#session.runtime.snapshot().seals[operation.versionId];
-      const attempt = seal && this.#session.runtime.snapshot().attempts[seal.priorAttempt];
-      operation.state = attempt ? (attempt.state === 'DISPATCHING' ? 'OUTCOME_UNKNOWN' : attempt.state)
-        : operation.stopped ? 'INTERRUPTED' : 'NEEDS_ATTENTION';
-      emit(this.#diagnostics, 'OPERATION_REJECTED', operation.versionId ? { operationId: operation.versionId } : {});
-    } finally {
-      operation.settled = true;
-      const version = this.#session.status().versions.find(value => value.id === operation.versionId);
-      if (version) {
-        operation.result = version;
-        if (!['OUTCOME_UNKNOWN', 'NEEDS_ATTENTION', 'INTERRUPTED'].includes(operation.state)) operation.state = version.state;
-      }
-      await this.#commit();
-    }
+      const ack = { profile: ENGINE_EVENT_PROFILE, commandId: command.commandId, runtimeEpoch: this.#epoch,
+        revision: this.#state.revision, recording: this.#state.recording };
+      this.#commands.set(command.commandId, { fingerprint, ack });
+      emit(this.#diagnostics, command.enabled ? 'RECORDING_ENABLED' : 'RECORDING_DISABLED');
+      return structuredClone(ack);
+    });
   }
-  async drain() { await this.#control; while (this.#work.size) await Promise.all(this.#work); await this.#writes; }
-  stop() {
-    if (this.#closed) return;
-    this.#closed = true; this.#unsubscribe?.();
-    this.#stopScopes(this.#session.status().scopes.map(value => value.scope));
-    this.#listeners.clear();
-  }
+  async drain() { await this.#control; while (this.#work.size) await Promise.all(this.#work); }
+  stop() { this.#closed = true; this.#captureTokens.clear(); this.#anchorQueue = []; this.#unsubscribe?.(); this.#publish(); }
 }

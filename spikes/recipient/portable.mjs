@@ -3,6 +3,8 @@ import { publicProofDigest, verifyDisclosure } from '../vault/records.mjs';
 import { verifyAnchor } from '../anchor/verifier.mjs';
 import { verifyInclusion } from '../anchor/merkle.mjs';
 import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from './normal-observation.mjs';
+import { LEGACY_NORMAL_OBSERVATION_PROFILE, validateLegacyNormalObservation } from './legacy-observation.mjs';
+const isNormal = value => [NORMAL_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value?.profile);
 
 export const PORTABLE_PROFILE = 'pap-portable-evidence/1';
 export const RECIPIENT_LIMITS = Object.freeze({ wire: 16 * 2 ** 20, total: 12 * 2 ** 20,
@@ -82,18 +84,19 @@ function normalize(bundle) {
 }
 
 export function signedObservation(record, bytes, checked) {
-  if (record.manifest?.profile !== 'pap-local-record/1' || record.manifest.type !== 'observation'
+  if (!['pap-local-record/1', 'pap-local-record/2'].includes(record.manifest?.profile) || record.manifest.type !== 'observation'
       || checked.structure !== 'VALID' || checked.integrity !== 'VALID' || checked.keyAttribution !== 'SIGNATURE_VALID' || !bytes) return null;
   try {
     const value = parseCanonical(bytes, LIMITS.manifest);
     return value.profile === 'pap-chatgpt-observation/1' ? value
-      : value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation(value) : null;
+      : value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation(value)
+        : value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE ? validateLegacyNormalObservation(value) : null;
   } catch { return null; }
 }
 
 export function linksNormalMessage(record, observation, targetRecord, targetObservation) {
-  return observation?.profile === NORMAL_OBSERVATION_PROFILE && observation.kind === 'normal-message-observed'
-    && targetObservation?.profile === NORMAL_OBSERVATION_PROFILE && targetObservation.kind === 'normal-send-intent'
+  return isNormal(observation) && observation.kind === 'normal-message-observed'
+    && isNormal(targetObservation) && targetObservation.profile === observation.profile && targetObservation.kind === 'normal-send-intent'
     && observation.eventId === targetObservation.eventId && observation.recordDigest === targetRecord?.recordDigest
     && record.manifest.signingPublicKey === targetRecord?.manifest.signingPublicKey
     && canonical(observation.source) === canonical(targetObservation.source);
@@ -199,7 +202,7 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
   disclosure.records.forEach((record, index) => {
     const observation = observations.get(record.recordDigest);
     const target = byDigest.get(observation?.recordDigest);
-    if (observation?.profile === NORMAL_OBSERVATION_PROFILE) {
+    if (isNormal(observation)) {
       if (observation.kind === 'normal-send-intent') {
         const text = disclosure.records.find(value => value.manifest?.eventId === observation.textRecord);
         const checkedText = text && byDigest.get(text.recordDigest);
@@ -231,7 +234,7 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
       target.localAssertions.push({ kind: observation.kind, anchor: observation.report?.anchor ?? 'UNKNOWN',
         timestamp: observation.report?.timestamp ?? 'UNKNOWN', assurance: 'CLIENT_ASSERTION_ONLY' });
     }
-    if (observation.kind === 'release-outcome' && observations.get(target.recordDigest)?.profile !== NORMAL_OBSERVATION_PROFILE) {
+    if (observation.kind === 'release-outcome' && !isNormal(observations.get(target.recordDigest))) {
       const releaseControl = observation.mode === 'Continuous' && observation.releaseClass === 'RETROSPECTIVE_CONTINUOUS'
         ? 'OBSERVED_ONLY' : ['Sealed', 'Always Protect'].includes(observation.mode)
           && observation.releaseClass === 'PRE_DISCLOSURE_PROTECTED' && observation.state === 'SUBMISSION_OBSERVED'

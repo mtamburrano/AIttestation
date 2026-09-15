@@ -133,3 +133,12 @@ rollback resistance. Independent crypto/storage review is required.
 
 Serialization follows [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785.html).
 Cryptographic primitives use [Node.js crypto](https://nodejs.org/api/crypto.html).
+
+## ON/OFF record compatibility
+
+New local writes use `pap-local-record/2` with LOCAL_RECORD mode and
+local_evidence_store boundary. Commitment/signature domains, encrypted storage,
+key identities and recovery format stay fixed. Readers continue authenticating
+`pap-poc/1` and `pap-local-record/1` without rewriting old bytes or labels.
+Recovered evidence does not imply recording consent; a restored installation
+starts OFF. Legacy workflow journals remain inert encrypted history.

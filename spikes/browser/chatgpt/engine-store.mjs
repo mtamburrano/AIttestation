@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { canonical, parseCanonical } from '../../vault/format.mjs';
 
 // An OS-released SQLite lock precedes all engine state loading. A second process
-// cannot clear grants or create a second dispatcher; a crash needs no PID reaping.
+// cannot create a second recorder; a crash needs no PID reaping.
 export function lockResidentEngine(directory) {
   const path = join(directory, 'resident-lock.sqlite');
   try { closeSync(openSync(path, 'wx', 0o600)); } catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -30,11 +30,10 @@ export class EngineStateStore {
     const record = this.vault.inspect().records.find(value => value.manifest.eventId === id);
     if (!record) throw Error('ENGINE_HISTORY_MISSING');
     const decoded = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest), 16 * 1024 * 1024);
-    if (decoded.profile !== 'pap-resident-state/1') throw Error('UNSUPPORTED_ENGINE_HISTORY');
-    return decoded.state;
+    return { profile: decoded.profile, state: decoded.state };
   }
   async save(state) {
-    const record = this.vault.capture(Buffer.from(canonical({ profile: 'pap-resident-state/1', state })));
+    const record = this.vault.capture(Buffer.from(canonical({ profile: 'pap-resident-state/2', state })));
     const temporary = join(this.directory, `engine-pointer-${randomUUID()}.tmp`);
     try {
       const file = await open(temporary, 'wx', 0o600);
@@ -44,4 +43,31 @@ export class EngineStateStore {
       try { await directory.sync(); } finally { await directory.close(); }
     } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   }
+}
+
+// Only the exact known legacy global configuration can carry consent forward.
+// Missing pointers (including restored installations) and future formats are OFF.
+export function migrateRecordingState(snapshot) {
+  const fresh = reason => ({ revision: 0, recording: false, migration: reason });
+  if (!snapshot) return fresh('NEW_OR_RECOVERED');
+  const state = snapshot.state;
+  if (snapshot.profile === 'pap-resident-state/2') {
+    if (!state || Object.keys(state).sort().join(',') !== 'migration,recording,revision'
+        || !Number.isSafeInteger(state.revision) || state.revision < 0 || state.revision >= Number.MAX_SAFE_INTEGER
+        || typeof state.recording !== 'boolean'
+        || !['NEW_OR_RECOVERED', 'LEGACY_GLOBAL', 'EXPLICIT_OPT_IN_REQUIRED'].includes(state.migration)) {
+      return fresh('EXPLICIT_OPT_IN_REQUIRED');
+    }
+    return structuredClone(state);
+  }
+  const preferences = state?.preferences;
+  const unambiguous = snapshot.profile === 'pap-resident-state/1'
+    && state && Object.keys(state).sort().join(',') === 'operations,preferences,revision'
+    && Number.isSafeInteger(state.revision) && state.revision >= 0 && Array.isArray(state.operations)
+    && preferences && Object.keys(preferences).sort().join(',') === 'conversations,defaultMode,paused'
+    && preferences.paused === false && preferences.defaultMode === 'Continuous'
+    && preferences.conversations && typeof preferences.conversations === 'object'
+    && !Array.isArray(preferences.conversations) && Object.keys(preferences.conversations).length === 0;
+  return { revision: 0, recording: Boolean(unambiguous),
+    migration: unambiguous ? 'LEGACY_GLOBAL' : 'EXPLICIT_OPT_IN_REQUIRED' };
 }

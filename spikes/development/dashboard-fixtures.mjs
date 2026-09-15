@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { continuousFixture, until } from '../../test/continuous-fixture.mjs';
+import { recordingFixture, until } from '../../test/recording-fixture.mjs';
 import { InstallationLifecycle } from '../distribution/lifecycle.mjs';
 import { verifyPortable } from '../recipient/portable.mjs';
 
@@ -9,7 +9,7 @@ export async function dashboardProductFixture(directory, scenario, diagnostics, 
   const installation = await new InstallationLifecycle({ supportDirectory: join(directory, 'installation'),
     chromeSupportDirectory: join(directory, 'chrome'), browserHost: join(directory, 'synthetic-host'), sequence: 1 }).init();
   await installation.enable();
-  const f = await continuousFixture(directory, { diagnostics, network, installation });
+  const f = await recordingFixture(directory, { diagnostics, network, installation });
   const api = async (path, data = {}) => {
     const url = new URL(f.runtime.dashboardURL);
     const response = await fetch(new URL(path, url), { method: 'POST',
@@ -17,18 +17,18 @@ export async function dashboardProductFixture(directory, scenario, diagnostics, 
     check(response.ok); return response.json();
   };
   try {
-    await f.mode('Continuous'); f.send('SYNTHETIC_DASHBOARD_PROMPT');
+    await f.recording(true); f.send('SYNTHETIC_DASHBOARD_PROMPT');
     await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
     let state = await api('/dashboard/state');
     check(state.history.counts.prompts === 1 && state.integration.healthy);
     const id = state.history.prompts[0].receiptId;
     check((await api('/close')).engine === 'RUNNING');
-    await f.command('SET_PAUSE', { paused: true });
-    state = await api('/dashboard/state'); check(state.integration.code === 'PAUSED');
+    await f.command('SET_RECORDING', { enabled: false });
+    state = await api('/dashboard/state'); check(state.integration.code === 'OFF');
     await api('/installation/disable');
     check(f.runtime.engine.state().scopes.length === 0 && f.runtime.browserState() === null);
     await api('/installation/enable');
-    await f.command('SET_PAUSE', { paused: false });
+    await f.command('SET_RECORDING', { enabled: true });
     state = await api('/dashboard/state'); check(state.integration.code === 'DISCONNECTED');
     check(state.history.counts.prompts === 1);
     const preview = await api('/receipts/preview', { ids: [id] });

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { continuousFixture, until } from './continuous-fixture.mjs';
+import { recordingFixture, until } from './recording-fixture.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
-import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
+import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 
 const exact = 'SYNTHETIC_NORMAL_e\u0301\r\n☕  ';
@@ -11,7 +11,7 @@ async function fixture(t, options) {
   const root = await mkdtemp('/private/tmp/attestamp-capture-test-');
   let f;
   t.after(async () => { await f?.close(); await rm(root, { recursive: true, force: true }); });
-  f = await continuousFixture(root, options); return f;
+  f = await recordingFixture(root, options); return f;
 }
 const saved = f => f.runtime.session.receipts.list();
 const preview = (f, id = saved(f)[0].id) => {
@@ -19,9 +19,22 @@ const preview = (f, id = saved(f)[0].id) => {
   return { value, bytes: f.runtime.session.receipts.export(value.previewId) };
 };
 
+test('ON follows existing and newly opened duplicate-conversation tabs across windows without a control command', async t => {
+  const f = await fixture(t); await f.recording(true);
+  f.send('EXISTING_WINDOW_ONE', { id: 17 }); f.send('EXISTING_WINDOW_TWO', { id: 18 });
+  await until(() => saved(f).length === 2);
+  const duplicate = await f.addTab(19, { windowId: 3, active: false, url: 'https://chatgpt.com/c/fixture-17' });
+  assert.equal(duplicate.destination, 'conversation:fixture-17');
+  assert.notEqual(duplicate.scope, f.scopes.get(17));
+  f.send('NEW_DUPLICATE_WINDOW', { id: 19 });
+  await until(() => saved(f).length === 3); await f.runtime.engine.drain();
+  assert.deepEqual(new Set(f.sources.map(source => source.windowId)), new Set([1, 2, 3]));
+  assert.equal(f.anchorCalls, 3); assert.equal(f.releases.length, 0); assert.equal(f.prevention, 0);
+});
+
 test('normal user sends retain exact bytes with retrospective source assertions and no release authority', async t => {
   const diagnostics = new LocalDiagnostics(), f = await fixture(t, { diagnostics });
-  await f.mode('Continuous');
+  await f.recording(true);
   f.send(exact); f.appear(exact);
   await until(() => f.results.some(value => value.result.kind === 'message-observed'));
   await f.runtime.engine.drain();
@@ -37,8 +50,7 @@ test('normal user sends retain exact bytes with retrospective source assertions 
   assert.equal(target.anchor, 'INDETERMINATE');
   assert.equal(f.anchorCalls, 1); assert.equal(f.confirmed, 1);
   assert.equal(f.releases.length, 0); assert.equal(f.prevention, 0);
-  assert.deepEqual(f.runtime.session.runtime.snapshot().seals, {});
-  assert.deepEqual(f.runtime.session.runtime.snapshot().attempts, {});
+  assert.equal(f.runtime.session.runtime, undefined);
   for (const page of f.pages.values()) { assert.equal(page.clicks(), 0); assert.equal(page.injections(), 0); }
   const events = JSON.stringify(diagnostics.preview().report);
   assert.ok(!events.includes(exact)); assert.ok(!events.includes('conversation:fixture-17'));
@@ -46,7 +58,7 @@ test('normal user sends retain exact bytes with retrospective source assertions 
 });
 
 test('equal-text genuine sends are distinct while duplicate native delivery is idempotent', async t => {
-  const f = await fixture(t); await f.mode('Continuous');
+  const f = await fixture(t); await f.recording(true);
   f.send(exact); await until(() => f.results.some(value => value.result.kind === 'send-intent'));
   const first = f.deliveries[0]; f.replay(first); f.replay(first);
   await until(() => f.results.length >= 3);
@@ -64,7 +76,7 @@ test('equal-text genuine sends are distinct while duplicate native delivery is i
 });
 
 test('typing, hydration, synthetic clicks, IME commit and alternate Enter chords create no prompt events', async t => {
-  const f = await fixture(t); await f.mode('Continuous'); const page = f.pages.get(17);
+  const f = await fixture(t); await f.recording(true); const page = f.pages.get(17);
   page.text = exact; f.appear(exact); page.changed();
   f.send(exact, { trusted: false });
   for (const event of [{ shiftKey: true }, { ctrlKey: true }, { metaKey: true }, { altKey: true },
@@ -77,27 +89,23 @@ test('typing, hydration, synthetic clicks, IME commit and alternate Enter chords
   assert.equal(f.deliveries[0].observation.inputMethod, 'enter'); assert.equal(f.prevention, 0);
 });
 
-test('Off, unrelated conversations and stale document identities cannot capture or mix prompts', async t => {
+test('ON automatically follows multiple tabs and source navigation cannot mix prompts', async t => {
   const f = await fixture(t);
-  f.send('OFF'); f.send('UNRELATED', { id: 18 });
-  await f.mode('Continuous'); f.send('first-tab'); f.send('unconsented', { id: 18 });
-  await until(() => saved(f).length === 1);
-  await f.mode('Continuous', 18);
-  f.send('another-first'); f.send('second-tab', { id: 18 });
-  await until(() => saved(f).length === 3);
-  assert.deepEqual(saved(f).map(value => preview(f, value.id).value.texts[0].preview).sort(), ['another-first', 'first-tab', 'second-tab']);
+  f.send('OFF'); f.send('ALSO_OFF', { id: 18 });
+  await f.recording(true); f.send('first-tab'); f.send('second-tab', { id: 18 });
+  await until(() => saved(f).length === 2);
+  assert.deepEqual(saved(f).map(value => preview(f, value.id).value.texts[0].preview).sort(), ['first-tab', 'second-tab']);
   const old = f.deliveries.find(value => value.observation.source.tabId === 17);
   f.navigate(); await until(() => !f.runtime.adapter.scopes().some(value => value.scope === f.scopes.get(17)));
-  const before = f.results.length;
-  f.replay(old); await until(() => f.results.length > before);
+  const before = f.results.length; f.replay(old);
+  await until(() => f.results.length > before);
   assert.equal(f.results.at(-1).result.state, 'RECORDING_UNAVAILABLE');
-  f.send('still-second', { id: 18 }); await until(() => saved(f).length === 4);
-  assert.ok(f.sources.filter(value => value.tabId === 18).every(value => value.destination === 'conversation:fixture-18'));
+  f.send('still-second', { id: 18 }); await until(() => saved(f).length === 3);
   assert.equal(f.releases.length, 0);
 });
 
 test('lost acknowledgement retries evidence delivery once without repeating the user send', async t => {
-  const f = await fixture(t, { dropAck: true }); await f.mode('Continuous');
+  const f = await fixture(t, { dropAck: true }); await f.recording(true);
   f.send(exact);
   await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
   await f.runtime.engine.drain();
@@ -109,7 +117,7 @@ test('lost acknowledgement retries evidence delivery once without repeating the 
 
 test('vault and key failures never announce a save or block the provider action', async t => {
   for (const fault of ['storageFault', 'keyFault']) await t.test(fault, async t => {
-    const f = await fixture(t); await f.mode('Continuous'); f[fault](); f.send(exact);
+    const f = await fixture(t); await f.recording(true); f[fault](); f.send(exact);
     await until(() => /gap|unavailable/.test(f.pages.get(17).feedback));
     assert.equal(saved(f).length, 0);
     assert.ok(!f.results.some(value => value.result.state === 'PROMPT_SAVED'));
@@ -118,12 +126,12 @@ test('vault and key failures never announce a save or block the provider action'
   });
 });
 
-test('bridge loss and global pause revoke capture tokens without restoring them on resume', async t => {
-  const f = await fixture(t); await f.mode('Continuous');
+test('bridge loss and OFF revoke capture tokens without restoring them on resume', async t => {
+  const f = await fixture(t); await f.recording(true);
   f.send(exact); await until(() => f.results.length > 0);
   const old = f.deliveries[0];
-  await f.command('SET_PAUSE', { paused: true });
-  await f.command('SET_PAUSE', { paused: false });
+  await f.command('SET_RECORDING', { enabled: false });
+  await f.command('SET_RECORDING', { enabled: true });
   await f.refresh();
   const before = f.results.length; f.replay(old);
   await until(() => f.results.length > before);
@@ -136,7 +144,7 @@ test('bridge loss and global pause revoke capture tokens without restoring them 
 
 test('supported textarea and paragraph projections preserve edits and explicit line boundaries', async t => {
   for (const textarea of [false, true]) await t.test(String(textarea), async t => {
-    const f = await fixture(t, { textarea }); await f.mode('Continuous'); const page = f.pages.get(17);
+    const f = await fixture(t, { textarea }); await f.recording(true); const page = f.pages.get(17);
     page.text = 'obsolete draft';
     const text = textarea ? exact : 'first e\u0301\nsecond  \n';
     if (textarea) page.text = text;
@@ -152,7 +160,7 @@ test('supported textarea and paragraph projections preserve edits and explicit l
 
 test('unsupported rich content, attachments and ambiguous controls report gaps without inferred events', async t => {
   for (const drift of ['attachment', 'rich', 'hidden', 'ambiguous']) await t.test(drift, async t => {
-    const f = await fixture(t); await f.mode('Continuous'); const page = f.pages.get(17); page.text = exact;
+    const f = await fixture(t); await f.recording(true); const page = f.pages.get(17); page.text = exact;
     if (drift === 'attachment') page.attachments = true;
     if (drift === 'rich') page.editor.replaceChildren(new page.Element('IMG'));
     if (drift === 'hidden') page.editor.visible = false;
@@ -163,7 +171,7 @@ test('unsupported rich content, attachments and ambiguous controls report gaps w
 });
 
 test('hydrated message IDs and ambiguous equal-text appearances cannot supply message assertions', async t => {
-  const f = await fixture(t); await f.mode('Continuous'); const page = f.pages.get(17);
+  const f = await fixture(t); await f.recording(true); const page = f.pages.get(17);
   f.appear(exact, 17, 'old-message');
   f.send(exact); await until(() => f.results.some(value => value.result.kind === 'send-intent'));
   page.messages = []; f.appear(exact, 17, 'old-message');
@@ -175,7 +183,7 @@ test('hydrated message IDs and ambiguous equal-text appearances cannot supply me
 });
 
 test('new observations survive restart and cannot inherit a fabricated legacy release assertion', async t => {
-  const f = await fixture(t); await f.mode('Continuous'); f.send(exact); f.appear(exact);
+  const f = await fixture(t); await f.recording(true); f.send(exact); f.appear(exact);
   await until(() => f.results.some(value => value.result.kind === 'message-observed')); await f.runtime.engine.drain();
   const descriptor = f.runtime.engine.state().operations[0].result;
   const bytes = preview(f).bytes, before = verifyPortable(bytes);
@@ -188,11 +196,11 @@ test('new observations survive restart and cannot inherit a fabricated legacy re
   assert.equal(saved(f).length, 1); assert.equal(f.runtime.engine.state().scopes.length, 0);
   assert.equal(f.runtime.session.status().versions[0].anchor, 'SOURCE_CORROBORATED');
   assert.equal(f.runtime.engine.state().operations[0].state, 'PROMPT_SAVED');
-  assert.deepEqual(f.runtime.session.runtime.snapshot().attempts, {});
+  assert.equal(f.runtime.session.runtime, undefined);
 });
 
 test('an older delayed save cannot hide a newer recording gap', async t => {
-  const f = await fixture(t, { dropAck: true }); await f.mode('Continuous');
+  const f = await fixture(t, { dropAck: true }); await f.recording(true);
   f.send(exact); await until(() => f.results.length === 1);
   const page = f.pages.get(17); page.editor.readOnly = true;
   f.send(undefined); assert.match(page.feedback, /gap/);
@@ -204,12 +212,12 @@ test('an older delayed save cannot hide a newer recording gap', async t => {
 
 test('interruption between exact bytes, signed intent and engine metadata never returns premature success', async t => {
   for (const stage of ['intent', 'engine-state']) await t.test(stage, async t => {
-    const f = await fixture(t); await f.mode('Continuous');
+    const f = await fixture(t); await f.recording(true);
     const vault = f.runtime.session.vault, capture = vault.capture.bind(vault);
     vault.capture = (bytes, options) => {
       let value; try { value = JSON.parse(bytes); } catch {}
       if (stage === 'intent' && value?.kind === 'normal-send-intent'
-          || stage === 'engine-state' && value?.profile === 'pap-resident-state/1' && value.state.operations.some(item => item.observation)) {
+          || stage === 'engine-state' && value?.profile === 'pap-resident-state/2') {
         throw Error('SYNTHETIC_DURABILITY_INTERRUPTION');
       }
       return capture(bytes, options);
@@ -224,7 +232,7 @@ test('interruption between exact bytes, signed intent and engine metadata never 
 });
 
 test('keyboard activation and synthesized follow-on clicks represent one intent per genuine action', async t => {
-  const f = await fixture(t); await f.mode('Continuous'); const page = f.pages.get(17);
+  const f = await fixture(t); await f.recording(true); const page = f.pages.get(17);
   f.send(exact, { method: 'enter' });
   page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 0 });
   await until(() => saved(f).length === 1);
@@ -236,7 +244,7 @@ test('keyboard activation and synthesized follow-on clicks represent one intent 
 });
 
 test('UTF-8 BOM and the maximum escaped payload survive native framing and restart exactly', async t => {
-  const f = await fixture(t, { textarea: true }); await f.mode('Continuous');
+  const f = await fixture(t, { textarea: true }); await f.recording(true);
   const text = '\uFEFF' + '\0'.repeat(256 * 1024 - 3);
   f.send(text); await until(() => saved(f).length === 1); await f.runtime.engine.drain();
   const receipt = saved(f)[0], readText = () => {
@@ -248,5 +256,5 @@ test('UTF-8 BOM and the maximum escaped payload survive native framing and resta
   f.send('\0'.repeat(256 * 1024 + 1));
   assert.match(f.pages.get(17).feedback, /gap/); assert.equal(f.deliveries.length, 1);
   await f.restart(); assert.deepEqual(readText(), Buffer.from(text));
-  assert.equal(f.runtime.session.status().versions[0].digest, f.runtime.engine.state().operations[0].result.digest);
+  assert.equal(f.runtime.session.status().versions[0].recordDigest, f.runtime.engine.state().operations[0].result.recordDigest);
 });

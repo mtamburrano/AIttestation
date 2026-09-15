@@ -1,142 +1,98 @@
-# Resident engine and independent scopes
+# Resident ON/OFF engine
 
-The packaged runtime owns one `ResidentEngine`, protection session, encrypted
-vault and authenticated browser connection. A SQLite exclusive lock in the
-explicit support directory prevents a second engine from loading release state
-or acquiring dispatch authority. The operating system releases the lock on crash.
-Views can read or subscribe to state; detaching a subscriber or closing the
-development page does not stop the engine. Explicit app exit drains interrupted
-work and closes the bridge and vault.
+One resident engine owns global recording consent, source-bound capture,
+encrypted evidence, anchoring and history. Closing the sidebar or dashboard
+does not stop it. Explicit app exit revokes new capture and drains active work.
 
-## Contracts and admission
+## Versioned controls
 
-`POST /engine/state` returns `pap-resident-event/1`: current runtime epoch,
-revision, preferences, validated capabilities, targets, enrolled scopes and
-recent operations. `POST /engine/command` accepts `pap-resident-command/1`.
-Both retain the product API's random bearer, exact Origin and Host checks.
-The server supplies the trusted command origin; no request field can select it.
-Content-script messages cannot invoke these commands. The internal surface
-contract reserves desktop and privileged extension-panel origins for their own
-authenticated integrations.
+`POST /engine/state` returns `pap-resident-event/2`: runtime epoch, adapter
+profile, revision, recording preference, migration reason, validated capabilities,
+current sources and recent saved observations. `POST /engine/command` admits
+only `pap-resident-command/2` with these exact fields:
 
-Each command has `profile`, `runtimeEpoch`, `adapterProfile`, a UUID `commandId`,
-`expectedRevision`, `kind`, and exactly the fields listed below. Unknown fields,
-old epochs, mismatched adapters and stale revisions are rejected.
+| Field | Value |
+| --- | --- |
+| profile | pap-resident-command/2 |
+| runtimeEpoch | Current engine UUID |
+| adapterProfile | pap-chatgpt-chrome/6 |
+| commandId | Fresh UUID, retained for identical transport retry |
+| expectedRevision | Displayed nonnegative integer revision |
+| kind | SET_RECORDING |
+| enabled | Boolean |
 
-| Kind | Additional fields | Behavior |
-| --- | --- | --- |
-| `ENROLL_SCOPE` | `target` | Enroll precisely the advertised adapter/session/tab/window/document/destination |
-| `SET_PAUSE` | `paused` | Set the global override; pausing ends pending authority |
-| `SET_DEFAULT` | `mode` | Set the integration default to Off, Continuous or Sealed |
-| `SET_CONVERSATION_MODE` | `scope`, `mode` | Override the conversation, or use `null` to inherit |
-| `PROTECT_AND_SEND` | `scope`, `operationId`, `text`, `editRevision` | Admit an immutable Sealed operation and run capture, sponsorship, confirmation and one dispatch in the engine |
-| `CANCEL_OPERATION` | `operationId` | End future controlled release and retain evidence |
-| `DEVELOPMENT_FREEZE` | `scope`, `operationId`, `text`, `editRevision`, `mode` | Run the historical development workflow using the same engine; accepted only from the development surface |
+The HTTP server supplies the trusted origin after exact Host/Origin/bearer checks.
+Desktop and extension-sidebar controls have their own authenticated transports.
+A content script cannot issue controls; a sidebar cannot submit text observations.
+Unknown fields, old profiles/epochs, stale revisions and conflicting command-ID
+reuse reject. An identical command retry returns its original acknowledgement.
+At most 4,096 commands are retained per engine lifetime; a new epoch clears them.
 
-An enrollment target contains `adapterId: chrome-chatgpt`, `adapterEpoch` (the
-current browser session), `tabId`, `windowId`, `tabEpoch`, and `destination`.
-The caller copies an advertised target without its read-only `eligible` bit.
-Every field must still match when admission executes. An existing enrollment of
-the same current target returns its existing scope rather than another authority.
+There are no manual enrollment, per-conversation preference, prompt admission,
+freeze, release, cancellation or provider-retry APIs. Old commands and endpoints
+reject. The adapter automatically establishes current sources across up to 32
+supported tabs/windows; source identity is not consent.
 
-Retries reuse the entire command, including its UUID and expected revision.
-Identical delivery returns the original acknowledgment even after state advances;
-conflicting reuse rejects. A genuine second prompt has a new operation ID and
-command ID, including when the exact text is unchanged. Byte storage can deduplicate
-without merging the two signed prompt records. Acknowledgment means the operation
-was durably admitted; its subsequent state indicates capture and release outcome.
-No view must remain connected for those stages to finish.
+## Ordered OFF cutoff
 
-A new cancellation command checks the operation, live version and durable release
-journal before changing state or recording evidence. Stopped, cancelled or restored
-operations and completed release attempts reject it. Replay of the identical
-accepted command still returns its original acknowledgment without a write. Pending capture and
-confirmation remain cancellable. Interrupting an active consumed attempt ends
-future controlled release but retains its eventual observed, failed or unknown
-outcome; it cannot claim that possible exposure was undone.
+Capture and preference changes share one serial queue. A capture must match the
+current runtime, browser session, tab/window/document, destination and policy
+token when it reaches that queue. OFF clears all current tokens and publishes
+revocation before acknowledging its durable preference write. Later ON generates
+new tokens. A stale delivery cannot revive across OFF/ON, navigation, disconnect
+or restart.
 
-There are at most 32 current browser targets, 256 persistent conversation
-preferences, 512 recent engine operations and 4,096 command deliveries per engine
-lifetime. Finished recent operations may leave the engine summary while their
-receipts remain in the vault. Delivery and operation IDs are not reused within
-that lifetime; reaching the delivery limit requires a fresh engine epoch.
-The text limit remains 256 KiB of exact, well-formed UTF-8 with no attachments.
+A save acknowledgement follows the encrypted signed text and observation writes
+and durable engine metadata. Storage uncertainty fails closed and reports a gap.
+A capture durably accepted before OFF remains evidence. Workers stop taking text
+snapshots once they receive OFF; stale in-flight buffers cannot become new evidence
+after the engine cutoff. A failed preference write also disables capture until
+restart. No provider action waits on storage, IPC, account or anchoring.
 
-## Policy, documents and interruption
+The engine keeps at most 512 queued/active anchor jobs and runs at most two at a
+time. A full queue rejects new capture with a gap. Each durable observation has
+at most three persisted anchor attempts across restarts, committed before work;
+each startup schedules an eligible pending observation once, without a retry loop.
+A saved transaction is reused. OFF permits that bounded work to finish, but
+account disconnect separately removes service access. Old observation profiles
+are read-only and never enter this queue.
 
-Global pause takes precedence over conversation preferences, then the integration
-default. The initial default is Sealed; it grants no enrollment or send by itself.
-Changing the effective requested mode ends affected in-flight authority, even if
-the mode later changes back. Off preserves history. A one-prompt Sealed command
-uses strict admission even when the default is Continuous; it never downgrades
-the pending operation to a retrospective send.
+## Persistence and migration
 
-Duplicate tabs of an established conversation share its explicit preference but
-have independent scope IDs, windows, document epochs, drafts and operations.
-Before a new chat has a stable conversation identity, its override applies only
-to that current scope and is not persisted or copied to other new-chat tabs.
-Navigation never carries enrollment or a queued prompt to another conversation.
-The worker changes the affected document epoch on navigation/reload; unrelated
-tab lifecycle and focus notifications do not invalidate another healthy scope.
-Dispatch still requires the pinned target to be active and supported, and the
-content script must retain visibility throughout possible exposure.
+The encrypted `pap-resident-state/2` snapshot contains only revision, recording
+and migration reason. `engine-pointer` publishes the vault record ID after a
+durable write, atomic rename and directory fsync. Interrupted migration can leave
+an unreferenced snapshot; retry deterministically migrates the original pointer.
+No old journal, grant, attempt or provider action is executed.
 
-Capability loss retains evidence and ends pending work without automatically
-resuming it when the surface recovers. During an active consumed attempt, its
-exact engine guard distinguishes its own authorized insertion from a lost
-capability; this does not bypass destination, permissions or document checks.
+| Previous state | New preference |
+| --- | --- |
+| No pointer, including a restored recovery vault | OFF |
+| Valid state/2 | Restore its explicit boolean |
+| Valid state/1, unpaused global Continuous, empty conversation exceptions | ON |
+| Off, paused, Sealed/Always Protect, any conversation exceptions | OFF |
+| Unknown/future/malformed or uncertain state | OFF |
 
-The adapter advertises normal-send observation only when the connected extension
-negotiates `pap-chatgpt-capture/1`. Continuous eligibility allows a nonempty
-supported composer and independent tabs; Sealed keeps its active, empty-composer
-requirement. The engine distributes current scoped recording policies through the
-authenticated bridge and handles observations separately from control commands.
-It commits exact text and a signed source-bound intent before acknowledging a
-save, then anchors asynchronously without creating a release seal or dispatch.
-See [the capture contract](CONTINUOUS.md) for input mappings, retries and gaps.
-The development view retains historical Continuous dispatch and Always Protect
-semantics. The [privileged extension panel](SEALED.md) now uses the same engine
-commands over its negotiated, authenticated bridge path. A pending Sealed command
-in a scope rejects a second concurrent admission. The [resident Mac menu and
-optional dashboard](DASHBOARD.md) reuse these contracts through private inherited
-pipes and authenticated local requests.
+Migration is versioned and idempotent. Old history does not imply consent. A
+restored recovery installation requires explicit ON; ordinary restart can retain
+the already-consented new preference after fresh source/identity checks.
+Migration preserves signed historical objects without rewriting their bytes.
 
-## Persistence, recovery and compatibility
+Recent state lists the last 512 observation versions; the vault retains history.
+Source policies, command acknowledgements and undelivered captures are not
+restored. New signed records use `pap-local-record/2` and normal observations use
+`pap-chatgpt-observation/3`. Legacy schemas remain isolated read compatibility.
+Native framing, bundle identities, cryptographic domains and portable export
+formats retain their established identities.
 
-Preferences and recent operation metadata use `pap-resident-state/1` records in
-the existing encrypted vault. `engine-pointer` contains only the current vault
-event ID and is atomically published after the durable vault write. A state write
-failure disables further engine authority until restart. Existing Keychain,
-sponsorship, proof validation, release storage and recipient code are reused.
+The private development locator is `pap-private-runtime/2` with only
+`dashboardURL`. After acquiring the resident lock, startup can replace an old
+validated locator without contacting its obsolete endpoint.
 
-Restart clears unconsumed release authorizations and reconstructs operations from
-the durable release journal. Incomplete operations become interrupted; consumed
-attempts without a durable result become `OUTCOME_UNKNOWN`. No scope, queued send
-or grant is restored. Old runtime commands reject, including commands whose reply
-was lost. Receipts and already exported bundles retain their original claims.
+## Validation
 
-Adapter `pap-chatgpt-chrome/5` and dispatch `pap-chatgpt-release/2` retain window
-and document correlation at both ends. Extension 1.5.0 adds negotiated
-`pap-chatgpt-capture/1` delivery and signed `pap-chatgpt-observation/2` assertions.
-Earlier adapter contracts reject at pairing. Native peer identity, rendezvous
-framing and portable export formats remain unchanged; historical observation
-and release evidence is not relabelled. New intent receipts remain saved across
-restart without reconstructed release grants or replayed provider actions.
-
-The development view stores its local bearer and selected target identity in
-per-tab session storage so reload can read authoritative state without choosing
-another target. It persists no prompt bytes, send grants or pending commands.
-`/close` detaches that view and leaves the engine available; the explicit
-`/engine/exit` endpoint is used by the private development stop command.
-
-## Local verification
-
-Run `npm run test:chatgpt` for the engine, actual extension-worker, native-relay,
-composer and confirmation regressions. `npm run test:product` includes
-`resident-view-and-scopes`, which uses real authenticated product requests,
-native frames, encrypted storage and the fixture sponsorship ledger. It checks
-view closure, replay and unrelated document changes during one pinned operation.
-`npm run test:recipient-browser` additionally reloads the actual development
-view and checks shared cancellation and legacy receipt flows in an isolated
-headless Chrome profile. All resources are temporary and explicitly injected;
-none of these checks sends live prompts or transactions or changes a retained kit.
+Engine tests cover migration tables, repeated/interrupted migration, recovered
+OFF, command ordering/idempotency, stale capture, bounded anchor retries,
+account failure, free export and singleton ownership. Page/worker tests cover
+automatic sources and exact-byte capture. The full behavior matrix and actual
+test results are in [MIGRATION.md](MIGRATION.md).

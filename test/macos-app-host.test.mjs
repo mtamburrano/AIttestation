@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createConnection } from 'node:net';
-import { startChromeProtectionRuntime } from '../spikes/browser/chatgpt/bridge-runtime.mjs';
+import { startChromeRecordingRuntime } from '../spikes/browser/chatgpt/bridge-runtime.mjs';
 import { NATIVE_BRIDGE_PROFILE } from '../spikes/browser/chatgpt/native-host.mjs';
 import { canonical, parseCanonical } from '../spikes/vault/format.mjs';
 import { portableBundle } from '../spikes/recipient/portable.mjs';
@@ -108,6 +108,12 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   const lifecycle = join(app, 'Contents/Resources/spikes/vault/key-lifecycle.mjs');
   assert.equal(existsSync(join(app, 'Contents/Resources/spikes/managed/client.mjs')), true);
   assert.equal(existsSync(join(app, 'Contents/Resources/spikes/managed/service.mjs')), false);
+  for (const path of ['release', 'demonstrator', 'browser/chatgpt/product-app.js', 'browser/chatgpt/product.html']) {
+    assert.equal(existsSync(join(app, 'Contents/Resources/spikes', path)), false, 'removed Send machinery cannot ship');
+  }
+  for (const path of ['diagnostics/local.mjs', 'recipient/legacy-observation.mjs']) {
+    assert.equal(existsSync(join(app, 'Contents/Resources/spikes', path)), true, 'shared diagnostics and read compatibility must ship');
+  }
   assert.equal(existsSync(join(app, 'Contents/Resources/spikes/anchor/algorand/bin/sponsor')), false);
   const identifier = executable => spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', executable], { encoding: 'utf8' }).stderr;
   assert.match(identifier(host), /Identifier=ai\.provenance\.consumer\.host/);
@@ -164,7 +170,7 @@ test('packaged ChatGPT path uses fixed signed hosts and withholds raw Keychain a
   assert.notEqual(rejectedBrowserParent.status, 0, 'native host must reject a non-Chrome Stable parent');
 
   const bridgeDirectory = join(root, 'stolen-token-runtime');
-  const bridge = await startChromeProtectionRuntime(bridgeDirectory, {
+  const bridge = await startChromeRecordingRuntime(bridgeDirectory, {
     vaultKey: randomBytes(32), peerValidatorPath: peerValidator,
     fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' },
   });

@@ -20,9 +20,9 @@ export async function until(check) {
 
 // This fixture uses real product startup, vault, IPC framing, worker and content
 // scripts. Only page/browser/platform identity and anchoring are synthetic.
-export async function continuousFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
-  collectFast, managed, enroll = true, defaultMode = 'Off', panelContexts = async () => [], openDashboard = async () => {},
-  dropPanelAck = false, dropReleaseReply = false, installation = null, debugSession = null } = {}) {
+export async function recordingFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
+  collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
+  dropPanelAck = false, installation = null, debugSession = null } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
@@ -35,7 +35,7 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
     controllerTimeoutMs: 250,
     verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
       assurance: FAST_CONFIRM_PROFILE, round: 42 }),
-    verifyArchive: () => { throw Error('NO_ARCHIVE_FIXTURE'); },
+    verifyArchive: verifyArchive ?? (() => { throw Error('NO_ARCHIVE_FIXTURE'); }),
     attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } }),
   };
@@ -51,9 +51,9 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
   const command = (kind, data) => runtime.engine.command({ profile: ENGINE_COMMAND_PROFILE,
     runtimeEpoch: runtime.runtimeEpoch, adapterProfile: runtime.engine.state().adapterProfile,
     commandId: randomUUID(), expectedRevision: runtime.engine.state().revision, kind, ...data }, { surface: 'desktop' });
-  for (let i = 0; i < tabs; i++) {
-    const id = 17 + i, tab = testTab({ id, windowId: i + 1,
-      url: `https://chatgpt.com/c/fixture-${id}`, destination: `conversation:fixture-${id}` });
+  const addPage = (id, overrides = {}) => {
+    const tab = testTab({ id, windowId: id - 16,
+      url: `https://chatgpt.com/c/fixture-${id}`, destination: `conversation:fixture-${id}`, ...overrides });
     inventory.set(id, tab);
     const sender = page => page.sender({ tab: { id, windowId: tab.windowId, url: page.location.href }, documentId: `synthetic-${id}` });
     const page = pageFixture({ textarea, url: tab.url,
@@ -62,12 +62,13 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
       capture: (message, page) => worker ? worker.message(message, sender(page)) : Promise.resolve({ state: 'RECORDING_UNAVAILABLE' }),
     });
     page.captureSender = () => sender(page); pages.set(id, page);
-  }
+  };
+  for (let i = 0; i < tabs; i++) addPage(17 + i);
   output.on('data', chunk => {
     try {
       for (const message of decoder.push(chunk)) {
         if (message.kind === 'PAP_RELEASE') releases.push(message);
-        if (dropPanelAck && message.kind === 'PAP_PANEL_RESULT' && message.ack?.operationId) {
+        if (dropPanelAck && message.kind === 'PAP_PANEL_RESULT' && message.ack) {
           dropPanelAck = false; continue;
         }
         if (message.kind === 'PAP_CAPTURE_RESULT') {
@@ -87,7 +88,6 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
         port = value;
         port.close = () => socket?.destroy();
         port.send = message => {
-          if (dropReleaseReply && message.profile === 'pap-chatgpt-release/2') return;
           if (message.kind === 'PAP_CAPTURE') { deliveries.push(structuredClone(message)); sources.push(message.observation.source); }
           input.write(encodeNativeFrame(message));
         };
@@ -97,12 +97,7 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
       rendezvousPath: runtime.rendezvousPath, input, output });
     socket = native; socket.on('error', error => { nativeFailure = error; });
     await until(() => runtime.browserState());
-    await command('SET_DEFAULT', { mode: defaultMode });
-    const scopes = new Map();
-    for (const id of enroll ? pages.keys() : []) {
-      const { eligible: _eligible, ...target } = runtime.engine.state().targets.find(value => value.tabId === id);
-      scopes.set(id, (await command('ENROLL_SCOPE', { target })).scope);
-    }
+    const scopes = new Map(runtime.adapter.scopes().map(source => [source.tabId, source.scope]));
     const refresh = async (id = 17) => {
       const page = pages.get(id);
       const status = await worker.message({ kind: 'PAP_CAPTURE_STATUS', pageContract: CHATGPT_PAGE_CONTRACT }, page.captureSender());
@@ -113,9 +108,17 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
       get nativeFailure() { return nativeFailure; }, get anchorCalls() { return anchorCalls; }, get confirmed() { return confirmed; },
       get userSends() { return userSends; }, get prevention() { return prevention; },
       get port() { return port; },
-      async mode(mode, id = 17) {
-        await command('SET_CONVERSATION_MODE', { scope: scopes.get(id), mode });
-        await until(async () => { const status = await refresh(id); return mode === 'Continuous' ? Boolean(status.policy) : !status.policy; });
+      async addTab(id, overrides = {}) {
+        addPage(id, overrides); worker.chrome.tabs.onCreated.emit(inventory.get(id));
+        await until(() => runtime.adapter.scopes().some(source => source.tabId === id));
+        const source = runtime.adapter.scopes().find(source => source.tabId === id);
+        scopes.set(id, source.scope); await refresh(id); return source;
+      },
+      async recording(enabled) {
+        await command('SET_RECORDING', { enabled });
+        for (const id of pages.keys()) await until(async () => {
+          const status = await refresh(id); return enabled ? Boolean(status.policy) : !status.policy;
+        });
       },
       send(text, { id = 17, method = 'send-button', trusted = true, ...event } = {}) {
         const page = pages.get(id);
@@ -147,6 +150,7 @@ export async function continuousFixture(directory, { diagnostics, network, tabs 
         await runtime.close(); revoke?.();
       },
     };
+    if (recording) await f.recording(true);
     return f;
   } catch (error) {
     for (const page of pages.values()) page.close();

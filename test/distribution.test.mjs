@@ -14,8 +14,8 @@ import { codeSignatureCheckArguments } from '../spikes/distribution/local.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { Vault } from '../spikes/vault/vault.mjs';
 import { identity, verifyDisclosure } from '../spikes/vault/records.mjs';
-import { ChatGPTChromeAdapter, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT, CHATGPT_RELEASE_PROTOCOL } from '../spikes/browser/chatgpt/adapter.mjs';
-import { startProductComposer } from '../spikes/browser/chatgpt/product-server.mjs';
+import { ChatGPTChromeAdapter, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT } from '../spikes/browser/chatgpt/adapter.mjs';
+import { startProductDashboard } from '../spikes/browser/chatgpt/product-server.mjs';
 import { RELEASE_CANDIDATE_PROFILE, RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from '../spikes/distribution/config.mjs';
 
 async function temporary(t) {
@@ -174,12 +174,12 @@ test('missing or incompatible migration metadata fails closed before newer or ol
   }
 });
 
-test('current, previous, and future compatibility fixtures do not broaden the pinned protected path', async () => {
+test('current, previous, and future compatibility fixtures do not broaden the pinned recording path', async () => {
   const matrix = JSON.parse(await readFile(new URL('../spikes/distribution/fixtures/compatibility.json', import.meta.url)));
   for (const fixture of matrix.cases) {
-    const adapter = new ChatGPTChromeAdapter(() => {}, { extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca' });
+    const adapter = new ChatGPTChromeAdapter({ extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca' });
     const pair = () => adapter.pair({ extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca', adapterProfile: fixture.adapterProfile,
-      releaseProtocol: CHATGPT_RELEASE_PROTOCOL, pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session',
+      captureProfile: 'pap-chatgpt-capture/2', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session',
       browser: { product: 'Google Chrome', channel: 'stable', major: fixture.chromeMajor },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.9' },
       permissionState: 'granted', permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*' });
@@ -442,17 +442,17 @@ test('release-candidate lifecycle state is isolated from the production rollback
 });
 
 test('release-candidate UI and diagnostics expose the non-production boundary', async () => {
-  const app = await readFile(new URL('../spikes/browser/chatgpt/product-app.js', import.meta.url), 'utf8');
-  const page = await readFile(new URL('../spikes/browser/chatgpt/product.html', import.meta.url), 'utf8');
+  const app = await readFile(new URL('../spikes/browser/chatgpt/dashboard.js', import.meta.url), 'utf8');
+  const page = await readFile(new URL('../spikes/browser/chatgpt/dashboard.html', import.meta.url), 'utf8');
   assert.match(page, /id="release-channel"/);
-  assert.match(app, /releaseChannel === 'release-candidate'/);
-  assert.match(app, /stable updates are disabled/);
-  assert.match(app, /releaseChannel === 'production'/);
+  assert.match(app, /releaseClass === 'RELEASE_CANDIDATE'/);
+  assert.match(app, /Stable updates are disabled/);
+  assert.match(app, /releaseClass === 'PRODUCTION'/);
 });
 
-test('installation actions require the paired composer and support output cannot reflect request data', async t => {
+test('installation actions require the paired dashboard and support output cannot reflect request data', async t => {
   const root = await temporary(t), lifecycle = await installation(root).init();
-  const server = await startProductComposer({ session: {}, browserState: () => null, maintenance: {
+  const server = await startProductDashboard({ session: {}, browserState: () => null, maintenance: {
     status: () => lifecycle.status(), enable: () => lifecycle.enable(),
     offerExport: () => lifecycle.record('exportOffered'), remove: data => lifecycle.remove(data),
     diagnostics: () => lifecycle.diagnostics(),

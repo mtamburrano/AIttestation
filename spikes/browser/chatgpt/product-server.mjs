@@ -25,16 +25,16 @@ async function requestBody(request, limit = BODY_LIMIT) {
   const chunks = []; let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > limit) throw Error('Local composer request limit exceeded');
+    if (size > limit) throw Error('Local dashboard request limit exceeded');
     chunks.push(chunk);
   }
   const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
   const value = JSON.parse(text);
-  if (!value || Array.isArray(value) || typeof value !== 'object') throw Error('Invalid local composer request');
+  if (!value || Array.isArray(value) || typeof value !== 'object') throw Error('Invalid local dashboard request');
   return value;
 }
 
-export async function startProductComposer(runtime, { onClose = () => {}, onExit = null } = {}) {
+export async function startProductDashboard(runtime, { onClose = () => {}, onExit = null } = {}) {
   if (!runtime?.session || typeof runtime.browserState !== 'function') throw Error('Product runtime required');
   const secret = randomBytes(32).toString('base64url');
   let origin, closed = false;
@@ -42,9 +42,7 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
     try {
       if (request.headers.host !== new URL(origin).host) throw Error('Local host mismatch');
       const assets = {
-        '/': ['product.html', 'text/html; charset=utf-8'],
-        '/product-app.js': ['product-app.js', 'text/javascript; charset=utf-8'],
-        '/product.css': ['product.css', 'text/css; charset=utf-8'],
+        '/': ['dashboard.html', 'text/html; charset=utf-8'],
         '/dashboard': ['dashboard.html', 'text/html; charset=utf-8'],
         '/dashboard.js': ['dashboard.js', 'text/javascript; charset=utf-8'],
         '/dashboard.css': ['dashboard.css', 'text/css; charset=utf-8'],
@@ -55,7 +53,7 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
         return reply(response, 200, await readFile(new URL(name, import.meta.url), 'utf8'), type);
       }
       if (request.method !== 'POST' || request.headers.origin !== origin
-          || request.headers.authorization !== `Bearer ${secret}`) throw Error('Unpaired local composer');
+          || request.headers.authorization !== `Bearer ${secret}`) throw Error('Unpaired local dashboard');
       const data = await requestBody(request, request.url === '/upgrade' ? 12 * 1024 * 1024 : BODY_LIMIT); let value;
       if (request.url.startsWith('/debug-session/')) {
         try {
@@ -111,7 +109,7 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
           finally { recovery.recoveryKey.fill(0); }
           break;
         }
-        case '/status': value = { browser: runtime.browserState(), protection: runtime.session.status() }; break;
+        case '/status': value = { browser: runtime.browserState(), recording: runtime.session.status() }; break;
         case '/engine/state':
           if (Object.keys(data).length) throw Error('Invalid state request');
           value = runtime.engine.state(); break;
@@ -127,19 +125,14 @@ export async function startProductComposer(runtime, { onClose = () => {}, onExit
         case '/receipts/preview': value = runtime.session.receipts.prepare(data); break;
         case '/receipts/export': value = { content: runtime.session.receipts.export(data.previewId).toString('utf8') }; break;
         case '/receipts/redact': value = runtime.session.receipts.redact(data); break;
-        case '/enroll': value = runtime.session.enroll(data); break;
-        case '/draft': value = runtime.session.updateDraft(data); break;
-        case '/freeze': value = await runtime.session.freeze(data); break;
         case '/anchor-request': value = runtime.session.anchorRequest(data.id); break;
         case '/confirm': value = await runtime.session.confirmFast(data); break;
-        case '/release': value = await runtime.session.release(data); break;
-        case '/cancel': value = await runtime.session.cancel(data); break;
         case '/upgrade': value = await runtime.session.upgradeConsensus({
           id: data.id, envelope: Buffer.from(data.envelope, 'base64'), trust: data.trust,
         }); break;
         case '/close':
           value = { closed: true, engine: 'RUNNING' }; break;
-        default: throw Error('Unsupported local composer operation');
+        default: throw Error('Unsupported local dashboard operation');
       }
       reply(response, 200, value);
     } catch (error) { reply(response, 400, { error: error.message }); }

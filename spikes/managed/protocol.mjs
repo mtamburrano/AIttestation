@@ -13,7 +13,7 @@ export const FALLBACK = Object.freeze({
   QUOTA_EXHAUSTED: 'Your anchoring allowance is used up. Retry after the quota resets.',
   RATE_LIMITED: 'Too many anchoring requests. Wait before retrying.',
   SERVICE_UNAVAILABLE: 'Managed anchoring is unavailable. Retry later.',
-  SUBMISSION_INTERRUPTED: 'The anchor could not be prepared. Freeze a new version to try again.',
+  SUBMISSION_INTERRUPTED: 'Anchor preparation was interrupted. Local evidence remains; this reservation cannot be replaced automatically.',
 });
 export function managedError(code) {
   const safe = Object.hasOwn(FALLBACK, code) ? code : 'SERVICE_UNAVAILABLE';

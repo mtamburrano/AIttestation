@@ -1,7 +1,7 @@
 import { mkdtemp, rm, realpath, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { LocalDiagnostics } from '../release/diagnostics.mjs';
+import { LocalDiagnostics } from '../diagnostics/local.mjs';
 import { initializeSponsor } from './sponsor.mjs';
 import { newDirectory, initializeAccount, validateAccount } from './environment.mjs';
 import { PRODUCT_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';

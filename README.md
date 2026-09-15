@@ -1,126 +1,74 @@
-# Attestamp experiments
+# Attestamp
 
-Disposable technical slices for private, portable evidence of human + AI work.
-These experiments are not a production protection product.
+Attestamp records supported human prompt Sends in ChatGPT Web on Apple-silicon
+macOS with Chrome. One resident app owns the encrypted evidence vault, app-bound
+keys, recording preference and asynchronous anchoring.
 
-For ordinary development, run `npm run test:product`. The
-[local product runner](spikes/development/PRODUCT-TESTING.md) exercises the real
-engine, encrypted vault, native framing and product API with explicit synthetic
-dependencies. It produces a bounded JSON result and a local HTML diagnostic
-preview without switching users, signing a build or using a provider account.
+- **ON** automatically follows supported existing and new ChatGPT tabs/windows.
+  It snapshots the declared exact text projection at a genuine Send, saves signed
+  encrypted evidence, then attempts blinded anchoring.
+- **OFF** stops new capture. Saved history and bounded pending anchor work remain.
+- Use ChatGPT's own composer and Send. Capture and anchor failures never control,
+  inject, block or replay that Send.
 
-The [private development guide](spikes/development/README.md) provides a separate
-prepare/start/stop route for the signed Mac app, unpacked Chrome extension and a
-local TLS TestNet sponsor. It requires a dedicated macOS test user and the pinned
-Chrome version. See the [readiness record](spikes/development/READINESS.md) for
-the installed checks still outstanding; offline fixtures do not establish them.
+New and recovered installations start OFF. Recording is prospective and best
+effort: it does not establish complete history, authorship, ownership, event truth,
+provider receipt, non-retention or pre-egress protection. Unsupported input and
+connection/storage failures can leave gaps.
 
-## Integrated local demonstrator
+## Product and trust boundaries
 
-The [consumer demonstrator](spikes/demonstrator/README.md) combines encrypted
-evidence/recovery, exact-version release and anchor verification on macOS + Chrome
-with a synthetic loopback provider. A developer-built double-click app supports
-Continuous, Sealed and scoped Always Protect, readable receipts, local export and
-fresh-vault restore. Offline rehearsal is explicitly synthetic; real Algorand mode
-requires a new independently verified proof before protected release. See the
-[participant walkthrough](spikes/demonstrator/WALKTHROUGH.md) for installation and
-the remaining signing, recovery and trust limitations.
+The existing Chrome sidebar offers global ON/OFF, effective status and
+Dashboard/History. The optional local dashboard adds account connection,
+integration management, selective export, recovery and private diagnostics.
+Closing a view leaves the resident engine running.
 
-## Local release laboratory
+The first supported contract is macOS 15.7+ arm64, Chrome Stable major 153 and
+`https://chatgpt.com` text up to 256 KiB. Attachments, responses, voice, edits,
+regeneration and hidden network requests are outside capture. Native peer
+authentication, exact source/document checks and versioned contracts fail closed.
+Synthetic tests do not establish installed sidebar trust or live provider behavior.
 
-With Node.js 22 or newer, run `npm run demo:release` and open the printed local URL.
-Use synthetic content only: this slice keeps a **plaintext temporary journal** and
-uses a **confirmation stub**, with no signing, encryption or external anchor claim.
-The URL contains a temporary local pairing secret; do not share it.
+Read the [browser contract](spikes/browser/chatgpt/README.md),
+[recording and extraction rules](spikes/browser/chatgpt/RECORDING.md),
+[engine and migration contract](spikes/browser/chatgpt/ENGINE.md), and
+[rework inventory](spikes/browser/chatgpt/MIGRATION.md).
 
-The local composer freezes exact UTF-8 text and selected attachment bytes. A test
-confirmation authorizes that immutable version. Before dispatch, the runtime
-durably consumes authorization and records a scoped attempt. Edits require a new
-seal. Concurrent releases cannot reuse authorization. Interrupted attempts become
-unknown on restart and never automatically resend; the runtime exposes an explicit
-retry operation for failed or unknown attempts.
+## Evidence and free verification
 
-The paired synthetic provider is a separate loopback origin. It models an eager
-provider page that transmits drafts and uploads immediately: intercepting its Send
-button would not prevent disclosure. The fixture adapter has disable, unsupported
-surface and session-scope controls. These simulate extension lifecycle failures;
-this slice does **not** ship a browser extension or support a real provider.
-All authority stays in the local runtime; page-facing operations have no arbitrary
-filesystem or signing API. The fixture checks origin, pairing, protocol, attempt,
-scope and exact payload digest. A compromised local OS/runtime is outside scope.
+The [vault](spikes/vault/README.md) retains exact bytes, signatures, blinded
+commitments and encrypted recovery. [Managed anchoring](spikes/managed/README.md)
+receives blinded commitments and operational metadata; it receives no evidence
+plaintext, raw digests, openings or vault keys. Local save and anchor assurance
+are separate states. Two-source corroboration and later State-Proof verification
+have different assurance limits.
 
-Visible output capture records DOM `textContent` as UTF-8, independently from input
-attachment bytes. Attachment references are unsupported. A local submission
-observation does not establish provider receipt, internal context, authorship,
-complete history or prior non-disclosure. Browser textarea line ending behavior
-applies before the composer value is captured; no Unicode normalization is added.
+[Attestamp Verifier](spikes/recipient/README.md) independently reads portable
+exports without an account or company service. Select and preview the exact
+disclosure before saving it. Historical signed evidence keeps its original bytes
+and meaning through isolated readers; historical Send workflows are removed.
 
-## Validation
+## Development and validation
 
-- `npm test`: deterministic release state and failure fixtures in fresh temporary directories.
-- `npm run test:browser`: isolated headless Chrome with a fresh temporary profile,
-  loopback-only fixtures, exact-byte assertions and provider-owned eager-input
-  counterexamples. On other systems set `PROVENANCE_TEST_CHROME` to a Chrome binary.
+Use Node 22.13+ and fresh temporary resources:
 
-Tests do not use existing profiles, evidence stores, provider accounts or external
-anchor services. Cleanup removes only directories created by the current run.
-The demo intentionally leaves its printed synthetic journal for inspection.
-Atomic rename and file/directory sync model process-crash durability; this spike
-does not establish guarantees against storage hardware failure or journal tampering.
+```sh
+npm test
+npm run test:chatgpt
+npm run test:product
+npm run test:dashboard-browser
+npm run test:recipient-browser
+npm run test:algorand
+```
 
-## Supported ChatGPT browser path
+See [local product testing](spikes/development/PRODUCT-TESTING.md) for fixture
+isolation, privacy, prerequisites and evidence limits. Ordinary tests use no
+retained installation, native Keychain data, provider Sends or new transactions.
+The [private setup guide](spikes/development/README.md) describes separately
+authorized installed checks.
 
-The [distribution implementation](spikes/distribution/README.md) prepares macOS
-packages with build provenance and dependency inventory, signed-update checks,
-guided Chrome connection/removal, migration regression fixtures and private support
-diagnostics. Production Developer ID/Keychain provisioning, notarization credentials,
-Web Store publication and installed validation remain required. A signed
-`release-candidate` build is available for pre-publication review, but it is
-explicitly non-production and cannot create a stable update or production
-installed-release state. Development builds are explicitly ad-hoc; the existing
-extension ID is not evidence of a store listing.
-
-The [first scoped browser path](spikes/browser/chatgpt/README.md) adds a text-only
-256 KiB trusted composer, a least-authority Chrome/ChatGPT extension contract, all
-three protection modes, an authenticated native rendezvous, a fixed signed macOS
-host, runtime-side macOS socket-peer/code-sign validation, and local
-`PAP_ALGORAND_FAST_CONFIRM_V1` verification backed by two bounded TLS algod observers.
-Fast confirmation is explicitly source-corroborated rather than consensus-verified;
-later State-Proof evidence upgrades assurance without changing historical release
-authorization. Automated fixtures cover stale edits, tab/scope ambiguity, restart,
-permission/protocol/provider drift, timeout/conflict, and unsupported attachments.
-Use `npm run build:chatgpt -- NEW_OUTPUT_DIRECTORY` after building the pinned Go
-tools to create the app and its not-yet-installed native-host manifest.
-
-[Managed sponsorship](spikes/managed/README.md) adds wallet-free submission with
-durable account quotas, bounded fee authority and subscription continuity. The
-local composer requests an anchor automatically after freezing; service failure
-leaves strict modes pending and keeps Continuous evidence local. The default build
-has no deployed service origin. Operators configure the TestNet sponsor and HTTPS
-endpoint separately; existing receipts, exports and verification remain free.
-
-The composer also includes [free local receipts and recipient verification](spikes/recipient/README.md):
-selective disclosure previews, immutable local downloads, explicit redacted
-derivatives, and shared public anchor proof objects. The build includes a separate
-recipient app with its own Node/native verifier, no vault/key authority and no
-account requirement. Recipients choose trust independently and can verify supported
-archived anchors offline. Reports keep seven assurance dimensions separate.
-`npm run test:recipient-browser` checks the local export/recipient flow in a fresh,
-network-restricted headless Chrome profile with synthetic evidence.
-
-## Encrypted evidence slice
-
-The separate [vault library](spikes/vault/README.md) adds encrypted private dedup,
-crash-safe capture, signed commitments, authenticated recovery inventories,
-macOS-Keychain-backed signing/VMK lifecycles, compatible schema migration, key
-rotation, append-only retention and reference-shared public proof export. It
-requires Node.js 22.13 or newer and does not yet replace the release laboratory's
-synthetic plaintext journal.
-
-## Offline anchor envelope
-
-The [anchor experiment](spikes/anchor/README.md) implements the blinded Merkle
-payload, a non-Algorand fixture, and a native Algorand TestNet archive verifier.
-`npm run test:algorand` builds the Go adapter and verifies recorded public proofs
-offline, including adversarial mutations. Live TestNet commands are explicit and
-are never part of the default tests.
+The [distribution guide](spikes/distribution/README.md) retains signing,
+notarization, dependency inventories, package leak checks, Store identity,
+consented installation, update signatures and rollback/schema safeguards.
+An ad-hoc build or release candidate is not a published production installation.
+No public deployment or funded service is supplied by this checkout.

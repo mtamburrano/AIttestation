@@ -10,18 +10,16 @@ const states = {
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
   CONFIGURATION_CONFLICT: ['Connection needs attention', 'An existing Chrome configuration was left untouched. Check your private setup before enabling.'],
   DISABLED: ['Chrome connection disabled', 'Enable the connection below, then open the Attestamp panel in Chrome.'],
-  PAUSED: ['Paused for all conversations', 'History stays available. Resume restores preferences; it never resumes an old send.'],
   DISCONNECTED: ['Chrome disconnected', 'Open or reload the Attestamp extension, then refresh. After enabling a connection, Chrome may need a restart.'],
-  COVERAGE_UNAVAILABLE: ['Some conversations need attention', 'Return to the affected ChatGPT tab, check its supported text composer and reselect it in the panel.'],
-  SCOPES_READY: ['Conversation inputs ready', 'Continuous records normal Send. Sealed requires the trusted panel and successful anchoring before each send.'],
-  OFF: ['Capture off', 'Choose a mode for a current conversation below or in the Chrome panel.'],
-  SELECT_CONVERSATION: ['Choose a conversation', 'Open the Attestamp panel in a supported ChatGPT tab and select the current conversation.'],
+  COVERAGE_UNAVAILABLE: ['Some conversations need attention', 'Check the supported text composer in the affected ChatGPT tab. Recording gaps do not stop your Send.'],
+  SOURCES_READY: ['ON · Supported tabs ready', 'Normal Send observations are recorded automatically. Look for Prompt saved after each supported Send.'],
+  OFF: ['Attestamp is OFF', 'New capture is stopped. Saved evidence and bounded pending anchoring remain available.'],
+  WAITING_FOR_TABS: ['ON · Waiting for supported tabs', 'Open ChatGPT in normal Chrome. Existing and new supported tabs are followed automatically.'],
 };
 const outcomes = { PROMPT_SAVED: 'Prompt saved', SUBMISSION_OBSERVED: 'Send observed by this client',
   CANCELLED: 'Cancelled', OUTCOME_UNKNOWN: 'Delivery uncertain — do not resend automatically',
   FAILED_BEFORE_EGRESS: 'Stopped before sending', INTERRUPTED: 'Interrupted — old send authority ended',
-  NEEDS_ATTENTION: 'Needs attention', ADMITTED: 'Preparing local evidence', PENDING_FAST_CONFIRMATION: 'Waiting for anchoring',
-  PENDING_ANCHOR: 'Waiting for anchoring', SEALED_NOT_SENT: 'Anchored; not sent', DISPATCHING: 'Delivery uncertain' };
+  NEEDS_ATTENTION: 'Needs attention' };
 const anchorLabels = { PENDING: 'Anchor pending', SOURCE_CORROBORATED: 'Anchor corroborated locally', PORTABLE_PROOF: 'Portable proof retained' };
 async function api(path, data = {}) {
   const response = await fetch(path, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify(data) });
@@ -33,7 +31,7 @@ function node(tag, text, className) {
 function controls() {
   for (const button of document.querySelectorAll('button')) button.disabled = busy || closed;
   for (const id of ['enable', 'disable', 'prepare-remove']) $(id).disabled ||= !state?.integration.manageable;
-  for (const id of ['pause', 'apply-default']) $(id).disabled ||= !state?.available;
+  for (const id of ['recording']) $(id).disabled ||= !state?.available;
   $('save-export').disabled ||= !acceptedPreview || !currentSelection(acceptedPreview.selection); $('save-support').disabled ||= !supportId;
   $('store').disabled ||= !state?.integration.storeAvailable;
   $('check-update').disabled ||= !state?.integration.updatesAvailable;
@@ -51,7 +49,7 @@ function action(id, run) {
 }
 async function command(kind, data = {}) {
   if (!state) throw Error('State unavailable');
-  await api('/dashboard/command', { profile: 'pap-resident-command/1', runtimeEpoch: state.runtimeEpoch,
+  await api('/dashboard/command', { profile: 'pap-resident-command/2', runtimeEpoch: state.runtimeEpoch,
     expectedRevision: state.revision, adapterProfile: state.adapterProfile, commandId: crypto.randomUUID(), kind, ...data });
   await refresh();
 }
@@ -73,6 +71,9 @@ function choice(id, text) {
 }
 function render(value) {
   state = value;
+  $('release-channel').textContent = state.integration.releaseClass === 'RELEASE_CANDIDATE'
+    ? 'ATTESTAMP RELEASE CANDIDATE — PRE-PUBLICATION REVIEW ONLY. Stable updates are disabled.'
+    : state.integration.releaseClass === 'PRODUCTION' ? 'Production release' : 'Private development build';
   $('debug-session').hidden = !state.debugSession;
   $('debug-session-banner').hidden = !state.debugSession || state.debugSession.state === 'STOPPED';
   $('debug-session-banner').textContent = state.debugSession?.state === 'RECORDING'
@@ -86,12 +87,10 @@ function render(value) {
   }
   const [title, help] = states[state.integration.code] ?? states.ENGINE_UNAVAILABLE;
   $('effective-state').textContent = title; $('effective-help').textContent = help;
-  $('pause').textContent = state.preferences.paused ? 'Resume preferences' : 'Pause all conversations';
-  // Polling must not overwrite an unsaved explicit selection.
-  if (document.activeElement !== $('default-mode') && !$('default-mode').dataset.edited) $('default-mode').value = state.preferences.defaultMode;
+  $('recording').textContent = state.recording ? 'Turn OFF' : 'Turn ON';
   const counts = state.history.counts;
   for (const [id, key] of [['prompt-count', 'prompts'], ['conversation-count', 'conversations'], ['anchor-count', 'pendingAnchors'], ['attention-count', 'needsAttention']]) $(id).textContent = counts[key];
-  $('history-note').textContent = `${counts.unassigned} prompts have no stable conversation identity. Counts include only retained prompt submissions or admitted versions, not internal signed records.${state.history.truncated ? ' Showing the latest 200 prompts.' : ''}`;
+  $('history-note').textContent = `${counts.unassigned} prompts have no stable conversation identity. Counts include only retained observations and historical evidence, not complete provider history.${state.history.truncated ? ' Showing the latest 200 prompts.' : ''}`;
   $('prompts').replaceChildren();
   for (const prompt of state.history.prompts) {
     const row = node('article', '', 'prompt');
@@ -100,47 +99,19 @@ function render(value) {
     row.append(prompt.receiptId ? choice(prompt.receiptId, title) : node('h3', title));
     row.append(node('span', prompt.localSave === 'SAVED' ? 'Saved locally' : 'Local save not confirmed', 'badge'), node('span', anchorLabels[prompt.anchor], 'badge'));
     row.append(node('p', outcomes[prompt.state] ?? 'Review retained evidence for this prompt'));
-    if (prompt.cancellable) {
-      const cancel = node('button', 'Cancel pending send'); cancel.onclick = async () => {
-        if (busy) return; busy = true; controls();
-        try { await command('CANCEL_OPERATION', { operationId: prompt.operationId }); }
-        catch { $('message').textContent = 'Cancellation could not be confirmed. Refresh to inspect the outcome before acting again.'; }
-        finally { busy = false; controls(); }
-      }; row.append(cancel);
-    }
     $('prompts').append(row);
   }
-  if (!state.history.prompts.length) $('prompts').textContent = 'No prompts retained yet. Choose a conversation in the Chrome panel to get started.';
+  if (!state.history.prompts.length) $('prompts').textContent = 'No prompts retained yet. Turn ON and use normal Send in a supported ChatGPT tab.';
   $('other-receipts').replaceChildren(...state.history.otherReceipts.map(value => choice(value.id, value.title)));
   const integration = state.integration;
   $('integration-facts').replaceChildren();
   for (const [label, text] of [['Installed', integration.installation === 'DETECTED' ? 'Extension detected through authenticated connection' : 'Not verified — installation alone does not establish coverage'],
     ['Supported', integration.supported], ['Configured', integration.configuration], ['Connected', integration.connected ? 'Yes' : 'No'],
-    ['Healthy', integration.healthy ? `${integration.readyScopes} current scopes ready` : 'No active coverage confirmed']]) {
+    ['Healthy', integration.healthy ? `${integration.readySources} supported tabs ready` : 'No active coverage confirmed']]) {
     $('integration-facts').append(node('dt', label), node('dd', text));
   }
   $('integration-help').textContent = `${integration.releaseClass ?? 'DEVELOPMENT'} · ${help} Existing Chrome settings are preserved. Removing the connection retains evidence and keys; remove the extension separately in Chrome if desired.`;
-  const scopeText = scope => `Requested: ${scope.requestedMode}. Effective: ${scope.effectiveMode}.${scope.reason === 'GLOBAL_PAUSE' ? ' Global pause overrides this preference.' : ''}`;
-  const existing = [...$('scopes').children];
-  if (document.activeElement?.closest('#scopes') && existing.length === state.scopes.length
-      && existing.every(row => state.scopes.some(scope => scope.scope === row.dataset.scope))) {
-    for (const row of existing) row.querySelector('p').textContent = scopeText(state.scopes.find(scope => scope.scope === row.dataset.scope));
-    return;
-  }
-  $('scopes').replaceChildren();
-  for (const scope of state.scopes) {
-    const row = node('div', '', 'scope'); row.dataset.scope = scope.scope;
-    row.append(node('h3', `Window ${scope.windowId}, tab ${scope.tabId} · ${scope.destination}`), node('p', scopeText(scope)));
-    const select = document.createElement('select'); select.setAttribute('aria-label', `Mode for tab ${scope.tabId}`);
-    for (const mode of ['Off', 'Continuous', 'Sealed']) select.append(new Option(mode, mode)); select.value = scope.requestedMode;
-    const apply = node('button', 'Apply to conversation');
-    apply.onclick = async () => {
-      if (busy) return; busy = true; controls();
-      try { await command('SET_CONVERSATION_MODE', { scope: scope.scope, mode: select.value }); }
-      catch { $('message').textContent = 'Conversation changed. Refresh and select its current scope again.'; }
-      finally { busy = false; controls(); }
-    }; row.append(select, apply); $('scopes').append(row);
-  }
+
 }
 async function refresh() {
   try { const value = await api('/dashboard/state'); if (!closed) { render(value); controls(); } }
@@ -149,15 +120,13 @@ async function refresh() {
       $('debug-session-banner').hidden = false;
       $('debug-session-banner').textContent = $('debug-session-status').textContent = 'Debug recording status unavailable. Reopen Attestamp and refresh.';
     }
-    $('effective-help').textContent = 'Reopen Attestamp and refresh. No current recording or protection is confirmed.'; controls(); }
+    $('effective-help').textContent = 'Reopen Attestamp and refresh. Current recording is not confirmed.'; controls(); }
 }
 action('refresh', refresh);
-action('pause', () => command('SET_PAUSE', { paused: !state.preferences.paused }));
-$('default-mode').onchange = () => { $('default-mode').dataset.edited = 'true'; };
-action('apply-default', async () => { const mode = $('default-mode').value; await command('SET_DEFAULT', { mode }); delete $('default-mode').dataset.edited; });
+action('recording', () => command('SET_RECORDING', { enabled: !state.recording }));
 for (const kind of ['enable', 'disable']) action(kind, async () => {
   await api(`/installation/${kind}`); await refresh();
-  $('message').textContent = kind === 'enable' ? 'Connection enabled. Reopen the Chrome panel and select a current conversation. Restart Chrome if it cannot connect.' : 'Connection disabled. Evidence, keys and preferences retained.';
+  $('message').textContent = kind === 'enable' ? 'Connection enabled. Open supported ChatGPT tabs. Restart Chrome if it cannot connect.' : 'Connection disabled. Evidence, keys and preferences retained.';
 });
 action('prepare-remove', async () => { await api('/installation/export-opportunity'); $('removal').hidden = false; });
 action('cancel-remove', async () => { $('removal').hidden = true; });
@@ -192,8 +161,8 @@ action('check-update', async () => {
 });
 action('download-update', async () => { updateAvailable = false; const result = await api('/installation/download-update'); $('update-state').textContent = result.instruction; });
 function account(value) {
-  $('account').textContent = value.state === 'ACTIVE' ? 'Anchoring account connected. Availability is checked for each new protected send.'
-    : 'Anchoring unavailable. Connect or renew your account, or retry after the service recovers. Sealed will wait or cancel; local history, recovery and export stay available.';
+  $('account').textContent = value.state === 'ACTIVE' ? 'Anchoring account connected. Anchoring follows durable local saves asynchronously.'
+    : 'Anchoring unavailable. Connect or renew your account, or retry after the service recovers. Local recording, history, recovery and export remain available. Provider Send continues normally.';
 }
 action('refresh-account', async () => account(await api('/managed/status')));
 action('connect-account', async () => { const accessCode = $('access-code').value; $('access-code').value = ''; account(await api('/managed/connect', { accessCode })); });
@@ -219,7 +188,6 @@ action('debug-session-save', async () => {
     $('message').textContent = 'Private debug session saved. Attach this file after testing when you choose to share it.';
   } finally { await refresh(); }
 });
-action('development', async () => { location.href = `/#${token}`; });
 action('close', async () => {
   await api('/close'); closed = true; clearInterval(timer); invalidatePreview(); clearRecovery();
   $('message').textContent = 'Dashboard closed. Attestamp is still running. You can close this browser tab.';

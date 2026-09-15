@@ -1,6 +1,6 @@
 # Free local receipts and recipient verification
 
-The ChatGPT composer includes retained receipt history, explicit receipt selection,
+The local dashboard includes retained receipt history, explicit receipt selection,
 an evidence-byte toggle, a disclosure preview and a local download. Saving uses the
 exact immutable preview; subsequent activity cannot silently broaden the export.
 The preview lists all signed records, evidence object lengths, shared proof counts,
@@ -13,7 +13,7 @@ bytes or inherit the original's anchor/release assurance. The relationship is a
 key assertion; the verifier does not claim the replacement is a proven substring
 or transformation of withheld content.
 
-New `release-cancelled` observations retain their frozen version ID and record
+Historical `release-cancelled` observations retain their frozen version ID and record
 digest. Receipt history and selective exports include that original signed record
 only with the matching signed frozen observation, mode and signing key. The
 recipient displays it as `CLIENT_ASSERTION_ONLY`, with provider non-egress
@@ -79,13 +79,17 @@ State-Proof verification under selected trust can establish consensus inclusion
 and separately bind the full-header timestamp. It never rewrites prior release
 authorization or upgrades the assurance used at release time.
 
-`pap-local-record/1` retains the existing commitment/signature construction and
-manifest fields, adding signed `observation`, `public-proof`, and `derivative`
-types. Derivatives have exactly one `redacted_from` relationship containing the
-source record and object digests. Ordinary `pap-poc/1` captures cannot become
-release assertions by containing JSON or active content. The reader preserves
-earlier disclosure and demonstrator exports. Old readers reject new record types
-as unsupported; they cannot silently reinterpret them.
+New `pap-local-record/2` uses LOCAL_RECORD and local_evidence_store labels with
+the existing commitment/signature domains. Text capture, signed observation,
+public-proof and derivative types remain. Derivatives carry exactly one
+`redacted_from` relationship with source record/object digests.
+
+The reader retains `pap-local-record/1`, `pap-poc/1`, old disclosure and
+demonstrator exports. Their signed bytes, IDs, modes and assurance are not
+rewritten. Ordinary captures cannot become control assertions by containing JSON.
+`legacy-observation.mjs` is the closed normal observation/2 reader; `portable.mjs`
+interprets historical observation/1 assertions without signer, network submission
+or writable journal authority. Old readers reject new profiles as unsupported.
 
 Reports separate structure, integrity, key attribution, evidence availability,
 anchor assurance, timestamp assurance and release control. Missing evidence is
@@ -95,15 +99,15 @@ conflicting anchor results remain visible and aggregate to indeterminate.
 Selection never proves global completeness or latest state. Release-control
 results describe signed client assertions, not independent evidence of egress.
 
-Normal ChatGPT Send uses the closed `pap-chatgpt-observation/2` vocabulary:
+New normal ChatGPT Send uses the closed `pap-chatgpt-observation/3` vocabulary:
 `normal-send-intent` binds the selected text record and source scope/document;
 `normal-message-observed` separately binds an exact-text DOM appearance to that
 intent by signed record digest, event ID, source and signing key. The verifier
 reports `OBSERVED_ONLY`, explicit retrospective coverage and unknown provider
 receipt. It cannot turn a legacy release assertion aimed at this descriptor into
 pre-egress control. Missing bytes remain missing evidence; omitted appearances
-make no appearance claim. Historical observation/1 Continuous and Sealed exports
-are read under their original semantics. See the [capture contract](../browser/chatgpt/CONTINUOUS.md).
+make no appearance claim. Historical observation/1 Continuous/Sealed and normal observation/2 exports
+are read under their original semantics, without executable workflow authority. See the [capture contract](../browser/chatgpt/RECORDING.md).
 
 ## Hostile input limits and offline behavior
 

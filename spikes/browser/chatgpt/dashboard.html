@@ -4,7 +4,8 @@
 <body><header><strong>Attestamp</strong><nav aria-label="Dashboard"><a href="#history">History</a><a href="#integrations">Integrations</a><a href="#settings">Settings</a></nav><button id="close">Close dashboard</button></header>
 <main><div class="intro"><p class="eyebrow">PRIVATE ON THIS MAC</p><h1>Your prompts, with evidence.</h1>
 <p>The menu app keeps working when you close this dashboard.</p></div>
-<section class="status"><h2 id="effective-state">Checking Attestamp…</h2><p id="effective-help">Waiting for the engine's current state.</p><button id="pause" disabled>Pause all conversations</button><button id="refresh">Refresh status</button></section>
+<section class="status"><h2 id="effective-state">Checking Attestamp…</h2><p id="effective-help">Waiting for the engine's current state.</p><button id="recording" disabled>Turn ON</button><button id="refresh">Refresh status</button></section>
+<p id="release-channel" role="status"></p>
 <p id="message" role="status" aria-live="polite"></p>
 <p id="debug-session-banner" role="status" hidden></p>
 <section id="history"><h2>Prompt history</h2><div class="stats">
@@ -19,20 +20,19 @@
 <p><strong>Saved locally:</strong> the selected text bytes and the client's observation are retained in your encrypted vault. A normal Send observation does not control sending.</p>
 <p><strong>Anchor corroborated:</strong> local checks compared independent sources. This is not yet a portable consensus proof or an independently verified timestamp.</p>
 <p><strong>Portable proof retained:</strong> an archival proof is included for independent verification with a separately trusted checkpoint.</p>
-<p>These records do not prove authorship, ownership, provider receipt, complete conversation history or model reasoning. Cancelled and uncertain sends retain their evidence; cancellation cannot erase provider copies or published anchors.</p></details></section>
+<p>These records do not prove authorship, ownership, provider receipt, complete conversation history or model reasoning. Historical cancellations and uncertain sends retain their original meaning. They cannot erase provider copies or published anchors.</p></details></section>
 <section id="integrations"><h2>Integrations</h2><article><h3>Chrome · ChatGPT</h3><p>Supported text prompts on this Mac. Attachments, replies, other sites and remote clients are outside this integration.</p>
 <dl id="integration-facts"></dl><p id="integration-help"></p><div class="actions"><button id="enable">Enable connection</button><button id="disable">Disable connection</button><button id="prepare-remove">Remove connection…</button><button id="store">Open Chrome Web Store</button></div>
 <div id="removal" hidden><p>Evidence and keys will stay on this Mac. You can export selected prompts above before removing the connection.</p><label>Keep your evidence <select id="removal-choice"><option value="keep-local">Keep evidence on this Mac</option><option value="exported">I also saved my selected exports</option></select></label><button id="remove">Confirm removal</button><button id="cancel-remove">Keep connection</button></div>
-<label>Default for Chrome / ChatGPT <select id="default-mode"><option>Off</option><option>Continuous</option><option>Sealed</option></select></label><button id="apply-default">Save default</button>
-<p>Defaults are preferences. Each conversation needs a current selection in the Chrome panel. Continuous observes your normal Send; Sealed protects only text submitted through the panel's Protect and send action. Resuming never sends an old prompt.</p>
-<div id="scopes"></div></article></section>
+<p>ON records supported normal Sends automatically across enabled ChatGPT tabs. It is prospective and best effort; no old drafts or history are imported. OFF stops new recording while saved evidence and bounded pending anchoring remain available.</p>
+</article></section>
 <section id="settings"><h2>Settings</h2><h3>Feedback</h3><p>Successful saves appear quietly in the Chrome panel or recording indicator. System success notifications are off. No prompt text appears in notifications.</p>
 <h3>App updates</h3><p id="update-state">Private builds use the documented private setup. Automatic updates are off.</p><button id="check-update">Check for updates</button><button id="download-update" disabled>Download verified update</button>
 <h3>Anchoring account</h3><p id="account">Refresh to check anchoring availability. History, recovery, export and verification remain free without an account.</p>
 <label>Access code <input id="access-code" type="password" autocomplete="off" maxlength="43"></label><div class="actions"><button id="connect-account">Connect account</button><button id="refresh-account">Refresh account</button><button id="disconnect-account">Disconnect account</button></div>
-<h3>Recovery copy</h3><p>Create an encrypted snapshot of retained evidence and a separate recovery key. Store the key securely, separately from the snapshot. Recovery restores history, never old send authority, and cannot prove this was the latest snapshot.</p>
+<h3>Recovery copy</h3><p>Create an encrypted snapshot of retained evidence and a separate recovery key. Store the key securely, separately from the snapshot. Recovery restores history with recording OFF, and cannot prove this was the latest snapshot.</p>
 <label><input id="recovery-consent" type="checkbox"> I will keep the recovery key separate and private</label><button id="prepare-recovery">Prepare recovery copy</button><div id="recovery" hidden><button id="save-recovery">Save encrypted snapshot</button><button id="save-recovery-key">Save separate recovery key</button><button id="clear-recovery">Clear prepared copy</button><p>Prepared downloads expire in one minute. Existing documented recovery tools restore into a new vault and leave this vault untouched.</p></div>
 <section id="debug-session" hidden aria-label="Private debug session"><h3>Private debug session</h3><p id="debug-session-status" role="status"></p><p>Record content-free diagnostics automatically across restarts. Older events roll off after 24 hours or when storage limits are reached. Nothing is uploaded. Save the session once after testing.</p><button id="debug-session-toggle">Start debug recording</button><button id="debug-session-save" disabled>Save debug session</button></section>
 <details><summary>Local support report</summary><p>Preview content-free lifecycle codes and timings. Nothing is uploaded. Prompt bytes, URLs, digests, account details and keys are excluded.</p><button id="preview-support">Preview support report</button><button id="save-support" disabled>Save reviewed report</button><pre id="support"></pre></details>
-<details><summary>Developer tools</summary><p>The technical composer remains available for explicitly bounded private checks.</p><button id="development">Open development view</button></details></section>
+</section>
 </main><footer>Local evidence. Explicit boundaries. Independent verification.</footer><script type="module" src="/dashboard.js"></script></body></html>

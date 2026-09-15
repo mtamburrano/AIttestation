@@ -24,7 +24,7 @@ export function restrictFixtureNetwork(root) {
   };
   return {
     allowRuntime(runtime) {
-      const url = new URL(runtime.composerURL);
+      const url = new URL(runtime.dashboardURL);
       if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port
           || !runtime.socketPath.startsWith(`${root}${sep}`)) throw denied();
       sockets.add(runtime.socketPath); ports.add(Number(url.port)); origins.add(url.origin);

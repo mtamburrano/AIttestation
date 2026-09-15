@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { canonical, parseCanonical, unb64 } from '../../vault/format.mjs';
-import { emit } from '../../release/diagnostics.mjs';
+import { emit } from '../../diagnostics/local.mjs';
 import { parseUniqueJSON } from '../../distribution/unique-json.mjs';
 
 export const FAST_CONFIRM_PROFILE = 'PAP_ALGORAND_FAST_CONFIRM_V1';

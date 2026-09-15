@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { until } from './continuous-fixture.mjs';
+import { until } from './recording-fixture.mjs';
 import { unpack } from '../spikes/vault/format.mjs';
 
 export async function disclosureRegressions({ call, evaluate, wait, click, root }) {

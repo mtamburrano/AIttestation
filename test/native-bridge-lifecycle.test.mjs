@@ -12,19 +12,19 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { CHATGPT_EXTENSION_ID, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT,
-  CHATGPT_RELEASE_PROTOCOL, ChatGPTChromeAdapter } from '../spikes/browser/chatgpt/adapter.mjs';
+  ChatGPTChromeAdapter } from '../spikes/browser/chatgpt/adapter.mjs';
 import { ChromeBridgeController } from '../spikes/browser/chatgpt/bridge.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord, encodeNativeFrame, NativeFrameDecoder,
   runNativeHost } from '../spikes/browser/chatgpt/native-host.mjs';
 import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs';
-import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
+import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { workerFixture, testTab, turn } from './chrome-worker-fixture.mjs';
 
 const origin = `chrome-extension://${CHATGPT_EXTENSION_ID}/`;
 const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } };
 const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
-  adapterProfile: CHATGPT_ADAPTER_PROFILE, releaseProtocol: CHATGPT_RELEASE_PROTOCOL,
+  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/2',
   pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session', ...identity,
   permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [testTab()] });
 const fastTrust = { profile: FAST_CONFIRM_PROFILE };
@@ -71,7 +71,6 @@ test('disabled integration rejects peers and re-enabling accepts only a fresh ha
   t.after(() => runtime.close());
   const first = relay(t, runtime.rendezvousPath); first.child.stdout.resume();
   first.child.stdin.write(encodeNativeFrame(hello())); await until(() => runtime.browserState());
-  runtime.adapter.enroll({ tabId: testTab().id, destination: testTab().destination });
   assert.equal(runtime.adapter.scopes().length, 1);
   runtime.disableIntegration(); await until(() => first.exited);
   const rejected = relay(t, runtime.rendezvousPath); rejected.child.stdout.resume();
@@ -80,7 +79,7 @@ test('disabled integration rejects peers and re-enabling accepts only a fresh ha
   await runtime.enableIntegration();
   const replacement = relay(t, runtime.rendezvousPath); replacement.child.stdout.resume();
   replacement.child.stdin.write(encodeNativeFrame(hello())); await until(() => runtime.browserState());
-  assert.deepEqual(runtime.adapter.scopes(), []); assert.equal(runtime.engine.state().operations.length, 0);
+  assert.equal(runtime.adapter.scopes().length, 1); assert.equal(runtime.engine.state().operations.length, 0);
   await runtime.close(); await until(() => replacement.exited);
 });
 
@@ -135,7 +134,7 @@ test('extension backoff is bounded, handles synchronous failures, and resets onl
   assert.equal(fourth.closed, true, 'an unacknowledged hello cannot hold the port indefinitely');
 });
 
-test('old port callbacks and epoch commands cannot publish or dispatch through a replacement', async () => {
+test('old port callbacks and epoch commands cannot publish through a replacement', async () => {
   let resolveInspect, blocked = true, sends = 0;
   const worker = await workerFixture({ inspect: async (_id, message) => {
     if (message.kind === 'PAP_RELEASE') { sends++; return { exposure: 'NONE', submitted: false }; }
@@ -146,15 +145,14 @@ test('old port callbacks and epoch commands cannot publish or dispatch through a
   await worker.fire(1000); const second = worker.ports[1]; worker.ready(second, 'new-epoch'); await turn();
   const count = second.messages.length; resolveInspect(testTab()); await turn();
   assert.equal(second.messages.length, count, 'old HELLO is not posted to the new port');
-  const command = { kind: 'PAP_RELEASE', profile: CHATGPT_RELEASE_PROTOCOL, runtimeEpoch: 'old-epoch',
+  const command = { kind: 'PAP_RELEASE', profile: 'pap-chatgpt-release/2', runtimeEpoch: 'old-epoch',
     browserSessionId: second.messages[0].browserSessionId, scope: 'scope', tabId: 17,
     expectedUrl: testTab().url, destination: testTab().destination, attemptId: 'old-attempt',
     payloadDigest: 'a'.repeat(64), textDigest: 'b'.repeat(64), textBytes: 'dGVzdA==' };
   first.onMessage.emit(command); second.onMessage.emit(command); await turn();
   assert.equal(sends, 0);
-  assert.equal(second.messages.at(-1).exposure, 'NONE');
+  assert.equal(second.closed, true);
   second.onMessage.emit({ ...command, runtimeEpoch: 'new-epoch', attemptId: 'pending-attempt' });
-  // Disconnect while the release's permission/inspection awaits are pending.
   second.disconnect(); await worker.fire(1000); await turn();
   assert.equal(sends, 0);
   assert.ok(worker.ports[2].messages.every(message => !message.attemptId));
@@ -176,32 +174,21 @@ test('an unresponsive content script times out into recoverable state on the sam
   assert.equal(port.messages.length, count); assert.equal(worker.ports.length, 1);
 });
 
-test('capability loss preserves enrollment while identity and destination loss remain revoked', () => {
-  const diagnostics = new LocalDiagnostics();
-  const adapter = new ChatGPTChromeAdapter(async () => assert.fail('No dispatch during state checks'), {
-    extensionId: CHATGPT_EXTENSION_ID, diagnostics: diagnostics.scope({ epochId: 'test-epoch' }) });
+test('capability loss preserves a source while navigation and disconnect revoke its identity', () => {
+  const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
   const controller = new ChromeBridgeController(adapter, () => {}, { localBrowser: identity.browser, localPlatform: identity.platform });
-  const enroll = () => { controller.receive(hello()); return adapter.enroll({ tabId: 17, destination: testTab().destination }).scope; };
-  const scope = enroll();
+  controller.receive(hello()); const scope = adapter.scopes()[0].scope;
   const state = tabs => ({ ...hello(), kind: 'PAP_STATE', tabs });
-  for (const tabs of [[testTab({ active: false })], [testTab({ surfaceSupported: false })],
-    [testTab({ destination: '', surfaceSupported: false, composerEmpty: false })],
-    [testTab({ composerEmpty: false })], [testTab({ attachmentsPresent: true })]]) {
-    controller.receive(state(tabs)); assert.equal(adapter.eligibility(scope), 'TEMPORARILY_UNAVAILABLE');
-    assert.throws(() => adapter.assertEligible(scope), { code: 'CAPABILITY_UNAVAILABLE' });
-    controller.receive(state([testTab()])); assert.equal(adapter.eligibility(scope), 'ELIGIBLE');
+  for (const tabs of [[testTab({ surfaceSupported: false })],
+    [testTab({ destination: '', surfaceSupported: false })], [testTab({ attachmentsPresent: true })]]) {
+    controller.receive(state(tabs)); assert.equal(adapter.observationEligible(scope), false);
+    controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
   }
-  controller.receive(state([testTab({ destination: 'conversation:other', surfaceSupported: false })]));
-  assert.equal(adapter.eligibility(scope), 'REVOKED');
-  controller.receive(state([testTab()])); assert.equal(adapter.eligibility(scope), 'REVOKED');
-  const fresh = adapter.enroll({ tabId: 17, destination: testTab().destination }).scope;
-  controller.disconnect(); controller.receive(hello()); controller.receive(state([testTab()]));
-  assert.equal(adapter.eligibility(fresh), 'REVOKED');
-  assert.throws(() => adapter.enroll({ tabId: 17, destination: testTab().destination }));
-  const events = diagnostics.preview().report.events;
-  assert.equal(events.filter(event => event.code === 'CAPABILITY_UNAVAILABLE').length, 5);
-  assert.equal(events.filter(event => event.code === 'CAPABILITY_RESTORED').length, 5);
-  assert.ok(events.every(event => event.epochId === diagnostics.id('epochId', 'test-epoch')));
+  controller.receive(state([testTab({ active: false })]));
+  assert.equal(adapter.observationEligible(scope), true, 'recording does not require an empty active tab');
+  controller.receive(state([testTab({ tabEpoch: 'new-document' })]));
+  assert.equal(adapter.observationEligible(scope), false); assert.notEqual(adapter.scopes()[0].scope, scope);
+  controller.disconnect(); assert.deepEqual(adapter.scopes(), []);
 });
 
 test('running extension recovers from normal engine stop/start without reviving or resending authority', async t => {
@@ -211,7 +198,7 @@ test('running extension recovers from normal engine stop/start without reviving 
     attestPeer: async () => structuredClone(identity), controllerTimeoutMs: 500,
     collectFast: async () => ({ fixture: true }), verifyFast: async () => ({ authorized: true,
       anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED', assurance: FAST_CONFIRM_PROFILE, round: 42 }) });
-  let runtime = await start(), submissions = 0, lateReply, surface = testTab();
+  let runtime = await start(), submissions = 0, surface = testTab();
   const relays = [];
   t.after(async () => { await runtime.close(); });
   const worker = await workerFixture({
@@ -225,42 +212,37 @@ test('running extension recovers from normal engine stop/start without reviving 
     },
     inspect: async (_id, message) => {
       if (message.kind !== 'PAP_RELEASE') return surface;
-      submissions++; return new Promise(resolve => { lateReply = resolve; });
+      submissions++; throw Error('UNEXPECTED_PROVIDER_COMMAND');
     },
   });
   await until(() => runtime.browserState() !== null);
   const firstEpoch = runtime.runtimeEpoch, browserSessionId = runtime.browserState().browserSessionId;
-  const scope = runtime.session.enroll({ tabId: 17, destination: testTab().destination }).scope;
-  surface = testTab({ surfaceSupported: false, destination: '', composerEmpty: false });
+  const scope = runtime.adapter.scopes()[0].scope;
+  surface = testTab({ surfaceSupported: false, destination: '' });
   worker.chrome.tabs.onUpdated.emit(17, { status: 'complete' });
-  await until(() => runtime.session.status().eligibility === 'TEMPORARILY_UNAVAILABLE');
+  await until(() => runtime.adapter.scopes()[0]?.eligibility === 'TEMPORARILY_UNAVAILABLE');
   assert.equal(worker.ports.length, 1); assert.equal(relays[0].exited, false);
   surface = testTab(); worker.chrome.tabs.onUpdated.emit(17, { status: 'complete' });
-  await until(() => runtime.session.status().eligibility === 'ELIGIBLE');
-  assert.equal(runtime.session.status().scope, scope);
-  const version = await runtime.session.freeze({ text: 'SYNTHETIC_PRIVATE_PROMPT', mode: 'Sealed', scope, editRevision: 1 });
-  const request = { id: version.id, scope, currentText: 'SYNTHETIC_PRIVATE_PROMPT', editRevision: 1 };
-  await runtime.session.confirmFast({ ...request, transactionId: 'fixture' });
-  const release = runtime.session.release(request); await until(() => submissions === 1);
-  await runtime.close(); assert.equal((await release).state, 'OUTCOME_UNKNOWN');
+  await until(() => runtime.adapter.scopes()[0]?.eligibility === 'ELIGIBLE');
+  assert.equal(runtime.adapter.scopes()[0]?.scope, scope);
+  await runtime.close();
   await until(() => relays[0].exited && worker.ports[0].closed);
   assert.match(relays[0].stderr, /NATIVE_BACKEND_EOF|NATIVE_BACKEND_CLOSED/);
   runtime = await start(); await worker.fire(1000);
   await until(() => runtime.browserState() !== null);
   assert.notEqual(runtime.runtimeEpoch, firstEpoch);
   assert.equal(runtime.browserState().browserSessionId, browserSessionId);
-  assert.deepEqual(runtime.session.status(), { scope: null, eligibility: 'UNENROLLED', scopes: [], versions: [] });
-  lateReply({ exposure: 'DOM_INJECTED', submitted: true, observation: 'LOCAL_CLICK_DISPATCHED' }); await turn();
-  assert.equal(submissions, 1); assert.ok(worker.ports[1].messages.every(message => !message.attemptId));
-  assert.throws(() => runtime.session.release(request), /scope changed/);
-  const durable = runtime.session.runtime.snapshot();
-  assert.equal(durable.seals[version.id].authorization, null);
-  assert.ok(Object.values(durable.attempts).every(attempt => attempt.state === 'OUTCOME_UNKNOWN'));
+  assert.equal(runtime.adapter.scopes().length, 1);
+  assert.notEqual(runtime.adapter.scopes()[0].scope, scope);
+  assert.equal(runtime.engine.state().recording, false);
+  assert.equal(runtime.session.runtime, undefined);
+  assert.equal(runtime.session.release, undefined);
+  assert.equal(submissions, 0);
   const events = diagnostics.preview().report.events;
   assert.equal(events.filter(event => event.code === 'BRIDGE_HELLO').length, 2);
   assert.equal(new Set(events.filter(event => event.code === 'BRIDGE_HELLO').map(event => event.epochId)).size, 2);
-  assert.equal(events.filter(event => event.code === 'ADAPTER_DISPATCH').length, 1);
-  assert.ok(events.some(event => event.code === 'BRIDGE_DISCONNECTED' && event.operationId));
+  assert.equal(events.filter(event => event.code === 'ADAPTER_DISPATCH').length, 0);
+  assert.ok(events.some(event => event.code === 'BRIDGE_DISCONNECTED'));
   const report = JSON.stringify(events);
-  for (const secret of [root, firstEpoch, scope, version.id, version.digest, 'SYNTHETIC_PRIVATE_PROMPT', testTab().url]) assert.ok(!report.includes(secret));
+  for (const secret of [root, firstEpoch, scope, 'SYNTHETIC_PRIVATE_PROMPT', testTab().url]) assert.ok(!report.includes(secret));
 });

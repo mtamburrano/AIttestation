@@ -3,7 +3,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 export const DIAGNOSTIC_LIMITS = Object.freeze({ events: 512, bytes: 256 * 1024, ageMs: 30 * 60_000,
   previews: 4, previewAgeMs: 2 * 60_000 });
 const components = Object.freeze({
-  engine: ['ENGINE_STARTED', 'ENGINE_CLOSED', 'OPERATION_FROZEN', 'OPERATION_CANCELLED',
+  engine: ['ENGINE_STARTED', 'ENGINE_CLOSED', 'RECORDING_ENABLED', 'RECORDING_DISABLED', 'OPERATION_FROZEN', 'OPERATION_CANCELLED',
     'OPERATION_REJECTED', 'DISPATCH_AUTHORIZATION_CONSUMED', 'DISPATCH_STARTED',
     'SUBMISSION_OBSERVED', 'FAILED_BEFORE_EGRESS', 'OUTCOME_UNKNOWN', 'NORMAL_PROMPT_SAVED',
     'MESSAGE_APPEARANCE_RECORDED', 'CAPTURE_GAP'],
@@ -12,7 +12,7 @@ const components = Object.freeze({
     'BRIDGE_DISCONNECTED', 'BRIDGE_HELLO', 'BRIDGE_STATE', 'BRIDGE_DISPATCH', 'BRIDGE_RESPONSE',
     'BRIDGE_RESPONSE_REJECTED', 'BRIDGE_CHECK_ACCEPTED', 'BRIDGE_CHECK_REJECTED', 'BRIDGE_TIMEOUT', 'BRIDGE_WRITE_FAILED', 'BRIDGE_SOCKET_ERROR',
     'BRIDGE_PEER_EOF', 'BRIDGE_AUTH_TIMEOUT', 'BRIDGE_HELLO_TIMEOUT', 'BRIDGE_PEER_REJECTED'],
-  adapter: ['SCOPE_ENROLLED', 'SCOPE_INVALIDATED', 'SCOPE_DESTINATION_CHANGED', 'CAPABILITY_UNAVAILABLE',
+  adapter: ['SOURCE_FOLLOWED', 'SCOPE_ENROLLED', 'SCOPE_INVALIDATED', 'SCOPE_DESTINATION_CHANGED', 'CAPABILITY_UNAVAILABLE',
     'CAPABILITY_RESTORED', 'ADAPTER_DISPATCH', 'ADAPTER_REJECTED'],
   anchor: ['SPONSOR_REQUESTED', 'SPONSOR_SUBMITTED', 'SPONSOR_UNAVAILABLE', 'ACCOUNT_REQUIRED',
     'NOT_CONFIGURED', 'UNPAID', 'QUOTA_EXHAUSTED', 'RATE_LIMITED', 'SERVICE_UNAVAILABLE',
@@ -136,7 +136,8 @@ export class LocalDiagnostics {
   }
 }
 
-// Diagnostics never alter admission, durable release, or error recovery.
+// Historical codes remain readable in saved reports; they grant no authority.
+// Diagnostics never alter recording, durable evidence or error recovery.
 export function emit(diagnostics, code, data = {}) {
   try { diagnostics?.record(code, data); } catch {}
 }

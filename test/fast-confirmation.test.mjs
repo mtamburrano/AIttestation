@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createHash } from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import { FAST_CONFIRM_PROFILE, ALGOD_RETRY_PROFILE, collectFastEvidence, observeAlgodOperator } from '../spikes/anchor/algorand/fast-confirm.mjs';
-import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
+import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 
 const archive = JSON.parse(await readFile(new URL('../spikes/anchor/algorand/proof/testdata/testnet-archive.json', import.meta.url)));
 const transactionId = archive.transactionId;

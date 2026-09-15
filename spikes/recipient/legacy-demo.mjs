@@ -28,8 +28,7 @@ export function recoveredBundle(disclosureText) {
     if (!object) throw Error('Recovery metadata object missing');
     return parseCanonical(unpack(object.bytes));
   };
-  // The app writes an explicit index as the final record immediately before
-  // snapshot export. Never classify arbitrary captured text as proof metadata.
+  // The historical app wrote an explicit final index before snapshot export. Never classify arbitrary captured text as proof metadata.
   const index = content(disclosure.records.at(-1));
   if (index.profile !== 'pap-demo-observation/1' || index.kind !== 'recovery-export-index' || !Array.isArray(index.anchors)) throw Error('Demonstrator recovery index missing');
   const anchors = index.anchors.map(ref => {

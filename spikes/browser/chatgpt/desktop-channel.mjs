@@ -3,10 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { ENGINE_COMMAND_PROFILE } from './engine.mjs';
 import { integrationStatus } from './dashboard.mjs';
 
-const commandProfile = 'pap-desktop-command/1', eventProfile = 'pap-desktop-event/1';
+const commandProfile = 'pap-desktop-command/2', eventProfile = 'pap-desktop-event/2';
 const limit = 16 * 1024;
-const fields = { REFRESH: [], OPEN: ['section'], PAUSE: ['runtimeEpoch', 'revision', 'paused'],
-  MODE: ['runtimeEpoch', 'revision', 'mode'], QUIT: [] };
+const fields = { REFRESH: [], OPEN: ['section'], RECORDING: ['runtimeEpoch', 'revision', 'enabled'], QUIT: [] };
 
 // These pipes are inherited only by the fixed signed runtime. No bearer, URL,
 // prompt, raw digest or key crosses the resident menu's control/status channel.
@@ -23,11 +22,10 @@ export function startDesktopChannel(runtime, { requestFD, responseFD, input, out
       const installation = await runtime.maintenance?.status() ?? { integration: 'NOT_CONFIGURED' };
       const state = runtime.engine.state(), integration = integrationStatus(state, installation, runtime.browserState() !== null);
       const event = { profile: eventProfile, runtimeEpoch: state.runtimeEpoch, revision: state.revision,
-        paused: state.preferences.paused, defaultMode: state.preferences.defaultMode,
+        recording: state.recording,
         available: state.available, code: actionFailed ? 'ACTION_FAILED' : integration.code,
-        continuousScopes: state.scopes.filter(value => value.effectiveMode === 'Continuous' && state.capabilities.observation).length,
-        sealedScopes: state.scopes.filter(value => value.effectiveMode === 'Sealed' && state.capabilities.privilegedPanel).length,
-        unavailableScopes: state.scopes.filter(value => value.effectiveMode === 'Unavailable').length };
+        readySources: state.scopes.filter(value => value.effectiveRecording === 'ON').length,
+        unavailableSources: state.scopes.filter(value => value.effectiveRecording === 'UNAVAILABLE').length };
       const body = Buffer.from(JSON.stringify(event)), prefix = Buffer.alloc(4); prefix.writeUInt32BE(body.length);
       if (body.length > limit || output.writableLength > limit) throw Error('DESKTOP_CHANNEL_LIMIT');
       if (!closed) output.write(Buffer.concat([prefix, body]));
@@ -44,12 +42,11 @@ export function startDesktopChannel(runtime, { requestFD, responseFD, input, out
       if (value.section === 'verifier') await runtime.openVerifier();
       else await runtime.openDashboard(value.section);
     }
-    if (value.kind === 'PAUSE' || value.kind === 'MODE') {
+    if (value.kind === 'RECORDING') {
       const state = runtime.engine.state();
       await runtime.engine.command({ profile: ENGINE_COMMAND_PROFILE, adapterProfile: state.adapterProfile,
         runtimeEpoch: value.runtimeEpoch, expectedRevision: value.revision, commandId: randomUUID(),
-        kind: value.kind === 'PAUSE' ? 'SET_PAUSE' : 'SET_DEFAULT',
-        ...(value.kind === 'PAUSE' ? { paused: value.paused } : { mode: value.mode }) }, { surface: 'desktop' });
+        kind: 'SET_RECORDING', enabled: value.enabled }, { surface: 'desktop' });
     }
     await refresh();
   }

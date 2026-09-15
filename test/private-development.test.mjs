@@ -115,8 +115,8 @@ test('private Chrome selection requires an explicit separate owned copy and reje
 test('private browser launch keeps the selected app and isolated state across LaunchServices', async () => {
   const chrome = { application: '/private/synthetic test/Google Chrome.app' };
   const paths = { home: '/private/synthetic test', chrome: '/private/synthetic test/browser data' };
-  const composerURL = 'http://127.0.0.1:12345/#synthetic-token';
-  await launchDevelopmentChrome(chrome, paths, composerURL, (command, args, options, callback) => {
+  const dashboardURL = 'http://127.0.0.1:12345/#synthetic-token';
+  await launchDevelopmentChrome(chrome, paths, dashboardURL, (command, args, options, callback) => {
     assert.equal(command, '/usr/bin/open');
     assert.equal(args[args.indexOf('-a') + 1], chrome.application);
     assert.ok(args.includes('-n')); assert.ok(!args.includes('-b'));
@@ -124,14 +124,14 @@ test('private browser launch keeps the selected app and isolated state across La
     assert.ok(browserArgs.includes(`--user-data-dir=${paths.chrome}`));
     assert.ok(browserArgs.includes('--disable-updater-scheduler'));
     assert.ok(browserArgs.includes('--disable-component-update'));
-    assert.equal(browserArgs.at(-1), composerURL);
+    assert.equal(browserArgs.at(-1), dashboardURL);
     assert.deepEqual(options.env, { HOME: paths.home, PATH: '/usr/bin:/bin' });
     assert.equal(options.shell, undefined);
     callback(null);
   });
   for (const failure of [{ code: 1 }, { code: 'ENOENT' }, { killed: true, signal: 'SIGTERM' }]) {
-    await assert.rejects(launchDevelopmentChrome(chrome, paths, composerURL, (command, args, options, callback) => {
-      callback(Object.assign(Error(`launch failed: ${composerURL}`), failure));
+    await assert.rejects(launchDevelopmentChrome(chrome, paths, dashboardURL, (command, args, options, callback) => {
+      callback(Object.assign(Error(`launch failed: ${dashboardURL}`), failure));
     }), error => {
       assert.equal(error.message, 'CHROME_LAUNCH_FAILED');
       assert.equal(startupFailure(error), 'PRIVATE_DEVELOPMENT_START_FAILED:CHROME_LAUNCH_FAILED');

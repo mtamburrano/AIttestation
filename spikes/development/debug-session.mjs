@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { LocalDiagnostics, validateDiagnosticEvent } from '../release/diagnostics.mjs';
+import { LocalDiagnostics, validateDiagnosticEvent } from '../diagnostics/local.mjs';
 
 export const DEBUG_SESSION_LIMITS = Object.freeze({ events: 2048, bytes: 512 * 1024,
   ageMs: 24 * 60 * 60_000, segments: 16, segmentEvents: 128, segmentBytes: 64 * 1024 });

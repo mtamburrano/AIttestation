@@ -18,15 +18,15 @@ manifest matches the assigned draft item identity.
    Store**, then add **Attestamp for ChatGPT** and accept its displayed permissions.
    Access is limited to chatgpt.com, native messaging and the trusted side panel.
    Incognito is unavailable.
-4. Open the Attestamp panel in a ChatGPT tab and select the current conversation.
-   Choose Continuous to record normal Send, or enter text in the trusted panel
-   and choose **Protect and send** for Sealed. Provider-page drafts,
-   attachments, other sites and other browsers are outside this protected path.
-5. Close the dashboard whenever you like; the menu app remains active. Use its
-   global pause and scoped mode controls to inspect effective state. After
-   restarting Chrome or the app, select the current conversation again. Interrupted
-   submissions are never sent again automatically. An unknown outcome is not
-   confirmation that the provider received nothing.
+4. Open the Attestamp sidebar and turn recording **ON**. Use ChatGPT's normal
+   composer and Send; supported existing/new tabs and windows are followed
+   automatically. Attachments, other sites/browsers, responses and unsupported
+   inputs are outside this best-effort text recording contract.
+5. Inspect effective connection and recording status separately. **Prompt saved**
+   means durable local evidence; anchor status is asynchronous. Turn **OFF** to
+   stop new capture while retaining history and bounded pending anchor work.
+   New/recovered installations start OFF. Closing a view leaves the resident app
+   running. Fresh pairing after restart never replays Send or backfills history.
 
 In Settings, use **Check for updates**, then **Download verified update**. The app verifies
 the signed release manifest, exact download bytes, signing team and Apple
@@ -43,11 +43,11 @@ choose to keep evidence on this Mac. Then remove the Chrome connection, remove
 the extension in Chrome, quit Attestamp and move Attestamp.app to Trash in Finder.
 The encrypted vault and Keychain items are retained, and Attestamp Verifier
 continues to work. Reinstalling and enabling the connection restores access to local history;
-it does not restore past permission to send. Do not delete the local evidence
+fresh source/identity checks still apply. Do not delete the local evidence
 store or Keychain items as a troubleshooting step.
 
-**Disable connection** is reversible and also ends current scope authority.
-After re-enabling, reopen the extension and select a current conversation; restart
+**Disable connection** is reversible and also revokes new capture.
+After re-enabling, inspect current connection status in the sidebar; restart
 Chrome if needed. History counts prompts and known conversations. Review selected
 evidence before export; local source corroboration is distinct from a portable
 proof. Settings offers an encrypted recovery copy and a separate recovery key.

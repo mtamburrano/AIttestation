@@ -1,200 +1,107 @@
 # Local product testing and diagnostics
 
-From the checkout, using Node 22.13+ and the local `/usr/bin/openssl` executable:
+Use Node 22.13+ and local `/usr/bin/openssl`:
 
 ```sh
 npm run test:product
-```
-
-This is the routine development command. It works in the current user, creates
-fresh owner-only temporary resources and prints a machine-readable summary with
-`reportDirectory`. Open `report.html` in that directory to inspect the report;
-`result.json` contains scenario results and `diagnostics.json` contains the exact
-diagnostic preview. No process/socket orchestration or existing private test kit
-is needed. A sandbox must permit this process's temporary Unix socket and loopback
-HTTP server; a denied local socket produces `LOCAL_IPC_PERMISSION_DENIED`.
-
-The worker starts with an empty environment except for a fixed system PATH. It
-uses memory-only test keys, a fresh encrypted durable vault and a fresh sponsorship
-ledger. Its network guard admits only the registered product API origin and native
-Unix socket for the active fixture. Unknown local ports, external destinations
-and redirects fail closed. Existing app configuration, HOME, proxies, credentials,
-Keychain, browser profiles and sponsor accounts are never selected as defaults.
-There is no live mode or live fallback.
-
-## Components and evidence labels
-
-The command uses `startPackagedChatGPT`, the authenticated product HTTP API,
-`runNativeHost`, `ChromeBridgeController`, `ChatGPTChromeAdapter`,
-`ChatGPTProtectionSession`, `ReleaseRuntime`, `DurableVault`,
-`ManagedAnchoringClient` and `ManagedSponsorship`. It checks the durable one-use
-attempt before the synthetic provider responds, and reads the exact evidence back
-through the vault while checking that its on-disk files contain no prompt plaintext.
-
-Only the provider reply, platform identity, sponsor signing/broadcast and
-confirmation observations/verdict are injected. The collector itself is the real
-two-source collector with an explicit observer fixture. The sponsor client uses
-an in-process transport to the real ledger. The provider uses real native frames
-through the real local relay. These fixtures establish no installed browser/DOM,
-macOS peer identity, native Keychain, live provider or Algorand assurance.
-Reports always say `SYNTHETIC_FIXTURE` and `liveEvidence: NOT_TESTED`.
-
-Sealed scenarios use the existing trusted-composer product API. Continuous
-scenarios additionally execute the actual content script and extension worker
-against a synthetic DOM, through the native relay and the same engine. They cover
-normal Send intent, exact bytes, IME exclusions, duplicate delivery, independent
-tabs, page changes and recording failures. Installed browser/provider acceptance
-and the privileged side-panel journey remain separate evidence.
-
-## Target a failure
-
-```sh
-npm run test:product -- --scenario bridge-timeout
-npm run test:product -- --scenario confirmation-unavailable
-npm run test:product -- --scenario sealed-delayed-confirmation
-npm run test:product -- --scenario account-disconnected-cancel
+npm run test:product -- --scenario recording-storage-gap
 npm run test:product -- --list
-node --test test/native-bridge-lifecycle.test.mjs
 npm run test:chatgpt
 ```
 
-| Scenario | Expected observed behavior |
+The runner creates fresh owner-only temporary resources and prints a
+`reportDirectory` containing `report.html`, `result.json` and the exact
+`diagnostics.json` preview. A sandbox must allow this run's Unix socket and
+loopback HTTP; denial reports LOCAL_IPC_PERMISSION_DENIED.
+
+The worker has an empty environment except fixed system PATH. It uses memory-only
+test keys, a fresh encrypted durable vault and fresh sponsorship fixtures/ledger.
+The network guard allows only the active fixture's registered local API/socket.
+Unknown ports, external destinations and redirects reject. Existing app config,
+HOME, proxies, credentials, Keychain, profiles and accounts are never defaults.
+There is no live mode or fallback.
+
+## Actual and synthetic boundaries
+
+The fixtures use `startPackagedChatGPT`, `ChatGPTRecordingSession`, resident
+engine, durable vault, actual page/worker/sidebar model, native framing and local
+API. Browser DOM/API/platform identity and anchor verdicts are explicitly
+synthetic. The runner separately checks real managed accounting with local
+fixtures. No provider action is performed by Attestamp.
+
+| Scenario | Expected invariant |
 | --- | --- |
-| `resident-view-and-scopes` | Closing/reopening a view, replay and unrelated document changes retain one pinned operation and one provider attempt |
-| `sealed-success` | One synthetic submission, after confirmation and durable authorization consumption |
-| `sealed-delayed-confirmation` | Both operators become observable after bounded retries; one reservation, sponsor broadcast and provider attempt |
-| `confirmation-unavailable` | Confirmation remains pending; no dispatch or authorization |
-| `confirmation-rejected` | Invalid confirmation rejected; no dispatch or authorization |
-| `bridge-timeout` | One attempt, unknown outcome, no automatic resend |
-| `bridge-response-mismatch` | Mismatched reply rejected; unknown outcome, no automatic resend |
-| `account-disconnected` | Account required; no sponsor broadcast or dispatch |
-| `account-disconnected-cancel` | Terminal cancellation; three selected signed records, portable local assertion, no anchor or release attempt after repeated requests |
-| `continuous-normal-send` | Mouse/Enter capture, IME/typing exclusions, lost acknowledgement, equal-text events, multiple tabs, navigation and retrospective export; no Attestamp dispatch |
-| `continuous-storage-gap` | Unavailable storage produces a recording gap without a save acknowledgement or provider replay |
-| `continuous-key-gap` | Unavailable keys produce a recording gap without a save acknowledgement or provider replay |
-| `continuous-connection-gap` | Lost bridge produces recording-unavailable feedback without capturing or replaying the user's action |
+| recording-normal-send | Genuine intent, exact bytes, retry dedup, equal-text separate events, independent tabs, appearance assertion and retrospective export |
+| recording-storage-gap | No save acknowledgement or provider replay on unavailable storage |
+| recording-key-gap | No save acknowledgement or provider replay on unavailable keys |
+| recording-connection-gap | Unavailable feedback without collecting disconnected input |
+| panel-recording | Shared global toggle/status and Dashboard opening, no prompt-writing authority |
+| dashboard-recording | Shared settings, history, export/recovery and integration controls |
 
-The cancellation scenario follows the authenticated API from disconnected-account
-freeze through cancellation, history, selective export and independent recipient
-verification. Diagnostics contain one correlated cancellation and subsequent
-rejections, with no confirmation or dispatch. Focused engine/recipient tests also
-cover identical text in different frozen versions, queued requests, restart,
-legacy unassociated records, recovery, missing bytes and mismatched signing keys.
-`npm run test:recipient-browser` checks the real product controls and recipient
-cancellation copy in a fresh headless Chrome profile against local fixtures,
-including cancellation initiated by another local view. It makes no live provider
-or TestNet requests and does not use the retained test installation.
+PASS means the expected invariant held, including expected failure behavior.
+Reports always identify SYNTHETIC_FIXTURE and liveEvidence: NOT_TESTED.
+They establish no installed native ancestry/Keychain/sidebar, actual provider
+markup or live Algorand acceptance.
 
-`node --test test/resident-engine.test.mjs` exercises the resident command contract,
-concurrent revisions, duplicate delivery versus repeated text, per-document scopes,
-policy precedence, pause/cancel/reconnect, singleton ownership and encrypted restart
-without grants. It also interrupts outcome persistence after consumption and checks
-that the restored operation remains unknown without a resend. All vaults, locks,
-sockets and API servers are created in fresh temporary directories with memory keys.
+## Focused and broader regression commands
 
-The separate native lifecycle regression executes the actual extension worker
-against a synthetic Chrome API and real relay child processes. It holds browser
-stdin open during backend failure, exercises normal engine stop/start, and checks
-new-epoch pairing without replaying an interrupted release. It also covers bounded
-backoff, stale async callbacks and recoverable provider capability changes, with
-correlated content-free diagnostics. Every process, socket and encrypted vault
-belongs to that fresh test run; installed Chrome and macOS identity are not claimed.
+| Command | Boundary |
+| --- | --- |
+| npm test | All Node tests, including crypto, old evidence readers, package policy, recovery, diagnostics and native compile guards |
+| npm run test:chatgpt | ON/OFF engine, automatic sources, page extraction, removed API rejection, sidebar roles, native reconnect and fast collector |
+| npm run test:product | Six isolated end-to-end product scenarios above |
+| npm run test:dashboard-browser | Actual dashboard in fresh headless Chrome; selection/preview/export response races, hostile content, free verifier and narrow layout |
+| npm run test:recipient-browser | Actual standalone recipient UI with legacy/local evidence and hostile inputs |
+| npm run test:algorand | Go verifier/observer tests and fixed archived public proof; no transaction submission |
+| npm run test:legacy-archive | Read-only fixed historical demonstrator export under independently selected trust |
 
-`node --test test/fast-confirmation.test.mjs` covers the real collector and observer
-process boundary with static recorded evidence, injected observations and fresh
-temporary helper processes. It exercises either/both delayed operators, permanent
-absence, cancellation, process/output limits, invalid configuration and conflicting
-evidence. `npm run test:chatgpt` includes it. `npm run test:algorand` additionally
-checks the Go observer's response classification with isolated transports and TLS
-fixtures, plus the real cryptographic verifier against recorded public evidence.
-The product runner checks correlated retry/timeout diagnostics and verifies that
-retries use one original transaction, one reservation and one sponsor request.
-These tests do not submit TestNet transactions, send provider prompts or touch the
-retained private test installation.
+Native/browser commands need their explicit local toolchain or Chrome binary.
+The Go archive commands require the locally available pinned tools and fixed
+archive. Missing dependencies or excluded platform checks must be reported;
+synthetic assurance does not substitute for them. See the
+[rework matrix](../browser/chatgpt/MIGRATION.md) for executed results.
 
-The composer regression in `test/chatgpt-composer.test.mjs` runs the actual content
-script and background worker against a synthetic DOM and Chrome API, connected to
-the real bridge controller, session, encrypted temporary vault and diagnostics.
-It covers empty/existing drafts independently of Send rendering, asynchronous and
-disabled Send, ambiguous controls, exact text and destination drift, permission
-loss, reload, disconnect, expired authorization and lost replies. Sealed and
-Always Protect each click once after two fresh engine checks; exposure failures
-persist as `OUTCOME_UNKNOWN` with no automatic resend. Tests use newly generated
-keys and fresh `/private/tmp/attestamp-composer-test-*` directories, removed by
-that test's cleanup. This is synthetic DOM evidence and does not establish live
-ChatGPT behavior or installed native peer identity. The native lifecycle and
-existing provider-path regressions remain part of `npm run test:chatgpt`.
+All tests must use fresh paths, memory/generated fixture keys and scrubbed
+environments. Ordinary regression work does not change a retained private kit,
+Keychain, sponsor ledger, app registration or user browser profile. A separately
+authorized installed checkpoint is described in [README.md](README.md).
 
-`PASS` means the expected scenario invariant held, including expected failures.
-Unexpected failures use fixed reason codes, preserve the bounded diagnostic report
-and exit nonzero. Success exits 0; failed scenarios exit 1; invalid options or a
-refused output directory exit 2. Each command has a 60-second worker deadline;
-an abrupt worker failure emits a fixed summary on stdout. A forcibly terminated
-process may leave its fresh temporary fixture directory for manual inspection.
+## Report lifecycle
 
-Use `--output /absolute/new/report-directory` to choose the report location.
-The directory must be new, canonical and outside a checkout; existing data is never
-adopted, replaced or cleaned up. Fixture keys, vaults and ledgers are removed on
-normal completion. Only the three report files remain, with mode 0600. Saved
-reports have no automatic expiry; delete the selected report directory when it is
-no longer needed. No report is uploaded or shared automatically.
+The worker has a 60-second deadline. Success exits 0, unexpected failures 1,
+invalid options/refused output 2. Failures retain bounded fixed-code diagnostics.
+A forcibly terminated run may leave its newly created fixture directory.
 
-## Diagnostic contract and preview
+`--output /absolute/new/report-directory` requires a new canonical directory
+outside a checkout. Existing data is never adopted, replaced or cleaned up.
+Normal cleanup removes only that run's fixture keys/vaults/ledgers. The three
+0600 report files remain until explicitly deleted. No report uploads automatically.
 
-`LocalDiagnostics` accepts an allowlist of lifecycle codes and six reference
-fields: operation, runtime epoch, bridge connection, capture, confirmation and
-dispatch. References are HMAC pseudonyms under a fresh in-memory key per collector;
-the key and original identifiers are never exported. No raw content digest is
-used as a correlation identifier. Components pass only known identifiers and
-relative durations; they never pass a request, payload, URL, error object or DOM.
-Collection is observational and cannot grant authority or change a release result.
+## Diagnostic privacy
 
-An operation reference joins engine, vault and anchoring events. A dispatch
-reference joins the durable attempt to adapter/bridge activity. The bridge
-connection and shared runtime epoch tie those events to admission and reconnect
-events. A capture reference joins the saved text to its operation without disclosing
-the vault's original record identifier. Each confirmation attempt gets a new
-reference; sponsor transaction IDs are omitted.
+Shared `spikes/diagnostics/local.mjs` accepts fixed allowlisted codes and six
+opaque reference fields. HMAC pseudonyms use a fresh memory key; original IDs,
+raw digests, transaction IDs, prompt bytes, URLs, DOM, paths, credentials, arbitrary
+errors and keys never enter reports. Legacy dispatch codes/field names remain
+only so saved diagnostic reports can be read; current recording creates no
+dispatch operation.
 
-The in-memory event buffer is limited to 512 events, 256 KiB and 30 minutes.
-Writes, selections and previews prune expired events and report how many were
-dropped. Relative timings are rounded to milliseconds and saturated at 24 hours.
-The collector keeps no persistent log files. Detailed `BRIDGE_STATE` events are
-disabled by default; opting in requires both synthetic mode and
-`--trace-synthetic`. There is no product setting, environment switch or wire
-command to enable synthetic authorities or deeper traces in a live build.
+The live buffer is bounded to 512 events, 256 KiB and 30 minutes. Timings are
+relative rounded milliseconds, capped at 24 hours. Detailed BRIDGE_STATE events
+require synthetic mode plus `--trace-synthetic`; no live environment or wire
+flag enables injected authorities. Diagnostic failure cannot grant control.
 
-In the real local product page, **Local diagnostics** is available even without
-distribution setup. Refresh the selection, choose an operation/component and
-preview before saving. Empty selections include all retained events. Operation
-selections include only events associated with that operation; choose all
-operations to include startup and connection events. The paired local API offers
-the same selection/preview/export flow and retains its bearer/origin checks.
+Local diagnostics offers selection, exact preview and Save. A preview is immutable,
+expires within two minutes, and is consumed once; at most four exist. New activity
+cannot widen the reviewed export. Fixture results are capped at 320 KiB. Reports
+remain separate from evidence exports and never contain vaults or recovery keys.
 
-A preview stores an immutable snapshot for at most two minutes; at most four
-snapshots are retained. Export consumes the chosen preview once. New events or
-selection changes cannot silently widen an already previewed export. Exported
-events contain no prompt text, keys, credentials, full URLs, raw hashes, filenames
-or arbitrary exception/DOM strings. The fixture result is capped at 320 KiB and
-the HTML preview is bounded by that fixed-size result. Reports remain separate
-from evidence exports and never include the encrypted vault or its keys.
+The private owner debug session remains opt-in and persists content-free events
+across restart: 2,048 events, 512 KiB, 24 hours, at most 16 segments. SQLite/WAL
+storage has separate strict size/ownership gates. Its explicit export/clear
+controls do not change evidence, keys, recording or sponsor accounting.
 
-## Add a scenario
-
-The trusted panel scenarios `panel-protect-and-send`, `panel-cancel` and
-`panel-destination-change` use the actual panel model, worker, content script,
-native framing and encrypted engine. They hold confirmation while testing edits,
-double clicks, target changes and cancellation; no provider bytes precede the
-synthetic validated confirmation. Cancellation survives portable export.
-`npm run test:sidepanel-browser` additionally drives the actual panel controls
-and renders their narrow layout in a fresh headless Chrome profile, with synthetic
-Chrome APIs and external DNS blocked. See the [panel contract](../browser/chatgpt/SEALED.md)
-for boundary, permission and evidence limits.
-
-Add a fixed scenario name and expectations in `product-fixtures.mjs`. Reuse the
-existing product entrypoint/API, explicitly inject each external dependency and
-keep all resources under the supplied fresh fixture directory. New observations
-should use a fixed event code, duration and opaque reference, with leakage tests
-for any new boundary. The development fixture modules are excluded from packaged
-product resources. Validate the collector, network guard, privacy and permissions
-with `node --test test/product-diagnostics.test.mjs`.
+Add only fixed scenarios using the existing runtime with explicitly injected
+external dependencies and fresh resources. Development fixtures are excluded
+from packaged products. Privacy and resource tests live in
+`test/product-diagnostics.test.mjs` and `test/debug-session.test.mjs`.

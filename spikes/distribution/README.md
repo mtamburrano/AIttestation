@@ -201,7 +201,7 @@ The verifier checks these independent relationships:
   The panel-enabled extension uses exactly `nativeMessaging` and `sidePanel`,
   only the ChatGPT host permission, packaged panel resources, and a fixed CSP.
   External messaging, web-accessible panel resources and extra permissions reject.
-  The [panel contract](../browser/chatgpt/SEALED.md) documents its admission boundary
+  The [sidebar contract](../browser/chatgpt/DASHBOARD.md) documents its control boundary
   and local rendering/IPC checks; Store publication remains separate.
 - Extra channel files, stale staging, unsupported paths, links, hard links,
   special files, duplicate JSON/plist fields and ambiguous ZIP entries reject.
@@ -307,7 +307,7 @@ fresh build from a `releaseChannel: "production"` config with
 
 ## Consumer names and compatibility identifiers
 
-Attestamp is the consumer name used by the desktop app, local composer, verifier,
+Attestamp is the consumer name used by the desktop app, local dashboard, verifier,
 extension and install/remove guidance. The demonstrator is named Attestamp Demo.
 Display names and candidate filenames do not authorize changes to the technical
 identities below. Any migration of these values needs separate compatibility and
@@ -440,10 +440,10 @@ Record unexecuted checks as null, not zero or passed.
 | --- | --- |
 | Installation | Finder copy/first-open steps, macOS permission prompts, Gatekeeper acceptance, no terminal setup |
 | Store install | Actual listing/key match, permission prompt count, no unrelated-site/incognito access |
-| Pairing | Time from explicit Enable to authenticated native pair, then successful local synthetic release |
-| Restart | App and Chrome restarts; new pair/enrollment; old authorization unusable |
+| Pairing | Time from explicit Enable to authenticated native pair, then a supported synthetic normal-Send observation |
+| Restart | App and Chrome restarts; fresh automatic sources; stale capture tokens unusable |
 | Updates | Actual current/previous signed artifacts; tampered download/signature rejection; no unauthorized rollback |
-| Migration | Known pre-upgrade export matches after interrupted migration and reopen; no restored send authority |
+| Migration | Known pre-upgrade export matches after interrupted migration and reopen; recovered recording starts OFF |
 | Removal | Export opportunity, manifest removal, extension/app removal, evidence retained, verifier usable offline |
 | Provider drift | Missing/changed composer/send controls, attachments, tab ambiguity and revoked permissions remove eligibility |
 
@@ -474,7 +474,7 @@ retry explicitly. App launch rejects an older installed sequence before opening
 the vault. The vault also rejects missing, inconsistent or newer compatibility
 metadata, and additive migrations commit atomically. Repair old behavior in a
 new, signed sequence that can read the existing schema. Never restore an older
-database, reset sequence metadata or resurrect signing/dispatch state to roll back
+database, reset sequence metadata or resurrect signing state or recording consent to roll back
 an app. Existing experimental binaries predate this distribution guard and are
 not supported rollback targets. These checks assume the local OS and owner-only
 state remain trustworthy; they do not resist an owner maliciously rewriting both
@@ -494,20 +494,19 @@ ask for a vault, browser profile, recovery secret, environment dump or raw crash
 log. The user can continue to export and verify existing evidence independently.
 
 On connection conflict, leave the existing manifest untouched. On unsupported
-provider/browser state, leave protection disabled. Reproduce with synthetic
+provider/browser state, report recording unavailable. Reproduce with synthetic
 markup in a temporary profile, update the pinned adapter contract and fixtures,
 then perform the real installed check before publishing a compatible signed
 release/store update. Mutation/input notifications carry only a fixed drift
-message; the authenticated runtime rechecks the state and revokes enrollment.
+message; the authenticated runtime rechecks the state and revokes affected capture policies.
 Selector compatibility remains a bounded client observation, not proof of
 provider behavior or receipt. No unsigned remote selector/config update may
-enable protection.
+enable recording.
 
 On migration failure, close the app and retain the vault plus its WAL. Use a
 compatible signed repair build or owner-controlled recovery/export; never
-delete evidence or keys to make an installation check pass. On an unknown send
-outcome, ask the user to inspect only the synthetic test conversation during
-validation; the app must never automatically resend.
+delete evidence or keys to make an installation check pass. A recording gap does not establish provider receipt or non-receipt. Capture
+and anchor failures never replay Send or backfill unobserved prompts.
 
 Technical references: [Apple distribution notarization](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
 [Apple provisioning profiles](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles),

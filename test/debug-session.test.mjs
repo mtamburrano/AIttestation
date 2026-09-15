@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { OwnerDebugSession, DEBUG_SESSION_LIMITS, DEBUG_STORAGE_LIMITS } from '../spikes/development/debug-session.mjs';
-import { LocalDiagnostics } from '../spikes/release/diagnostics.mjs';
+import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { copyApplicationResource } from '../spikes/distribution/package-resources.mjs';
 import { productFixture, SYNTHETIC_CANARY } from '../spikes/development/product-fixtures.mjs';
 import { restrictFixtureNetwork } from '../spikes/development/fixture-network.mjs';
-import { continuousFixture, until } from './continuous-fixture.mjs';
-import { publishRuntimeState } from '../spikes/development/runtime-state.mjs';
+import { recordingFixture, until } from './recording-fixture.mjs';
+import { publishRuntimeState, RUNTIME_STATE_PROFILE } from '../spikes/development/runtime-state.mjs';
 
 async function isolated(t) {
   const root = await realpath(await mkdtemp('/private/tmp/pap-debug-test-'));
@@ -74,7 +74,7 @@ test('a deterministic SIGKILL after WAL commit retains both events and starts a 
   assert.equal(session.status().segments, 2); assert.equal(events(session.export()).length, 3);
 });
 
-test('a crashed real engine retains diagnostics and revokes an unconsumed sealed grant on process restart', async t => {
+test('a crashed real engine retains diagnostics and evidence with fresh sources on restart', async t => {
   const root = await isolated(t), crash = child(root, 'runtime-crash');
   assert.equal(crash.signal, 'SIGKILL', crash.stderr);
   const oldLocator = await readFile(join(root, 'runtime.json'), 'utf8');
@@ -90,11 +90,11 @@ test('a crashed real engine retains diagnostics and revokes an unconsumed sealed
 
 test('private restart refuses unsafe or unrecognized existing runtime locators', async t => {
   const root = await isolated(t), path = join(root, 'runtime.json');
-  const runtime = { runtimeEpoch: 'synthetic', composerURL: `http://127.0.0.1:12345/#${'a'.repeat(43)}`,
+  const runtime = { runtimeEpoch: 'synthetic', dashboardURL: `http://127.0.0.1:12345/dashboard#${'a'.repeat(43)}`,
     engine: { state: () => ({ available: true, runtimeEpoch: 'synthetic' }) } };
-  const valid = { profile: 'pap-private-development/1', composerURL: runtime.composerURL };
-  for (const invalid of [{ ...valid, text: 'SECRET' }, { ...valid, composerURL: 'https://external.invalid/' },
-    { ...valid, profile: 'other' }, { ...valid, composerURL: runtime.composerURL.replace('12345', '80') }]) {
+  const valid = { profile: RUNTIME_STATE_PROFILE, dashboardURL: runtime.dashboardURL };
+  for (const invalid of [{ ...valid, text: 'SECRET' }, { ...valid, dashboardURL: 'https://external.invalid/' },
+    { ...valid, profile: 'other' }, { ...valid, dashboardURL: runtime.dashboardURL.replace('12345', '80') }]) {
     const content = JSON.stringify(invalid); await writeFile(path, content, { mode: 0o600 });
     await assert.rejects(publishRuntimeState(root, runtime)); assert.equal(await readFile(path, 'utf8'), content);
   }
@@ -186,8 +186,8 @@ test('default-size sessions keep recording through repeated full-journal rotatio
   const directory = join(root, 'full'); await mkdir(directory, { mode: 0o700 });
   const network = restrictFixtureNetwork(root);
   try {
-    const result = await productFixture(directory, 'sealed-success', session.diagnostics, network);
-    assert.equal(result.observed, 'SUBMISSION_OBSERVED'); assert.equal(result.providerAttempts, 1);
+    const result = await productFixture(directory, 'recording-normal-send', session.diagnostics, network);
+    assert.equal(result.observed, 'NORMAL_PROMPT_SAVED'); assert.equal(result.providerAttempts, 0);
     assert.equal(session.status().state, 'RECORDING');
   } finally { network.restore(); }
 });
@@ -257,23 +257,23 @@ test('dashboard recording/export obey local authentication and cannot change eng
   const root = await isolated(t), session = new OwnerDebugSession(root); t.after(() => session.close());
   const network = restrictFixtureNetwork(root); let f;
   t.after(async () => { await f?.close(); network.restore(); });
-  f = await continuousFixture(root, { diagnostics: session.diagnostics, debugSession: session, network });
+  f = await recordingFixture(root, { diagnostics: session.diagnostics, debugSession: session, network });
   const api = async (path, body = {}, credentials = true) => {
     const url = new URL(f.runtime.dashboardURL);
     const response = await fetch(new URL(path, url), { method: 'POST',
       headers: { Origin: url.origin, Authorization: credentials ? `Bearer ${url.hash.slice(1)}` : 'Bearer invalid' }, body: JSON.stringify(body) });
     return { status: response.status, value: await response.json() };
   };
-  const baseline = f.runtime.engine.state(), durable = f.runtime.session.runtime.snapshot();
+  const baseline = f.runtime.engine.state(), durable = f.runtime.session.vault.inspect();
   assert.equal((await api('/debug-session/recording', { enabled: true }, false)).status, 400);
   assert.equal(session.status().state, 'STOPPED');
   assert.equal((await api('/debug-session/recording', { enabled: true })).status, 200);
   assert.equal((await api('/dashboard/state')).value.debugSession.state, 'RECORDING');
-  assert.deepEqual(f.runtime.engine.state(), baseline); assert.deepEqual(f.runtime.session.runtime.snapshot(), durable);
+  assert.deepEqual(f.runtime.engine.state(), baseline); assert.deepEqual(f.runtime.session.vault.inspect(), durable);
   for (const body of [{ enabled: 'true' }, { enabled: true, token: 'SECRET' }, {}]) {
     assert.equal((await api('/debug-session/recording', body)).status, 400);
   }
-  await f.mode('Continuous'); f.send(SYNTHETIC_CANARY);
+  await f.recording(true); f.send(SYNTHETIC_CANARY);
   await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
   const saved = await api('/debug-session/export'); assert.equal(saved.status, 200);
   assert.ok(events(saved.value.content).some(event => event.code === 'NORMAL_PROMPT_SAVED'));
@@ -285,9 +285,9 @@ test('dashboard recording/export obey local authentication and cannot change eng
   assert.equal(f.releases.length, 0); assert.equal(f.anchorCalls, 1); assert.equal(f.confirmed, 1);
 });
 
-test('recording preserves baseline Continuous/Sealed outcomes, anchor counts and bounded retries', async t => {
+test('debug recording preserves ON/OFF outcomes, anchor counts and bounded retries', async t => {
   const root = await isolated(t), network = restrictFixtureNetwork(root); t.after(() => network.restore());
-  for (const scenario of ['continuous-normal-send', 'sealed-success', 'sealed-delayed-confirmation', 'bridge-timeout', 'confirmation-rejected']) {
+  for (const scenario of ['recording-normal-send', 'recording-storage-gap', 'recording-connection-gap', 'panel-recording']) {
     const outcomes = [];
     for (const enabled of [false, true, 'failed']) {
       const directory = join(root, `s${outcomes.length}`); await mkdir(directory, { mode: 0o700 });

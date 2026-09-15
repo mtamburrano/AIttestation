@@ -7,11 +7,11 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { canonical, keys, parseCanonical, unb64 } from '../../vault/format.mjs';
 import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID } from './adapter.mjs';
 import { ChromeBridgeController } from './bridge.mjs';
-import { ChatGPTProtectionSession } from './session.mjs';
+import { ChatGPTRecordingSession } from './session.mjs';
 import { ResidentEngine } from './engine.mjs';
 import { lockResidentEngine } from './engine-store.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord } from './native-host.mjs';
-import { LocalDiagnostics, emit } from '../../release/diagnostics.mjs';
+import { LocalDiagnostics, emit } from '../../diagnostics/local.mjs';
 
 const MAX_LINE_BYTES = 512 * 1024;
 const MAX_PEER_RESULT_BYTES = 4 * 1024;
@@ -125,9 +125,9 @@ export function attestNativePeer(socket, {
 
 /**
  * Owns the authenticated native rendezvous and composes the production chain:
- * Chrome native messaging -> controller -> adapter -> protected session.
+ * Chrome native messaging -> controller -> adapter -> recording session.
  */
-export async function startChromeProtectionRuntime(directory, {
+export async function startChromeRecordingRuntime(directory, {
   extensionId = CHATGPT_EXTENSION_ID, fastTrust, vault = null, vaultKey = null,
   collectFast, verifyFast, verifyArchive, managed = null, fault, controllerTimeoutMs = 5_000,
   rendezvousPath = join(directory, 'browser-bridge.json'), socketPath = null,
@@ -155,17 +155,11 @@ export async function startChromeProtectionRuntime(directory, {
   let pairedResolve;
   const paired = new Promise(resolvePaired => { pairedResolve = resolvePaired; });
   const extensionOrigin = `chrome-extension://${extensionId}/`;
-  const adapter = new ChatGPTChromeAdapter((command, diagnosticRefs) => {
-    if (!controller) {
-      const error = bridgeError('Authenticated Chrome bridge is disconnected'); error.exposure = 'NONE';
-      return Promise.reject(error);
-    }
-    return controller.sendRelease(command, diagnosticRefs);
-  }, { extensionId, diagnostics: events, runtimeEpoch });
+  const adapter = new ChatGPTChromeAdapter({ extensionId, diagnostics: events, runtimeEpoch });
   const unlock = lockResidentEngine(directory);
   let session, engine;
   try {
-    session = await new ChatGPTProtectionSession(directory, adapter, {
+    session = await new ChatGPTRecordingSession(directory, adapter, {
       vault, vaultKey, fastTrust, managed, diagnostics: events,
       ...(collectFast === undefined ? {} : { collectFast }),
       ...(verifyFast === undefined ? {} : { verifyFast }),

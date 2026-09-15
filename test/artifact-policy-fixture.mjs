@@ -85,14 +85,14 @@ export async function fixture(t, channel = 'release-candidate') {
   const sourceBytes = new Map([['spikes/anchor/algorand/go.mod', 'module synthetic-artifact-test\ngo 1.25.1\n'],
     ['spikes/anchor/algorand/go.sum', ''], ['spikes/distribution/THIRD_PARTY_NOTICES.md', 'Synthetic notices'],
     ['spikes/browser/chatgpt/extension/manifest.json', canonical(manifest)]]);
-  for (const path of ['browser/chatgpt/bridge-runtime.mjs', 'browser/chatgpt/composer.html', 'distribution/config.mjs', 'distribution/updater.mjs',
+  for (const path of ['browser/chatgpt/bridge-runtime.mjs', 'browser/chatgpt/dashboard.html', 'distribution/config.mjs', 'distribution/updater.mjs',
     'distribution/lifecycle.mjs', 'browser/chatgpt/adapter.mjs', 'managed/client.mjs', 'managed/protocol.mjs']) {
     sourceBytes.set(`spikes/${path}`, `// Synthetic approved source for ${path}\n`);
   }
   sourceBytes.set('spikes/browser/chatgpt/runtime-main.mjs', "import './bridge-runtime.mjs';\n");
   // Keep the synthetic producer independent of the verifier's resource list.
   const recipientSources = ['vault/format.mjs', 'vault/records.mjs', 'anchor/verifier.mjs', 'anchor/merkle.mjs',
-    'recipient/portable.mjs', 'recipient/normal-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
+    'recipient/portable.mjs', 'recipient/normal-observation.mjs', 'recipient/legacy-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
     'recipient/recipient.html', 'recipient/recipient.js', 'recipient/recipient.css'];
   for (const path of recipientSources) {
     const bytes = path === 'recipient/main.mjs' ? "import './server.mjs';\n" : `// Synthetic approved source for ${path}\n`;

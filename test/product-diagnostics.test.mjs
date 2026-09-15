@@ -4,7 +4,7 @@ import { mkdtemp, realpath, readFile, readdir, rm, writeFile, lstat, chmod } fro
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
-import { LocalDiagnostics, DIAGNOSTIC_LIMITS, emit } from '../spikes/release/diagnostics.mjs';
+import { LocalDiagnostics, DIAGNOSTIC_LIMITS, emit } from '../spikes/diagnostics/local.mjs';
 import { PRODUCT_SCENARIOS, SYNTHETIC_CANARY } from '../spikes/development/product-fixtures.mjs';
 import { restrictFixtureNetwork } from '../spikes/development/fixture-network.mjs';
 import { checkSponsor } from '../spikes/development/sponsor.mjs';
@@ -83,7 +83,9 @@ test('detailed traces require explicit synthetic mode and fixture authorities ca
   }
   assert.equal(copyApplicationResource('spikes/development/product-fixtures.mjs'), false);
   assert.equal(copyApplicationResource('spikes/development/product-test-worker.mjs'), false);
-  assert.equal(copyApplicationResource('spikes/release/diagnostics.mjs'), true);
+  assert.equal(copyApplicationResource('spikes/diagnostics/local.mjs'), true);
+  assert.equal(copyApplicationResource('spikes/release/runtime.mjs'), false);
+  assert.equal(copyApplicationResource('spikes/demonstrator/server.mjs'), false);
 });
 
 test('fixture networking refuses external and unregistered local destinations before connecting', async t => {
@@ -93,7 +95,7 @@ test('fixture networking refuses external and unregistered local destinations be
     assert.throws(() => createConnection({ host: '127.0.0.1', port: 37461 }), /FIXTURE_NETWORK_FORBIDDEN/);
     assert.throws(() => createConnection(join(root, 'unregistered.sock')), /FIXTURE_NETWORK_FORBIDDEN/);
     await assert.rejects(fetch('https://provider.invalid/'), /FIXTURE_NETWORK_FORBIDDEN/);
-    assert.throws(() => guard.allowRuntime({ socketPath: '/unrelated/socket', composerURL: 'http://127.0.0.1:1/#synthetic' }));
+    assert.throws(() => guard.allowRuntime({ socketPath: '/unrelated/socket', dashboardURL: 'http://127.0.0.1:1/#synthetic' }));
   } finally { guard.restore(); }
 });
 
@@ -136,38 +138,18 @@ test('documented runner exercises real components with correlated bounded report
     const correlated = events.filter(event => scenario.operationId ? event.operationId === scenario.operationId : event.epochId === scenario.epochId);
     assert.ok(correlated.length > 0 && correlated.every(event => event.epochId === scenario.epochId));
     assert.ok(correlated.some(event => event.code === scenario.observed));
-    if (scenario.scenario.startsWith('continuous-') && scenario.scenario.endsWith('-gap')) {
+    if (scenario.scenario.startsWith('recording-') && scenario.scenario.endsWith('-gap')) {
       assert.equal(scenario.providerAttempts, 0); assert.equal(scenario.sponsorBroadcasts, 0);
       assert.ok(!correlated.some(event => event.code === 'NORMAL_PROMPT_SAVED' || event.code === 'DISPATCH_STARTED'));
       continue;
     }
+    assert.equal(scenario.providerAttempts, 0);
+    assert.ok(!correlated.some(event => event.dispatchId));
+    if (scenario.scenario === 'panel-recording') continue;
     assert.ok(correlated.some(event => event.code === 'VAULT_CAPTURED' && event.captureId));
-    if (scenario.providerAttempts) {
-      const dispatch = correlated.find(event => event.code === 'DISPATCH_AUTHORIZATION_CONSUMED');
-      const bridge = correlated.find(event => event.code === 'BRIDGE_DISPATCH');
-      assert.ok(dispatch && bridge && bridge.bridgeId && dispatch.dispatchId === bridge.dispatchId);
-      assert.ok(dispatch.sequence < bridge.sequence);
-    }
-    if (scenario.scenario === 'account-disconnected-cancel') {
-      assert.equal(scenario.providerAttempts, 0); assert.equal(scenario.sponsorBroadcasts, 0);
-      assert.equal(correlated.filter(event => event.code === 'OPERATION_CANCELLED').length, 1);
-      assert.ok(correlated.some(event => event.code === 'ACCOUNT_REQUIRED'));
-      assert.ok(correlated.filter(event => event.code === 'OPERATION_REJECTED').length >= 5);
-      assert.ok(!correlated.some(event => event.dispatchId || event.confirmationId || event.code === 'SPONSOR_SUBMITTED'));
-    }
-    if (!scenario.scenario.startsWith('account-disconnected')) {
-      const confirmation = correlated.filter(event => event.confirmationId);
-      assert.ok(confirmation.length >= 2 && new Set(confirmation.map(event => event.confirmationId)).size === 1);
-      if (scenario.scenario === 'sealed-delayed-confirmation') {
-        assert.equal(confirmation.filter(event => event.code === 'ALGOD_NOT_YET_OBSERVABLE').length, 1);
-        assert.equal(confirmation.filter(event => event.code === 'ALGOD_NOT_YET_CONFIRMED').length, 2);
-        assert.equal(confirmation.at(-1).code, 'CONFIRMATION_ACCEPTED');
-      }
-      if (scenario.scenario === 'confirmation-unavailable') {
-        assert.ok(confirmation.some(event => event.code === 'CONFIRMATION_BUDGET_EXPIRED'));
-        assert.ok(confirmation.some(event => event.code === 'CONFIRMATION_PENDING'));
-      }
-    }
+    const confirmation = correlated.filter(event => event.confirmationId);
+    assert.ok(confirmation.length >= 2 && new Set(confirmation.map(event => event.confirmationId)).size === 1);
+
   }
   assert.deepEqual(JSON.parse(await readFile(join(output, 'diagnostics.json'), 'utf8')), report.diagnostics);
   for (const file of ['result.json', 'diagnostics.json', 'report.html']) {

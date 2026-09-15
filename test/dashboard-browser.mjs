@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { continuousFixture, until } from './continuous-fixture.mjs';
+import { recordingFixture, until } from './recording-fixture.mjs';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { disclosureRegressions } from './dashboard-disclosure-browser.mjs';
 import { OwnerDebugSession } from '../spikes/development/debug-session.mjs';
@@ -19,18 +19,18 @@ try {
   installation.status = async () => ({ ...await installStatus(), releaseClass: 'SYNTHETIC_FIXTURE', releaseChannel: null });
   let connected = true; const opened = [];
   debugSession = new OwnerDebugSession(root);
-  f = await continuousFixture(root, { installation, debugSession, diagnostics: debugSession.diagnostics,
+  f = await recordingFixture(root, { installation, debugSession, diagnostics: debugSession.diagnostics,
     openDashboard: async url => { opened.push(url); }, managed: {
     status: () => ({ state: connected ? 'ACTIVE' : 'ACCOUNT_REQUIRED' }),
     disconnect: () => { connected = false; return { state: 'ACCOUNT_REQUIRED' }; },
     submit: async () => ({ transactionId: 'A'.repeat(52) }),
   } });
-  await f.mode('Continuous'); f.send('<img src="https://never.invalid/tracker">SYNTHETIC_DASHBOARD_CANARY');
+  await f.recording(true); f.send('<img src="https://never.invalid/tracker">SYNTHETIC_DASHBOARD_CANARY');
   await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
   browser = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
     '--headless=new', `--user-data-dir=${join(root, 'profile')}`, '--remote-debugging-port=0', '--no-first-run',
     '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-default-apps',
-    '--disable-updater-scheduler', '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank',
+    '--disable-updater-scheduler', '--use-mock-keychain', '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank',
   ], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
   let launchError; browser.on('error', error => { launchError = error; });
   let port;
@@ -59,7 +59,15 @@ try {
     if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails)); return result.result.value;
   };
   const wait = async expression => {
-    for (let i = 0; i < 150; i++) { if (await evaluate(expression)) return; await delay(30); }
+    for (let i = 0; i < 150; i++) {
+      try { if (await evaluate(expression)) return; }
+      catch (error) {
+        // Page.reload invalidates the old evaluation context before the new
+        // document is available; keep polling the same bounded condition.
+        if (!/Inspected target navigated or closed|Execution context was destroyed|Cannot find context/.test(error.message)) throw error;
+      }
+      await delay(30);
+    }
     throw Error(`Dashboard UI condition failed: ${expression}; ${JSON.stringify({ exceptions,
       visible: await evaluate('document.body.innerText') })}`);
   };
@@ -83,7 +91,7 @@ try {
   assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), false);
   await click('debug-session-toggle'); await wait("document.querySelector('#debug-session-status').textContent.startsWith('Debug recording stopped')");
   await click('debug-session-toggle'); await wait("document.querySelector('#debug-session-status').textContent.startsWith('Debug recording active')");
-  await click('pause'); await wait("document.querySelector('#effective-state').textContent === 'Paused for all conversations'");
+  await click('recording'); await wait("document.querySelector('#effective-state').textContent === 'Attestamp is OFF'");
   await disclosureRegressions({ call, evaluate, wait, click, root });
   await evaluate("document.querySelector('#prompts input').click()"); await click('preview-export');
   await wait("!document.querySelector('#save-export').disabled");
@@ -96,13 +104,13 @@ try {
   const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   await writeFile(join(screenshotRoot, 'dashboard.png'), Buffer.from(screenshot.data, 'base64'));
   await click('close'); await wait("document.querySelector('#message').textContent.startsWith('Dashboard closed.')");
-  assert.equal(f.runtime.engine.state().preferences.paused, true);
-  await call('Page.reload'); await wait("document.querySelector('#effective-state')?.textContent === 'Paused for all conversations'");
+  assert.equal(f.runtime.engine.state().recording, false);
+  await call('Page.reload'); await wait("document.querySelector('#effective-state')?.textContent === 'Attestamp is OFF'");
   assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), false);
   assert.equal(await evaluate("document.querySelector('#prompt-count').textContent"), '1');
   await click('disable'); await wait("document.querySelector('#effective-state').textContent === 'Chrome connection disabled'");
   await click('enable'); await wait("document.querySelector('#message').textContent.startsWith('Connection enabled.')");
-  await click('pause'); await wait("document.querySelector('#effective-state').textContent === 'Chrome disconnected'");
+  await click('recording'); await wait("document.querySelector('#effective-state').textContent === 'Chrome disconnected'");
   await click('prepare-remove'); await wait("!document.querySelector('#removal').hidden");
   await click('remove'); await wait("document.querySelector('#message').textContent.startsWith('Connection removed.')");
   assert.equal(await evaluate("document.querySelector('#prompt-count').textContent"), '1');
@@ -123,7 +131,7 @@ try {
   assert.equal(await evaluate("document.querySelector('#verify').disabled && document.querySelector('#close').disabled"), true);
   assert.deepEqual(exceptions, []);
   assert.ok(requests.every(url => url.startsWith('http://127.0.0.1:') || url.startsWith('blob:http://127.0.0.1:')));
-  console.log(`PASS: dashboard rendering, privacy, pause, close/reopen, account loss, export, integration controls and free verifier shutdown. Screenshot: ${join(screenshotRoot, 'dashboard.png')}`);
+  console.log(`PASS: dashboard rendering, privacy, ON/OFF, close/reopen, account loss, export, integration controls and free verifier shutdown. Screenshot: ${join(screenshotRoot, 'dashboard.png')}`);
 } finally {
   socket?.close();
   if (browser && browser.exitCode === null) { const exited = new Promise(resolve => browser.once('exit', resolve)); browser.kill(); await exited; }

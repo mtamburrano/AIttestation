@@ -117,7 +117,7 @@ export async function prepareDevelopment(configPath, output) {
       browserPolicy: 'EXPLICIT_TEST_USER_COPY' });
     if (certificate) await writeFile(join(dev, 'sponsor-certificate.pem'), certificate);
     run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName Attestamp Private Test', join(contents, 'Info.plist')]);
-    const html = join(contents, 'Resources/spikes/browser/chatgpt/product.html');
+    const html = join(contents, 'Resources/spikes/browser/chatgpt/dashboard.html');
     await writeFile(html, (await readFile(html, 'utf8')).replace('<body>',
       '<body><p role="note">PRIVATE DEVELOPMENT — TestNet only. Use synthetic test content in your dedicated account.</p>'));
     const sign = (path, identifier, entitlements) => run('/usr/bin/codesign', ['--force', '--sign', config.signingIdentity,

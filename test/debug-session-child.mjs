@@ -5,7 +5,7 @@ import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs
 import { FileKeyStore } from './file-key-store.mjs';
 import { publishRuntimeState } from '../spikes/development/runtime-state.mjs';
 import { restrictFixtureNetwork } from '../spikes/development/fixture-network.mjs';
-import { CHATGPT_ADAPTER_PROFILE, CHATGPT_RELEASE_PROTOCOL, CHATGPT_PAGE_CONTRACT,
+import { CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT,
   CHATGPT_EXTENSION_ID } from '../spikes/browser/chatgpt/adapter.mjs';
 import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -49,25 +49,31 @@ try {
   await publishRuntimeState(root, runtime);
   if (mode === 'runtime-crash') {
     const hello = { extensionId: CHATGPT_EXTENSION_ID, adapterProfile: CHATGPT_ADAPTER_PROFILE,
-      releaseProtocol: CHATGPT_RELEASE_PROTOCOL, pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser',
+      captureProfile: 'pap-chatgpt-capture/2', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser',
       browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' }, permissions: ['nativeMessaging'],
       hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [{ id: 17, windowId: 1,
         tabEpoch: 'synthetic-tab', active: true, url: 'https://chatgpt.com/c/synthetic', destination: 'conversation:synthetic',
-        surfaceSupported: true, composerEmpty: true, attachmentsPresent: false }] };
+        surfaceSupported: true, attachmentsPresent: false }] };
     runtime.adapter.pair(hello); runtime.adapter.synchronize(hello);
-    const { scope } = runtime.session.enroll({ tabId: 17, destination: 'conversation:synthetic' });
-    const version = await runtime.session.freeze({ text: 'CRASH_PROMPT_CANARY', mode: 'Sealed', scope, editRevision: 1 });
-    await runtime.session.confirmFast({ id: version.id, scope, currentText: 'CRASH_PROMPT_CANARY', editRevision: 1, transactionId: 'synthetic' });
-    assert.ok(runtime.session.runtime.snapshot().seals[version.id].authorization);
-    assert.ok(JSON.parse(session.export()).segments.flatMap(segment => segment.events).some(event => event.code === 'CONFIRMATION_ACCEPTED'));
+    const state = runtime.engine.state();
+    await runtime.engine.command({ profile: 'pap-resident-command/2', adapterProfile: state.adapterProfile,
+      runtimeEpoch: state.runtimeEpoch, expectedRevision: state.revision, commandId: crypto.randomUUID(),
+      kind: 'SET_RECORDING', enabled: true }, { surface: 'desktop' });
+    const policy = runtime.engine.capturePolicy()[0];
+    const { scope, runtimeEpoch, browserSessionId, tabId, windowId, tabEpoch, destination } = policy;
+    await runtime.engine.observe({ profile: 'pap-chatgpt-capture/2', kind: 'send-intent', token: policy.token,
+      eventId: crypto.randomUUID(), inputMethod: 'send-button', text: 'CRASH_PROMPT_CANARY',
+      source: { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
+        scope, runtimeEpoch, browserSessionId, tabId, windowId, tabEpoch, destination, documentId: 'synthetic-document' } });
+    await runtime.engine.drain();
+    assert.ok(JSON.parse(session.export()).segments.flatMap(segment => segment.events).some(event => event.code === 'NORMAL_PROMPT_SAVED'));
     process.kill(process.pid, 'SIGKILL');
   }
   assert.equal(runtime.engine.state().scopes.length, 0);
-  const snapshot = runtime.session.runtime.snapshot();
-  assert.equal(Object.keys(snapshot.seals).length, 1);
-  assert.ok(Object.values(snapshot.seals).every(seal => seal.authorization === null));
-  assert.deepEqual(snapshot.attempts, {});
+  assert.equal(runtime.engine.state().recording, true);
+  assert.equal(runtime.session.receipts.list().length, 1);
+  assert.equal(runtime.session.runtime, undefined);
   assert.equal(session.status().state, 'RECORDING');
   assert.equal(session.status().segments, 2);
 } finally {

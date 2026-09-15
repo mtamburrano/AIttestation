@@ -64,7 +64,7 @@ rotation/expiry, unsafe files and privacy canaries, and compares recording on/of
 against the same product scenarios. It requires local loopback/Unix-socket access.
 The signed, installed workflow below is for explicitly scheduled platform checks.
 
-This route prepares the actual trusted composer, encrypted durable vault, native
+This route prepares the actual ON/OFF recorder, encrypted durable vault, native
 bridge and unpacked ChatGPT extension for a **dedicated macOS test user**. Builds
 retain the frozen app, helper, Keychain group, native host and extension IDs.
 Developer ID signing and the existing helper provisioning profile remain required.
@@ -277,7 +277,7 @@ not install this CA globally or disable TLS verification. The server binds loopb
 uses the existing bounded managed protocol, and supplies submission information
 only. The app still asks the pinned AlgoNode and Nodely observers and runs the real
 Go fast-confirmation verifier. A local response, fake transaction ID or fixture
-cannot authorize protected release. No public backend or DNS is required.
+cannot establish anchor assurance. No public backend or DNS is required.
 
 ## Start, test, restart, stop
 
@@ -304,26 +304,28 @@ skips periodic updater setup, while
 [copy ownership](https://chromium.googlesource.com/chromium/src/+/refs/tags/153.0.8010.37/chrome/browser/updater/browser_updater_client_util_mac.mm#250)
 keeps its updater scope in the test account. After this setup, opening the same
 Attestamp Private Test app in Finder reuses the saved consented browser location
-in `desktop.json`; it revalidates that copy and restores no scope or send grant.
+in `desktop.json`; it revalidates that copy and requires fresh source identity and keeps the versioned recording preference.
 Do not open the copy's About/Update action or promote its updater.
 
 Visit `chrome://extensions`, enable Developer mode and
 load the output's `extension` directory unpacked. Verify its unchanged ID is
 `medilhopfckldjgdnchfkpmfmfnkadca`. Open one empty `https://chatgpt.com/` tab and
-sign into the designated test account. Use the trusted Attestamp side panel for
-Sealed text, or Continuous with normal ChatGPT Send. The menu opens an optional
-dashboard for history, integrations, anchoring account and recovery. Its integration
-card identifies private development; no Store connection is needed. Closing the
-dashboard leaves capture running. Quit from the menu ends the engine. The old
-technical composer is available under Developer tools for bounded checks.
+sign into the designated test account. The retained Attestamp sidebar offers global
+ON/OFF and status. Turn ON and use ChatGPT's normal composer and Send; supported
+existing/new tabs are followed automatically. The menu opens the optional dashboard
+for history, integrations, anchoring account and recovery. Closing a view leaves
+the engine running. Quit ends it. Installed sidebar trust/interaction must be
+validated separately against the current contracts before acceptance.
 
-While a designated ChatGPT account is unavailable, check local startup, load the
-unpacked extension to test native pairing, and verify rejection without an enrolled
-provider scope, stop/restart and backup/restore in the test user. Keep browser tabs
-at `chatgpt.com` closed and sponsorship unconfigured. Native pairing needs no
-provider tab or login. These checks do not establish successful sends, provider
-markup compatibility, receipt export or live TestNet confirmation. A vault with no
-content receipts still contains its empty release journal.
+The launch helper above is an optional private setup path. Manual opening of the
+approved Chrome copy is allowed for an installed checkpoint; it is not a product
+requirement to redesign browser launch. Existing code-signature, native ancestry,
+resource ownership and dedicated-profile checks still apply.
+
+Without a designated ChatGPT account, restrict checks to authorized local startup,
+native pairing without provider tabs, restart and recovery. Leave sponsorship
+unconfigured. These checks establish no provider markup, normal-Send capture or
+live confirmation. An empty history can still contain encrypted engine metadata.
 
 Keep the test user active at the Mac during startup,
 restart, backup and restore, with its Keychain unlocked. The installed check
@@ -336,25 +338,25 @@ An older private build without explicit browser selection is rejected with
 `PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT`; prepare an updated signed build.
 The production package has no browser-path override.
 
-1. During an approved installed checkpoint, connect anchoring in dashboard Settings
-   using the local sponsor's access code. Select a current conversation in the panel.
-2. Try Continuous with synthetic text using ChatGPT's normal Send. Try Sealed with
-   the panel's **Protect and send** action: bytes stay local until confirmation.
-   A persistent Sealed preference never restores old send authority.
-3. Stop the sponsor, edit while pending, add another ChatGPT tab, or disable the
-   extension. Strict modes must remain pending or revoke eligibility; no downgrade
-   or automatic resend is allowed. Refresh/re-enroll only as the app requires.
-4. Export a selected receipt using its disclosure preview. Open the bundled
-   `Recipient/Attestamp Verifier.app` to check it without the sponsor. An export
-   with only fast evidence does not become consensus-verified or prove authorship.
-5. Quit Attestamp, close test Chrome, then reopen the app in Finder. Reload the
-   extension if Chrome requires it. Check persisted receipts and fresh enrollment;
-   old interrupted versions must never gain send authority after restart.
+1. During an approved installed checkpoint, inspect effective connection status and
+   connect the dedicated anchoring account in Settings only when authorized.
+2. Explicitly turn ON and submit synthetic text using ChatGPT's own Send. Confirm
+   durable Prompt saved separately from asynchronous anchor status. Existing/new
+   tabs and duplicate conversations require no enrollment.
+3. Turn OFF, interrupt connection, introduce unsupported input or an unavailable
+   sponsor. No new capture after the cutoff, provider interception, resend or
+   history backfill is allowed. Already-durable bounded anchoring may finish OFF.
+4. Preview selected disclosure and verify it with the bundled free verifier.
+   Fast evidence alone is not consensus verification, event truth or authorship.
+5. Quit/reopen the app and approved Chrome. Check retained history and preference,
+   fresh source identity and rejection of stale deliveries. Recovery starts OFF.
 
 Use `npm run test:dashboard-browser` and
-`npm run test:product -- --scenario resident-dashboard` for ordinary isolated
-regressions. Do not rebuild or modify the retained installed kit per task. These
-setup instructions do not authorize a new live provider send or transaction.
+`npm run test:product -- --scenario dashboard-recording` for ordinary isolated
+regression. Do not rebuild or modify the retained kit per task. These instructions
+do not authorize provider Sends, new transactions, sponsor reset/refill or account
+switching. A retained sponsor's actual remaining reservations must be checked at
+the separately authorized checkpoint; no quota is assumed here.
 
 ```sh
 npm run dev -- stop
@@ -378,7 +380,7 @@ Keep it separately from the encrypted package. Restore authenticates the complet
 snapshot, creates a fresh vault and Keychain identities, reopens it to verify key
 persistence, and writes `recovery-report.json` plus one portable plaintext file per
 receipt. Open these receipts in the bundled verifier. The original active vault
-stays in place; restored history has no send authority and is never connected to
+stays in place; restored history starts with recording OFF and is never connected to
 the bridge. These developer commands make no provider/sponsor calls. They accept
 only paths inside the test user's home, require new output directories outside
 repositories and the active control/vault/browser directories, and bound recovery
@@ -393,7 +395,7 @@ An existing backup/restore destination is never reused or cleared automatically.
 ```sh
 npm run test:private-dev
 npm run test:chatgpt
-npm run test:consumer-browser
+npm run test:dashboard-browser
 npm run test:recipient-browser
 npm test
 ```
@@ -404,17 +406,13 @@ accounts cannot launch the private native host, conflicting registrations are
 preserved, and fixture replies cannot pass the real confirmation verifier. The
 ChatGPT regressions exercise native framing with injected peer/provider fixtures;
 they do not establish installed Chrome ancestry or current provider markup.
-The consumer-browser fixture exercises all modes, export, fresh recovery and free
-verification with a synthetic loopback provider. Its reports say `FIXTURE_VERIFIED`,
-never public-network assurance. No default test uses a real provider or live sponsor.
-The headless browser fixtures use Chrome's mock Keychain so they do not access the
-ordinary user's browser credential store. The actual private app uses its normal
-provisioned Keychain helper in the separate macOS account.
-
-For a visible synthetic rehearsal, `npm run demo:consumer -- --open` creates a
-fresh temporary store/profile and blocks external DNS. Its ephemeral keys require
-saving both the encrypted recovery package and separate recovery secret before
-stopping. This laboratory is not the persistent, Keychain-backed private app.
+The dashboard/recipient browser fixtures exercise ON/OFF, disclosure races,
+recovery and free verification in new headless profiles with mock Keychain and
+external DNS blocked. Synthetic proofs remain FIXTURE_VERIFIED, never public
+consensus assurance. No ordinary test uses a real provider or live sponsor.
+The actual private app retains its provisioned Keychain helper for a separately
+authorized installed checkpoint. Executable historical demos are removed; fixed
+legacy archives remain independently verifiable with `npm run test:legacy-archive`.
 
 Automatic test cleanup removes only directories created by that invocation.
 Private app stop preserves its account, vault, keys, browser copy and browser state. After the

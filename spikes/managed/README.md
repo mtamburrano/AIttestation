@@ -1,7 +1,7 @@
 # Managed anchoring
 
 This bounded service sponsors Algorand TestNet self-payments from an operator-owned
-account. Consumers connect an anchoring account in the trusted local composer using
+account. Consumers connect an anchoring account in the local dashboard using
 an access code; they never create a crypto wallet, handle a seed, or sign a network
 transaction. The app keeps the access code in a separate app-bound Keychain item,
 scoped to the configured service origin. Signing out removes only that credential.
@@ -9,7 +9,7 @@ Evidence keys, recovery and exports do not depend on it.
 
 ## Consumer behavior
 
-Freezing a version automatically requests sponsorship. The runtime constructs a
+A durable new observation queues an asynchronous sponsorship attempt. The runtime constructs a
 single-leaf Merkle root over the locally signed, blinded observation record and
 sends only canonical `{"payload":"…","profile":"pap-managed-anchor/1"}`. The payload
 is exactly `PAP || 0x01 || root_sha256` (36 bytes, base64url). Neither record digest,
@@ -27,25 +27,25 @@ validation excludes extra fields but is not a cryptographic proof of blinding.
 Sponsorship is only submission. The existing local fast-confirmation verifier
 still requires two separately configured independent operators and exact payload
 inclusion. The managed origin cannot be either observer. A service reply, active
-subscription, or transaction ID alone never grants release authorization.
+subscription, or transaction ID alone never establishes anchor assurance.
 
-| Condition | Continuous | Sealed / Always Protect |
-| --- | --- | --- |
-| No account, service outage or timeout | Local evidence stays available; anchor pending | Bytes stay local; retry or cancel |
-| Daily/monthly allowance exhausted | Local evidence stays available; retry after reset | Wait for reset or cancel; no automatic mode change |
-| Unpaid/expired account | Capture, receipts, export and verification remain free | No new sponsorship; renew, retry or cancel |
-| Transaction submitted, confirmation pending/conflicting | Keep explicit pending assurance | No release until the same independent confirmation checks pass |
-| Lost submission response | Retry the same frozen version; service reuses its ledger entry | Same retry policy; submission ambiguity never authorizes release |
-| Process interruption before signed bytes were saved | Reservation remains charged; freeze a new version for a new attempt | Same policy, with no automatic resend |
-| Saved transaction expires before confirmation | Retry observation or explicitly freeze a new version | No automatic replacement transaction or downgrade |
+| Condition | Recording behavior |
+| --- | --- |
+| No account, outage, timeout or exhausted allowance | Durable local evidence remains; anchor stays pending |
+| Unpaid/expired account | Capture, receipts, recovery, export and verification remain free |
+| Submitted transaction with missing/conflicting confirmation | Pending assurance; never infer proof from its ID |
+| Lost response or interrupted submission | Reuse the same blinded payload and ledger reservation; never sign a replacement |
+| Expired saved transaction | Bounded observation can fail; no automatic replacement or fee refund |
+| Recording OFF | Stop new capture; bounded work for already-durable evidence may finish |
 
-Already returned transaction IDs can be observed independently after disconnect or
-subscription loss. The service also permits authenticated retrieval/replay of an
-existing reservation after expiry, within request limits. A renewed subscription
-and rotated/recovered access code preserve the same account and quota history.
-Invalid/expired account access cannot mutate local evidence or exported proofs.
-Restart preserves local history but does not restore an old browser send authority;
-the user enrolls and freezes a fresh version as required by the release runtime.
+Each observation has at most three persisted client anchor attempts across restarts,
+committed before external work. At most two jobs run concurrently within a queue
+of 512; each startup schedules eligible pending work once. Saved transaction IDs
+are reused without a new sponsor request and can still be observed after account
+disconnect. A renewed/recovered credential retains the same account and quotas.
+The service can return an existing reservation after expiry within request limits.
+No failure changes the user's provider Send or backfills an unobserved prompt.
+Historical observation profiles remain read-only and do not enter new anchor work.
 
 ## Bounds and durable accounting
 

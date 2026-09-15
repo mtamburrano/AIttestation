@@ -2,7 +2,9 @@
   "name": "private-provenance-spikes",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "dev": "node spikes/development/cli.mjs",
     "dev:sponsor": "node spikes/development/sponsor.mjs",
@@ -10,14 +12,9 @@
     "test:product": "node spikes/development/product-test.mjs",
     "test:debug-session": "node --test test/debug-session.test.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:chatgpt": "node --test test/resident-engine.test.mjs test/chatgpt-browser-path.test.mjs test/chatgpt-composer.test.mjs test/chatgpt-continuous.test.mjs test/chatgpt-sidepanel.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
-    "test:sidepanel-browser": "node test/sidepanel-browser.mjs",
+    "test:chatgpt": "node --test test/resident-engine.test.mjs test/chatgpt-browser-path.test.mjs test/chatgpt-removal.test.mjs test/chatgpt-recording.test.mjs test/chatgpt-sidepanel.test.mjs test/native-bridge-lifecycle.test.mjs test/fast-confirmation.test.mjs",
     "test:dashboard-browser": "node test/dashboard-browser.mjs",
-    "test:browser": "node test/browser.mjs",
     "test:algorand": "cd spikes/anchor/algorand && make build test && cd ../../.. && node test/algorand-archive.mjs",
-    "demo:release": "node spikes/release/demo.mjs",
-    "demo:consumer": "node spikes/demonstrator/main.mjs",
-    "build:consumer": "node spikes/demonstrator/build-macos.mjs",
     "build:chatgpt": "node spikes/browser/chatgpt/build-macos.mjs",
     "build:distribution": "node spikes/distribution/build-macos.mjs",
     "preflight:distribution": "node spikes/distribution/preflight.mjs",
@@ -27,7 +24,6 @@
     "build:verifier": "node spikes/recipient/build-macos.mjs",
     "verify:evidence": "node spikes/recipient/verify.mjs",
     "test:recipient-browser": "node test/recipient-browser.mjs",
-    "test:consumer-browser": "node test/demonstrator-browser.mjs",
-    "test:consumer-archive": "node test/demonstrator-archive.mjs"
+    "test:legacy-archive": "node test/legacy-archive.mjs"
   }
 }
