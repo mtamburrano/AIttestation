@@ -62,6 +62,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
   if (message.kind === 'PAP_INSPECT') { respond(surface()); return; }
   if (message.kind === 'PAP_CAPTURE_POLICY') { setCapturePolicy(message); respond(true); return; }
+  if (message.kind === 'PAP_CONFIRM_DOCUMENT') {
+    respond({ nonce: message.nonce, url: location.href, active: !stopped }); return;
+  }
+  if (message.kind === 'PAP_CONFIRM_NEW_CHAT') {
+    const pending = observations.get(message.eventId);
+    respond({ nonce: message.nonce, url: location.href, confirmed: Boolean(pending?.firstNewChat && performance.now() - pending.observedAt < 5000 && pendingCurrent(pending)
+      && pending.policy.token === message.token && pending.text === message.text && pending.inputMethod === message.inputMethod) });
+    return;
+  }
   respond({ error: 'UNSUPPORTED_PAGE_COMMAND' });
 });
 
@@ -70,6 +79,7 @@ const MESSAGE_SELECTOR = '[data-message-author-role="user"][data-message-id]';
 let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0;
 let composing = false, compositionEnded = -Infinity, keyboardIntent = false, stopped = false, feedback;
 let latestIntent = null;
+let newChatToken = null;
 const observations = new Map();
 
 function showRecording(state) {
@@ -82,7 +92,7 @@ function showRecording(state) {
   }
   const labels = { READY: 'Attestamp · ON', SAVING: 'Attestamp · Saving prompt…',
     PROMPT_SAVED: 'Attestamp · Prompt saved', GAP: 'Attestamp · Recording gap',
-    RECORDING_UNAVAILABLE: 'Attestamp · Recording unavailable', OBSERVATION_GAP: 'Attestamp · Prompt saved; message appearance unconfirmed' };
+    RECORDING_UNAVAILABLE: 'Attestamp · Recording unavailable', OBSERVATION_GAP: 'Attestamp · Prompt saved' };
   const label = labels[state] ?? '';
   if (feedback.textContent !== label) feedback.textContent = label;
   if (feedback.hidden !== !label) feedback.hidden = !label;
@@ -102,9 +112,16 @@ function setCapturePolicy(message) {
     && policy.destination === destination() ? policy : null;
   const state = next ? 'READY' : message.state;
   if (capturePolicy?.token !== next?.token) {
+    const continuing = [...observations.values()].find(value => value.firstNewChat && continuationCurrent(value)
+      && message.browserSessionId === value.policy.browserSessionId && state === 'READY');
     const hadPending = observations.size > 0, saved = [...observations.values()].every(value => value.saved);
-    clearObservations(); capturePolicy = next;
-    showRecording(next ? 'READY' : hadPending ? saved ? 'OBSERVATION_GAP' : 'GAP' : state);
+    for (const [id, pending] of observations) if (pending !== continuing) {
+      clearTimeout(pending.timer); observations.delete(id);
+    }
+    if (!continuing) latestIntent = null;
+    capturePolicy = next;
+    showRecording(state === 'OFF' ? 'OFF' : continuing ? continuing.saved ? 'PROMPT_SAVED' : 'SAVING'
+      : next ? 'READY' : hadPending ? saved ? 'OBSERVATION_GAP' : 'GAP' : state);
   } else if (state !== policyState) showRecording(state);
   policyState = state;
 }
@@ -166,21 +183,32 @@ function policyCurrent(policy) {
     && policy.destination === destination() && performance.now() - policyChecked < 3000;
 }
 
+function continuationCurrent(pending) {
+  return !stopped && pending.firstNewChat && observations.get(pending.eventId) === pending
+    && performance.now() - pending.observedAt < 5000 && policySession === pending.policy.browserSessionId
+    && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href);
+}
+
+function pendingCurrent(pending) {
+  return policyCurrent(pending.policy) || policyState === 'READY' && continuationCurrent(pending);
+}
+
 function reportObservation(pending, state) {
-  if (latestIntent === pending.eventId && policyCurrent(pending.policy)) showRecording(state);
+  if (latestIntent === pending.eventId && pendingCurrent(pending)) showRecording(state);
 }
 
 async function deliverObservation(pending, kind, messageId) {
   const message = { kind: 'PAP_CAPTURE', pageContract: PAGE_CONTRACT, token: pending.policy.token,
     eventId: pending.eventId, observationKind: kind, text: pending.text,
     ...(kind === 'send-intent' ? { inputMethod: pending.inputMethod } : { messageId }) };
-  for (let attempt = 0; attempt < 2 && policyCurrent(pending.policy); attempt++) {
+  const current = () => kind === 'send-intent' ? pendingCurrent(pending) : policyCurrent(pending.policy);
+  for (let attempt = 0; attempt < 2 && current(); attempt++) {
     let timer;
     try {
       const result = await Promise.race([chrome.runtime.sendMessage(message),
         new Promise((_, reject) => { timer = setTimeout(() => reject(Error('capture timeout')), 2500); })]);
       if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind
-          && result.state === 'PROMPT_SAVED' && policyCurrent(pending.policy)) return true;
+          && result.state === 'PROMPT_SAVED' && current()) return true;
     } catch {} finally { clearTimeout(timer); }
   }
   return false;
@@ -203,7 +231,9 @@ function observeSend(event, inputMethod) {
     baseline = [...baseline];
   } catch { latestIntent = null; showRecording('GAP'); return; }
   const pending = { policy, eventId: crypto.randomUUID(), text, inputMethod, saved: false,
+    observedAt: performance.now(), firstNewChat: policy.expectedUrl === 'https://chatgpt.com/' && newChatToken !== policy.token,
     baseline: new Set(baseline), ids: new Set(baseline.map(node => node.getAttribute('data-message-id'))) };
+  if (pending.firstNewChat) newChatToken = policy.token;
   observations.set(pending.eventId, pending);
   latestIntent = pending.eventId;
   pending.timer = setTimeout(() => {
@@ -213,7 +243,7 @@ function observeSend(event, inputMethod) {
   showRecording('SAVING');
   deliverObservation(pending, 'send-intent').then(saved => {
     pending.saved = saved;
-    if (!policyCurrent(policy)) return;
+    if (!pendingCurrent(pending)) return;
     if (!saved) { clearTimeout(pending.timer); observations.delete(pending.eventId); reportObservation(pending, 'GAP'); return; }
     reportObservation(pending, 'PROMPT_SAVED'); observeMessages();
   });

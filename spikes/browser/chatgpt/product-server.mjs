@@ -96,8 +96,8 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
       }
       switch (request.url) {
         case '/dashboard/state':
-          if (Object.keys(data).length) throw Error('Invalid dashboard request');
-          value = await dashboardState(runtime); break;
+          if (Object.keys(data).some(key => !['attentionOnly', 'offset'].includes(key))) throw Error('Invalid dashboard request');
+          value = await dashboardState(runtime, data); break;
         case '/dashboard/command': value = await runtime.engine.command(data, { surface: 'desktop' }); break;
         case '/dashboard/verifier':
           if (Object.keys(data).length || !runtime.openVerifier) throw Error('Verifier unavailable');

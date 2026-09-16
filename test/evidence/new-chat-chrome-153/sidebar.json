@@ -1,0 +1,251 @@
+{
+  "evidence": "REAL_CHROME_CONTEXT_WITH_SYNTHETIC_NATIVE_PEER",
+  "toolbar": "TEST_PAGE_GESTURE",
+  "baseline": false,
+  "providerOperations": 0,
+  "sponsorOperations": 0,
+  "checks": [
+    "STABLE_PERIODIC_REFRESH_PRESERVES_ENABLED_CONTROL_WITHOUT_DOM_MUTATIONS",
+    "SIDEBAR_DASHBOARD_RESIDENT_PIPE_AND_TWO_WINDOWS_SHARE_ON_OFF",
+    "REAL_EXTENSION_TAB_TEST_PAGE_AND_ACTION_POPUP_REJECTED",
+    "REAL_IFRAME_HAS_NO_CONTROL_AUTHORITY_AND_INCOGNITO_ACCESS_IS_DISABLED",
+    "REAL_COPIED_URL_POPUP_NAVIGATION_AND_CLOSURE_CANCEL_PENDING_COMMANDS",
+    "RELOAD_PRESERVES_CONSENT_AND_ROTATES_DOCUMENT_WITHOUT_CAPTURE"
+  ],
+  "workerSHA256": "8f60adeddf9f7466419d6fea0841414c41459da142b7b5c48a23741d2b56f121",
+  "browser": "Chrome/153.0.8010.48",
+  "initialControl": {
+    "error": null,
+    "stage": null,
+    "hasState": true
+  },
+  "metadata": {
+    "senderKeys": [
+      "id",
+      "origin",
+      "url"
+    ],
+    "senderOriginMatches": true,
+    "contexts": [
+      {
+        "type": "SIDE_PANEL",
+        "urlMatches": true,
+        "originMatches": true,
+        "frameId": 0,
+        "tabId": -1,
+        "windowId": -1,
+        "incognito": false,
+        "hasDocumentId": true,
+        "documentIdLength": 32,
+        "documentIdUUID": false
+      }
+    ]
+  },
+  "framedControl": {
+    "runtimeAccessible": false
+  },
+  "departedSenders": [
+    {
+      "departure": "navigation",
+      "evidence": "REAL_CHROME_CONTEXT_AND_PORT_WITH_TEST_CONTROLLED_SCHEDULING",
+      "instrumentation": [
+        "Copied-URL popup bootstrap suppressed in disposable extension copy",
+        "First context lookup held until real document departure and Port.onDisconnect",
+        "Actual getContexts inventory and authorization completion observed without replacing their results"
+      ],
+      "initialContextTypes": [
+        "POPUP",
+        "SIDE_PANEL"
+      ],
+      "survivingContextTypes": [
+        "SIDE_PANEL"
+      ],
+      "survivingIdentityUnchanged": true,
+      "probe": {
+        "senderKeys": [
+          "id",
+          "origin",
+          "url"
+        ],
+        "copiedURL": true,
+        "disconnected": true,
+        "error": "UNTRUSTED_PANEL",
+        "stage": "PANEL_CONTEXT_REJECTED",
+        "challenges": 0
+      },
+      "forwardedCommands": 0,
+      "engineRevisionUnchanged": true,
+      "recordingUnchanged": true,
+      "receipts": 0
+    },
+    {
+      "departure": "closure",
+      "evidence": "REAL_CHROME_CONTEXT_AND_PORT_WITH_TEST_CONTROLLED_SCHEDULING",
+      "instrumentation": [
+        "Copied-URL popup bootstrap suppressed in disposable extension copy",
+        "First context lookup held until real document departure and Port.onDisconnect",
+        "Actual getContexts inventory and authorization completion observed without replacing their results"
+      ],
+      "initialContextTypes": [
+        "POPUP",
+        "SIDE_PANEL"
+      ],
+      "survivingContextTypes": [
+        "SIDE_PANEL"
+      ],
+      "survivingIdentityUnchanged": true,
+      "probe": {
+        "senderKeys": [
+          "id",
+          "origin",
+          "url"
+        ],
+        "copiedURL": true,
+        "disconnected": true,
+        "error": "UNTRUSTED_PANEL",
+        "stage": "PANEL_CONTEXT_REJECTED",
+        "challenges": 0
+      },
+      "forwardedCommands": 0,
+      "engineRevisionUnchanged": true,
+      "recordingUnchanged": true,
+      "receipts": 0
+    },
+    {
+      "departure": "same-document navigation",
+      "evidence": "REAL_CHROME_CONTEXT_AND_PORT_WITH_TEST_CONTROLLED_SCHEDULING",
+      "instrumentation": [
+        "Copied-URL popup bootstrap suppressed in disposable extension copy",
+        "First context lookup held until history.replaceState, without document departure",
+        "Actual getContexts inventory and authorization completion observed without replacing their results"
+      ],
+      "initialContextTypes": [
+        "POPUP",
+        "SIDE_PANEL"
+      ],
+      "survivingContextTypes": [
+        "SIDE_PANEL"
+      ],
+      "survivingIdentityUnchanged": true,
+      "probe": {
+        "senderKeys": [
+          "id",
+          "origin",
+          "url"
+        ],
+        "copiedURL": true,
+        "disconnected": false,
+        "error": "UNTRUSTED_PANEL",
+        "stage": "PANEL_CONTEXT_REJECTED",
+        "challenges": 0
+      },
+      "forwardedCommands": 0,
+      "engineRevisionUnchanged": true,
+      "recordingUnchanged": true,
+      "receipts": 0
+    }
+  ],
+  "diagnostics": {
+    "profile": "pap-local-diagnostics/1",
+    "mode": "SYNTHETIC_FIXTURE",
+    "detailed": false,
+    "limits": {
+      "events": 512,
+      "bytes": 262144,
+      "ageMs": 1800000,
+      "previews": 4,
+      "previewAgeMs": 120000
+    },
+    "droppedEvents": 0,
+    "selection": {
+      "operationIds": [],
+      "components": []
+    },
+    "events": [
+      {
+        "sequence": 1,
+        "elapsedMs": 248,
+        "component": "engine",
+        "code": "ENGINE_STARTED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7"
+      },
+      {
+        "sequence": 2,
+        "elapsedMs": 283,
+        "component": "bridge",
+        "code": "BRIDGE_LISTENING",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7"
+      },
+      {
+        "sequence": 3,
+        "elapsedMs": 6930,
+        "component": "bridge",
+        "code": "BRIDGE_CONNECTED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7",
+        "bridgeId": "p_264d1e393ddd21271b601718"
+      },
+      {
+        "sequence": 4,
+        "elapsedMs": 6931,
+        "component": "bridge",
+        "code": "BRIDGE_AUTHENTICATED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7",
+        "bridgeId": "p_264d1e393ddd21271b601718",
+        "durationMs": 0
+      },
+      {
+        "sequence": 5,
+        "elapsedMs": 6984,
+        "component": "bridge",
+        "code": "BRIDGE_HELLO",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7",
+        "bridgeId": "p_264d1e393ddd21271b601718"
+      },
+      {
+        "sequence": 6,
+        "elapsedMs": 10574,
+        "component": "engine",
+        "code": "RECORDING_ENABLED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7"
+      },
+      {
+        "sequence": 7,
+        "elapsedMs": 10844,
+        "component": "engine",
+        "code": "RECORDING_DISABLED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7"
+      },
+      {
+        "sequence": 8,
+        "elapsedMs": 11263,
+        "component": "engine",
+        "code": "RECORDING_ENABLED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7"
+      },
+      {
+        "sequence": 9,
+        "elapsedMs": 12620,
+        "component": "engine",
+        "code": "RECORDING_DISABLED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7"
+      },
+      {
+        "sequence": 10,
+        "elapsedMs": 13331,
+        "component": "bridge",
+        "code": "PANEL_SENDER_REJECTED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7",
+        "bridgeId": "p_264d1e393ddd21271b601718"
+      },
+      {
+        "sequence": 11,
+        "elapsedMs": 13673,
+        "component": "bridge",
+        "code": "PANEL_CONTEXT_REJECTED",
+        "epochId": "p_8fbf56c0777b1e7bea76dca7",
+        "bridgeId": "p_264d1e393ddd21271b601718"
+      }
+    ]
+  },
+  "result": "PASS"
+}

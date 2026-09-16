@@ -199,3 +199,20 @@ test('launch stays quiet and simultaneous free-verifier requests share one serve
   });
   await f.runtime.openVerifier(); assert.notEqual(opened[2], opened[0]);
 });
+
+test('attention count, filtered rows, reasons and safe actions share one mapping, including older history', () => {
+  const receipt = (id, outcome, anchor = 'PENDING') => ({ id, prompt: { outcome, anchor, mode: 'Historical', savedAt: '2026-09-15' } });
+  const receipts = [receipt('uncertain', 'OUTCOME_UNKNOWN', 'SOURCE_CORROBORATED'), receipt('stopped', 'FAILED_BEFORE_EGRESS'),
+    ...Array.from({ length: 201 }, (_, index) => receipt(`saved-${index}`, 'PROMPT_SAVED'))];
+  const all = promptHistory(receipts, []);
+  assert.equal(all.counts.needsAttention, 2); assert.equal(all.counts.pendingAnchors, 202);
+  assert.ok(all.prompts.every(value => value.attention === null));
+  const filtered = promptHistory(receipts, [], { attentionOnly: true });
+  assert.deepEqual(filtered.prompts.map(value => value.id), ['stopped', 'uncertain']);
+  assert.ok(filtered.prompts.every(value => value.attention.reason && value.attention.nextAction));
+  assert.match(filtered.prompts[1].attention.nextAction, /Do not resend automatically/);
+  assert.equal(filtered.page.total, 2);
+  const older = promptHistory(receipts, [], { offset: 200 });
+  assert.deepEqual(older.prompts.filter(value => value.attention).map(value => value.id), ['stopped', 'uncertain']);
+  for (const filter of [{ offset: -1 }, { attentionOnly: 'true' }, { offset: 1.5 }]) assert.throws(() => promptHistory(receipts, [], filter));
+});

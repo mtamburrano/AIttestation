@@ -313,3 +313,149 @@ test('UTF-8 BOM and the maximum escaped payload survive native framing and resta
   await f.restart(); assert.deepEqual(readText(), Buffer.from(text));
   assert.equal(f.runtime.session.status().versions[0].recordDigest, f.runtime.engine.state().operations[0].result.recordDigest);
 });
+
+for (const schedule of ['before worker receipt', 'during browser checks', 'Chrome loading route', 'lost acknowledgement']) {
+  test(`first New-chat Send survives navigation ${schedule} exactly once`, async t => {
+    let release, entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    t.after(() => release());
+    const f = await fixture(t, { newChat: true, dropAck: schedule === 'lost acknowledgement',
+      beforeCapture: ['before worker receipt', 'Chrome loading route'].includes(schedule) ? async () => { entered(); await gate; } : null });
+    await f.recording(true);
+    if (schedule === 'during browser checks') {
+      const query = f.worker.chrome.tabs.query;
+      let held = false;
+      f.worker.chrome.tabs.query = async (...args) => {
+        const value = await query(...args);
+        if (!held) { held = true; entered(); await gate; }
+        return value;
+      };
+    }
+    f.send(exact);
+    if (schedule !== 'lost acknowledgement') await started;
+    f.navigate(17, 'https://chatgpt.com/c/created-by-send', schedule === 'Chrome loading route' ? { status: 'loading' } : {});
+    await until(() => f.runtime.adapter.scopes().some(source => source.destination === 'conversation:created-by-send'));
+    release();
+    await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
+    await f.runtime.engine.drain();
+    assert.equal(saved(f).length, 1); assert.equal(preview(f).value.texts[0].preview, exact);
+    assert.equal(f.sources[0].destination, 'new-chat');
+    assert.equal(f.userSends, 1); assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+    assert.equal(f.anchorCalls, 1);
+    f.appear(exact);
+    await new Promise(setImmediate);
+    assert.ok(f.deliveries.every(value => value.observation.kind === 'send-intent'));
+    const original = f.deliveries[0], before = f.results.length;
+    f.replay(original); await until(() => f.results.length > before);
+    assert.equal(saved(f).length, 1);
+    f.replay({ ...original, observation: { ...original.observation, eventId: crypto.randomUUID() } });
+    await until(() => f.results.length > before + 1);
+    assert.equal(f.results.at(-1).result.state, 'RECORDING_UNAVAILABLE');
+  });
+}
+
+for (const change of ['OFF/ON', 'reload', 'full navigation', 'different document', 'copied tab', 'second navigation', 'unsupported URL', 'permission', 'expired']) {
+  test(`New-chat continuity rejects ${change} before durable capture`, async t => {
+    let release, entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    t.after(() => release());
+    const f = await fixture(t, { newChat: true, beforeCapture: async () => { entered(); await gate; } });
+    await f.recording(true); f.send(exact); await started;
+    f.navigate(17, 'https://chatgpt.com/c/created-by-send');
+    await until(() => f.runtime.adapter.scopes().some(source => source.destination === 'conversation:created-by-send'));
+    if (change === 'OFF/ON') { await f.recording(false); await f.recording(true); }
+    if (change === 'reload') { f.pages.get(17).event('pagehide'); f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' }); }
+    if (change === 'full navigation') f.pages.get(17).event('pagehide');
+    if (change === 'different document') f.pages.get(17).documentId = 'replacement-document';
+    if (change === 'copied tab') {
+      const original = f.pages.get(17), copy = f.pages.get(18);
+      f.pages.set(17, copy); copy.location.href = original.location.href;
+      t.after(() => original.close());
+    }
+    if (change === 'second navigation') f.navigate(17, 'https://chatgpt.com/c/unrelated');
+    if (change === 'unsupported URL') f.navigate(17, 'https://chatgpt.com/settings');
+    if (change === 'permission') f.revokePermission();
+    if (change === 'expired') await new Promise(resolve => setTimeout(resolve, 5100));
+    release();
+    await new Promise(resolve => setTimeout(resolve, 80));
+    assert.equal(saved(f).length, 0); assert.equal(f.anchorCalls, 0); assert.equal(f.prevention, 0);
+  });
+}
+
+test('a saved prompt keeps simple success feedback when later message correlation expires', async t => {
+  const timers = new Set();
+  const page = pageFixture({ draft: exact, capture: async message => message.kind === 'PAP_CAPTURE_STATUS'
+    ? { kind: 'PAP_CAPTURE_POLICY', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'copy-test', revision: 1,
+      policy: { profile: CHATGPT_CAPTURE_PROFILE, token: 'test-copy-token', expectedUrl: 'https://chatgpt.com/c/test-conversation', destination: 'conversation:test-conversation' }, state: 'READY' }
+    : { profile: CHATGPT_CAPTURE_PROFILE, eventId: message.eventId, kind: message.observationKind, state: 'PROMPT_SAVED' },
+  clock: { performance, setTimeout(callback, delay) { const timer = { callback, delay }; timers.add(timer); return timer; }, clearTimeout(timer) { timers.delete(timer); } } });
+  t.after(() => page.close());
+  await until(() => page.feedback === 'Attestamp · ON');
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  await until(() => page.feedback === 'Attestamp · Prompt saved');
+  [...timers].find(timer => timer.delay === 10000).callback();
+  assert.equal(page.feedback, 'Attestamp · Prompt saved');
+});
+
+for (const change of ['OFF/ON', 'reload', 'second navigation']) test(`a confirmed New-chat snapshot loses authority after ${change} during proof delivery`, async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  const f = await fixture(t, { newChat: true }); await f.recording(true);
+  const inspect = f.worker.chrome.tabs.sendMessage;
+  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
+    const result = await inspect(id, message, options);
+    if (message.kind === 'PAP_CONFIRM_NEW_CHAT') { entered(); await gate; }
+    return result;
+  };
+  f.send(exact); await started;
+  f.navigate(17, 'https://chatgpt.com/c/created-by-send');
+  if (change === 'OFF/ON') { await f.recording(false); await f.recording(true); }
+  if (change === 'reload') f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+  if (change === 'second navigation') f.navigate(17, 'https://chatgpt.com/c/unrelated');
+  release(); await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0); assert.equal(f.prevention, 0);
+});
+
+test('same-document navigation alone cannot authenticate an unobserved first Send', async t => {
+  const f = await fixture(t, { newChat: true }); await f.recording(true);
+  const policy = f.runtime.engine.capturePolicy().find(value => value.tabId === 17);
+  f.navigate(17, 'https://chatgpt.com/c/unrelated');
+  const page = f.pages.get(17);
+  const result = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT,
+    token: policy.token, eventId: crypto.randomUUID(), observationKind: 'send-intent', inputMethod: 'send-button', text: exact }, page.captureSender());
+  assert.equal(result.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0);
+});
+
+test('Chrome creation-URL metadata is authenticated for polling while the first capture is pending', async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  const f = await fixture(t, { newChat: true, fixedSenderURL: true, beforeCapture: async () => { entered(); await gate; } });
+  await f.recording(true); f.send(exact); await started;
+  f.navigate(17, 'https://chatgpt.com/c/created-by-send', { status: 'loading' });
+  await until(() => f.runtime.adapter.scopes().some(source => source.destination === 'conversation:created-by-send'));
+  const current = await f.refresh(); assert.equal(current.policy.destination, 'conversation:created-by-send');
+  release(); await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
+  f.send(exact); await until(() => saved(f).length === 2);
+  assert.deepEqual(f.sources.map(source => source.destination), ['new-chat', 'conversation:created-by-send']);
+  const old = f.deliveries[0];
+  await f.recording(false); assert.equal(f.pages.get(17).feedback, ''); await f.recording(true);
+  const requestId = f.replay(old); await until(() => f.results.some(value => value.requestId === requestId));
+  assert.equal(f.results.find(value => value.requestId === requestId).result.state, 'RECORDING_UNAVAILABLE');
+  f.send('FRESH_CONSENT'); await until(() => saved(f).length === 3);
+});
+
+test('a destination tab URL cannot authenticate the old document during full navigation', async t => {
+  const f = await fixture(t, { newChat: true, fixedSenderURL: true }); await f.recording(true);
+  const query = f.worker.chrome.tabs.query;
+  f.worker.chrome.tabs.query = async (...args) => (await query(...args)).map(tab => tab.id === 17
+    ? { ...tab, url: 'https://chatgpt.com/c/another-document' } : tab);
+  f.worker.chrome.tabs.onUpdated.emit(17, { url: 'https://chatgpt.com/c/another-document', status: 'loading' });
+  const status = await f.refresh();
+  assert.equal(status.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(saved(f).length, 0);
+});

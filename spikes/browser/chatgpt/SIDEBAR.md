@@ -5,6 +5,14 @@ connection/capability feedback and Dashboard / History. Views do not own recordi
 consent or capture workflows. A stale control learns the latest engine state and
 asks the user to try again; it never automatically repeats the command.
 
+Background STATE requests do not put the ON/OFF control into a busy state. Polls
+coalesce, commands supersede older poll replies, and rendering assigns only changed
+display values. The [refresh regression report](../../../test/evidence/new-chat-chrome-153/sidebar.json)
+records a real Chrome 153 run with more than three polling intervals, zero toggle
+DOM mutations and an enabled, identical button throughout stable OFF. The same
+run checks actual state changes and the document-channel rejection cases below.
+It uses a test-page gesture to open the sidebar and synthetic native ancestry.
+
 ## Browser context and requesting channel
 
 Chrome 153.0.8010.37 on macOS was observed to supply only `id`, `origin` and `url`

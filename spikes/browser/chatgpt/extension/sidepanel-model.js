@@ -8,12 +8,15 @@ export function recordingStatus(state) {
 }
 export class SidePanelModel {
   state = null; busy = false; error = '';
+  refreshing = null; sequence = 0;
   constructor(send, render = () => {}) { this.transport = send; this.render = render; }
   async request(action, command) {
     if (this.busy) return;
-    this.busy = true; this.error = ''; this.render();
+    const sequence = ++this.sequence, foreground = action !== 'STATE';
+    if (foreground) { this.busy = true; this.error = ''; this.render(); }
     try {
       const result = await this.transport({ kind: 'PAP_PANEL_REQUEST', profile: PROFILE, action, ...(command ? { command } : {}) });
+      if (sequence !== this.sequence) return;
       if (result?.error === 'UNTRUSTED_PANEL') {
         this.state = null; this.error = 'Recording control could not be verified. Close and reopen this sidebar.'; return;
       }
@@ -24,10 +27,15 @@ export class SidePanelModel {
       }
       if (result?.error || action !== 'OPEN_DASHBOARD' && result?.state?.profile !== PROFILE) throw Error('unavailable');
       if (result.state) this.state = result.state;
-    } catch { this.state = null; this.error = 'Recording control is unavailable. Open Attestamp and refresh.'; }
-    finally { this.busy = false; this.render(); }
+      this.error = '';
+    } catch { if (sequence === this.sequence) { this.state = null; this.error = 'Recording control is unavailable. Open Attestamp and refresh.'; } }
+    finally { if (sequence === this.sequence) { if (foreground) this.busy = false; this.render(); } }
   }
-  refresh() { return this.request('STATE'); }
+  refresh() {
+    if (this.busy) return;
+    if (!this.refreshing) this.refreshing = this.request('STATE').finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
   toggle() {
     if (!this.state?.available || this.busy) return;
     return this.request('COMMAND', { profile: 'pap-resident-command/2', kind: 'SET_RECORDING',

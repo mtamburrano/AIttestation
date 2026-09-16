@@ -200,4 +200,12 @@ export class ChatGPTChromeAdapter {
         || source.destination !== followed.destination) fail('capture source changed');
   }
 
+  newChatContinuation(source) {
+    return source.destination === 'new-chat' && source.url === `${CHATGPT_ORIGIN}/`
+      && source.runtimeEpoch === this.#runtimeEpoch && source.generation === this.#generation
+      && this.scopes().some(next => next.tabId === source.tabId && next.windowId === source.windowId
+        && next.browserSessionId === source.browserSessionId && next.tabEpoch === source.tabEpoch
+        && next.destination.startsWith('conversation:') && this.observationEligible(next.scope));
+  }
+
 }

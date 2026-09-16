@@ -6,6 +6,7 @@ history.replaceState(null, '', '/dashboard');
 if (['history', 'settings', 'integrations'].includes(section)) $(section).scrollIntoView();
 let state, busy = false, closed = false, acceptedPreview = null, selectionRevision = 0, supportId = null, recovery = null, recoveryTimer, updateAvailable = false;
 const selected = new Set();
+let attentionOnly = false, historyOffset = 0, actionFeedback = null;
 const states = {
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
   CONFIGURATION_CONFLICT: ['Connection needs attention', 'An existing Chrome configuration was left untouched. Check your private setup before enabling.'],
@@ -42,10 +43,29 @@ function controls() {
 function action(id, run) {
   $(id).onclick = async () => {
     if (busy || closed) return; busy = true; controls();
-    try { await run(); }
-    catch { $('message').textContent = 'Action could not complete. Refresh and check the current state before trying again. Evidence has been retained.'; }
-    finally { busy = false; controls(); }
+    for (const previous of document.querySelectorAll('.action-feedback')) previous.hidden = true;
+    let feedback = $(`feedback-${id}`);
+    if (!feedback) {
+      feedback = node('p', '', 'action-feedback'); feedback.id = `feedback-${id}`;
+      feedback.setAttribute('role', 'status'); feedback.tabIndex = -1;
+      ($(id).closest('.actions') ?? $(id)).after(feedback);
+    }
+    actionFeedback = feedback; feedback.hidden = false; feedback.textContent = 'Working…';
+    try { await run(); if (feedback.textContent === 'Working…') feedback.textContent = 'Done.'; }
+    catch { notify('Action could not complete. Refresh and check the current state before trying again. Evidence has been retained.'); }
+    finally {
+      busy = false; controls(); actionFeedback = null;
+      const hidden = feedback.closest('[hidden]');
+      if (hidden) hidden.after(feedback);
+      const bounds = feedback.getBoundingClientRect();
+      if (bounds.top < 0 || bounds.bottom > innerHeight) feedback.scrollIntoView({ block: 'nearest' });
+      feedback.focus({ preventScroll: true });
+    }
   };
+}
+function notify(text) {
+  $('message').textContent = text;
+  if (actionFeedback) actionFeedback.textContent = text;
 }
 async function command(kind, data = {}) {
   if (!state) throw Error('State unavailable');
@@ -90,18 +110,28 @@ function render(value) {
   $('recording').textContent = state.recording ? 'Turn OFF' : 'Turn ON';
   const counts = state.history.counts;
   for (const [id, key] of [['prompt-count', 'prompts'], ['conversation-count', 'conversations'], ['anchor-count', 'pendingAnchors'], ['attention-count', 'needsAttention']]) $(id).textContent = counts[key];
-  $('history-note').textContent = `${counts.unassigned} prompts have no stable conversation identity. Counts include only retained observations and historical evidence, not complete provider history.${state.history.truncated ? ' Showing the latest 200 prompts.' : ''}`;
+  $('history-note').textContent = `${counts.unassigned} prompts have no stable conversation identity. Counts include only retained observations and historical evidence, not complete provider history.`;
+  const page = state.history.page;
+  historyOffset = page.offset;
+  $('filter-attention').setAttribute('aria-pressed', String(attentionOnly));
+  $('all-prompts').hidden = !attentionOnly;
+  $('history-filter').textContent = `${attentionOnly ? 'Needs attention' : 'All prompts'} · ${page.total ? `${page.offset + 1}–${Math.min(page.offset + 200, page.total)} of ${page.total}` : 'No matching prompts'}. Pending anchors are counted separately.`;
+  $('history-newer').hidden = page.offset === 0;
+  $('history-older').hidden = page.offset + 200 >= page.total;
   $('prompts').replaceChildren();
   for (const prompt of state.history.prompts) {
     const row = node('article', '', 'prompt');
-    if (['OUTCOME_UNKNOWN', 'INTERRUPTED', 'NEEDS_ATTENTION', 'FAILED_BEFORE_EGRESS'].includes(prompt.state)) row.classList.add('attention');
+    if (prompt.attention) row.classList.add('attention');
     const title = `${prompt.mode} · ${prompt.savedAt ? new Date(prompt.savedAt).toLocaleString() : 'Preparing'} · ${prompt.conversation ?? 'Conversation not identified'}`;
     row.append(prompt.receiptId ? choice(prompt.receiptId, title) : node('h3', title));
     row.append(node('span', prompt.localSave === 'SAVED' ? 'Saved locally' : 'Local save not confirmed', 'badge'), node('span', anchorLabels[prompt.anchor], 'badge'));
     row.append(node('p', outcomes[prompt.state] ?? 'Review retained evidence for this prompt'));
+    if (prompt.attention) {
+      row.append(node('strong', 'Needs attention'), node('p', prompt.attention.reason), node('p', prompt.attention.nextAction));
+    }
     $('prompts').append(row);
   }
-  if (!state.history.prompts.length) $('prompts').textContent = 'No prompts retained yet. Turn ON and use normal Send in a supported ChatGPT tab.';
+  if (!state.history.prompts.length) $('prompts').textContent = attentionOnly ? 'No retained prompts need attention.' : 'No prompts retained yet. Turn ON and use normal Send in a supported ChatGPT tab.';
   $('other-receipts').replaceChildren(...state.history.otherReceipts.map(value => choice(value.id, value.title)));
   const integration = state.integration;
   $('integration-facts').replaceChildren();
@@ -114,8 +144,9 @@ function render(value) {
 
 }
 async function refresh() {
-  try { const value = await api('/dashboard/state'); if (!closed) { render(value); controls(); } }
+  try { const value = await api('/dashboard/state', { attentionOnly, offset: historyOffset }); if (!closed) { render(value); controls(); } }
   catch { if (state) state.available = false; $('effective-state').textContent = 'Engine connection unavailable';
+    if (actionFeedback) notify('Status unavailable. Reopen Attestamp and refresh. Current recording is not confirmed.');
     if (state?.debugSession) {
       $('debug-session-banner').hidden = false;
       $('debug-session-banner').textContent = $('debug-session-status').textContent = 'Debug recording status unavailable. Reopen Attestamp and refresh.';
@@ -123,14 +154,18 @@ async function refresh() {
     $('effective-help').textContent = 'Reopen Attestamp and refresh. Current recording is not confirmed.'; controls(); }
 }
 action('refresh', refresh);
+action('filter-attention', async () => { attentionOnly = !attentionOnly; historyOffset = 0; await refresh(); });
+action('all-prompts', async () => { attentionOnly = false; historyOffset = 0; await refresh(); });
+action('history-newer', async () => { historyOffset = Math.max(0, historyOffset - 200); await refresh(); });
+action('history-older', async () => { historyOffset += 200; await refresh(); });
 action('recording', () => command('SET_RECORDING', { enabled: !state.recording }));
 for (const kind of ['enable', 'disable']) action(kind, async () => {
   await api(`/installation/${kind}`); await refresh();
-  $('message').textContent = kind === 'enable' ? 'Connection enabled. Open supported ChatGPT tabs. Restart Chrome if it cannot connect.' : 'Connection disabled. Evidence, keys and preferences retained.';
+  notify(kind === 'enable' ? 'Connection enabled. Open supported ChatGPT tabs. Restart Chrome if it cannot connect.' : 'Connection disabled. Evidence, keys and preferences retained.');
 });
 action('prepare-remove', async () => { await api('/installation/export-opportunity'); $('removal').hidden = false; });
 action('cancel-remove', async () => { $('removal').hidden = true; });
-action('remove', async () => { await api('/installation/remove', { exportDecision: $('removal-choice').value }); $('removal').hidden = true; await refresh(); $('message').textContent = 'Connection removed. Evidence and keys retained on this Mac.'; });
+action('remove', async () => { await api('/installation/remove', { exportDecision: $('removal-choice').value }); $('removal').hidden = true; await refresh(); notify('Connection removed. Evidence and keys retained on this Mac.'); });
 function download(bytes, name, type = 'application/json') {
   const url = URL.createObjectURL(new Blob([bytes], { type })), link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -139,7 +174,7 @@ action('preview-export', async () => {
   invalidatePreview();
   const selection = Object.freeze({ revision: selectionRevision, ids: Object.freeze([...selected]), includeEvidence: $('include-evidence').checked });
   const preview = await api('/receipts/preview', { ids: selection.ids, includeEvidence: selection.includeEvidence });
-  if (!currentSelection(selection)) return;
+  if (!currentSelection(selection)) { notify('Selection changed. Review the selected evidence again before saving.'); return; }
   acceptedPreview = Object.freeze({ previewId: preview.previewId, selection });
   $('preview').hidden = false; $('disclosure-notice').textContent = preview.disclosureNotice;
   $('preview-texts').replaceChildren(...preview.texts.map(value => node('pre', value.preview ?? 'Exact bytes excluded')));
@@ -148,10 +183,10 @@ action('preview-export', async () => {
 });
 action('save-export', async () => {
   const preview = acceptedPreview;
-  if (!preview || !currentSelection(preview.selection)) { invalidatePreview(); return; }
+  if (!preview || !currentSelection(preview.selection)) { invalidatePreview(); notify('Review the current selection before saving.'); return; }
   const result = await api('/receipts/export', { previewId: preview.previewId });
-  if (acceptedPreview !== preview || !currentSelection(preview.selection)) return;
-  download(result.content, 'attestamp-evidence.json'); $('message').textContent = 'Reviewed evidence export saved.';
+  if (acceptedPreview !== preview || !currentSelection(preview.selection)) { notify('Selection changed. Review the selected evidence again before saving.'); return; }
+  download(result.content, 'attestamp-evidence.json'); notify('Reviewed evidence export saved.');
 });
 action('verifier', () => api('/dashboard/verifier'));
 action('store', () => api('/installation/store'));
@@ -161,15 +196,29 @@ action('check-update', async () => {
 });
 action('download-update', async () => { updateAvailable = false; const result = await api('/installation/download-update'); $('update-state').textContent = result.instruction; });
 function account(value) {
-  $('account').textContent = value.state === 'ACTIVE' ? 'Anchoring account connected. Anchoring follows durable local saves asynchronously.'
-    : 'Anchoring unavailable. Connect or renew your account, or retry after the service recovers. Local recording, history, recovery and export remain available. Provider Send continues normally.';
+  const period = /^\d{4}-(0[1-9]|1[0-2])$/.test(value.month ?? '') ? value.month : null;
+  const remaining = Number.isSafeInteger(value.remaining) && value.remaining >= 0 && value.remaining <= 1000 ? value.remaining : null;
+  const status = value.state === 'ACTIVE' && remaining === 0 ? 'QUOTA_EXHAUSTED' : value.state;
+  const labels = {
+    ACTIVE: `Anchoring account active. ${remaining === null ? 'Remaining quota unavailable.' : `${remaining} anchors remaining.`} ${period ? `Period: ${period}.` : 'Period unavailable.'}`,
+    ACCOUNT_REQUIRED: 'No anchoring account connected. Enter your access code to connect.',
+    UNPAID: 'Anchoring account unpaid or expired. Renew your account to request new anchors.',
+    QUOTA_EXHAUSTED: `Anchoring quota exhausted.${period ? ` Period: ${period}.` : ''} Wait for the next quota period before requesting new anchors.`,
+    SERVICE_UNAVAILABLE: 'Anchoring service unavailable. Refresh account later to check availability.',
+  };
+  $('account').textContent = Object.hasOwn(labels, status) ? labels[status] : labels.SERVICE_UNAVAILABLE;
+  notify($('account').textContent);
 }
-action('refresh-account', async () => account(await api('/managed/status')));
-action('connect-account', async () => { const accessCode = $('access-code').value; $('access-code').value = ''; account(await api('/managed/connect', { accessCode })); });
-action('disconnect-account', async () => account(await api('/managed/disconnect')));
+async function accountAction(path, data) {
+  try { account(await api(path, data)); }
+  catch { account({ state: 'SERVICE_UNAVAILABLE' }); }
+}
+action('refresh-account', () => accountAction('/managed/status'));
+action('connect-account', async () => { const accessCode = $('access-code').value; $('access-code').value = ''; await accountAction('/managed/connect', { accessCode }); });
+action('disconnect-account', () => accountAction('/managed/disconnect'));
 function clearRecovery() { recovery = null; clearTimeout(recoveryTimer); $('recovery').hidden = true; $('recovery-consent').checked = false; }
 action('prepare-recovery', async () => {
-  if (!$('recovery-consent').checked) { $('message').textContent = 'Confirm separate private storage for the recovery key first.'; return; }
+  if (!$('recovery-consent').checked) { notify('Confirm separate private storage for the recovery key first.'); return; }
   clearRecovery(); recovery = await api('/dashboard/recovery', { confirmed: true }); $('recovery').hidden = false;
   recoveryTimer = setTimeout(clearRecovery, 60000);
 });
@@ -185,12 +234,12 @@ action('debug-session-toggle', async () => {
 action('debug-session-save', async () => {
   try {
     const result = await api('/debug-session/export'); download(result.content, 'attestamp-debug-session.json');
-    $('message').textContent = 'Private debug session saved. Attach this file after testing when you choose to share it.';
+    notify('Private debug session saved. Attach this file after testing when you choose to share it.');
   } finally { await refresh(); }
 });
 action('close', async () => {
   await api('/close'); closed = true; clearInterval(timer); invalidatePreview(); clearRecovery();
-  $('message').textContent = 'Dashboard closed. Attestamp is still running. You can close this browser tab.';
+  notify('Dashboard closed. Attestamp is still running. You can close this browser tab.');
 });
 const timer = setInterval(() => { if (!busy && !closed) void refresh(); }, 2000);
 addEventListener('beforeunload', () => { closed = true; clearInterval(timer); invalidatePreview(); clearRecovery(); });

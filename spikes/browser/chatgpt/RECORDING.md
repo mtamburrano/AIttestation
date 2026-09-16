@@ -49,6 +49,40 @@ seconds. OFF and invalidated policies discard pending page observations.
 The page indicator follows effective state changes even when both policies are
 empty: OFF clears an unavailable indicator. Stale refresh successes or failures
 cannot replace a newer policy; unchanged ON refreshes preserve saved/gap feedback.
+Missing later message appearance never changes a durable save into a primary
+warning: the page continues to say **Prompt saved**. Appearance remains a separate
+technical assertion and never establishes provider receipt.
+
+### First Send in a new chat
+
+There is one narrow navigation exception for the first genuine Send observed at
+exactly `https://chatgpt.com/`. The worker can retain its old policy for at most
+five seconds across the first `/c/<id>` route change. Chrome may report loading
+even for this same-document navigation; loading alone cannot authenticate it.
+It keeps the original tab/window, browser/runtime and document epoch. Before
+forwarding, it challenges the original Chrome `documentId` with a fresh nonce;
+that content script must still hold the same first intent, exact bytes and input
+method captured before navigation, and now reside at the exact live tab URL.
+The worker checks the live tab, permission,
+epoch and retained policy again after the challenge. Navigation alone supplies
+no evidence and cannot create an intent.
+
+The engine retains only the corresponding New-chat policy for five seconds and
+binds it to one event and document. This allowance is carried separately from the
+signed observation; the evidence keeps its original `new-chat` source. Identical
+delivery remains idempotent. A different event or later message appearance cannot
+use retired authority. OFF/ON, disconnect, restart, permission loss, reload,
+replacement/copy documents and further navigation revoke the exception. Normal
+conversation captures still require current exact scope authority. Neither path
+waits on, blocks, synthesizes or replays the provider action.
+
+Chrome also retains the creation URL in content-script `MessageSender` after
+this transition. A separate document-targeted URL confirmation can establish
+the original document's new exact route for status polling. It carries no event
+or text authority. A successful intent confirmation can establish the same route.
+Later captures use the fresh conversation policy and scope; the retired token
+cannot capture a later Send. This URL binding is removed on further navigation,
+reload, permission loss or disconnection.
 
 Storage, key, IPC, permission or markup failure produces a gap or unavailable
 status without acknowledging a save or replaying Send. Delayed old acknowledgements
@@ -73,3 +107,18 @@ Run `npm run test:chatgpt` and `npm run test:product` using the isolated
 [testing guide](../../development/PRODUCT-TESTING.md). These execute actual
 page/worker code against synthetic dependencies and do not establish installed
 sidebar or real provider acceptance.
+
+`npm run test:capture-browser` exercises a genuine Chrome input event and
+same-document route change while holding a browser lookup across navigation.
+Every page response is a synthetic intercepted fixture; external DNS is blocked.
+It uses a disposable profile/extension, temporary vault, memory keys and synthetic
+native ancestry, without a provider request or sponsor transaction. It complements
+the deterministic failure/race cases; it does not establish installed ChatGPT
+acceptance or app-bound key custody.
+
+The [recorded Chrome 153 result](../../../test/evidence/new-chat-chrome-153/capture.json)
+binds the test to the worker and content-script hashes. Chrome 153.0.8010.48
+reported both `url` and `status: loading` for the fixture's `history.pushState`,
+and kept the original sender URL. The test holds the first capture lookup until
+the engine follows the conversation, then confirms one exact durable receipt,
+a distinct equal-text later receipt and no new capture while OFF.

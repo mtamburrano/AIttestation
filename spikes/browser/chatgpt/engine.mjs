@@ -17,6 +17,7 @@ export class ResidentEngine {
   #commands = new Map(); #control = Promise.resolve(); #work = new Set();
   #listeners = new Set(); #unsubscribe; #closed = false; #failed = false;
   #captureTokens = new Map(); #anchorQueue = []; #anchoring = new Set();
+  #newChatTokens = new Map();
   #anchorCursor = 0; #durableVersions = 0;
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
@@ -66,10 +67,19 @@ export class ResidentEngine {
   capturePolicy() {
     const sources = this.#adapter.scopes().filter(source => !this.#closed && !this.#failed && this.#state.recording
       && this.#adapter.observationEligible(source.scope));
-    for (const scope of this.#captureTokens.keys()) if (!sources.some(source => source.scope === scope)) this.#captureTokens.delete(scope);
+    for (const [scope, entry] of this.#newChatTokens) {
+      if (this.#closed || this.#failed || !this.#state.recording || performance.now() >= entry.expires
+          || !this.#adapter.newChatContinuation(entry.source)) this.#newChatTokens.delete(scope);
+    }
+    for (const [scope, entry] of this.#captureTokens) if (!sources.some(source => source.scope === scope)) {
+      if (!this.#closed && !this.#failed && this.#state.recording && this.#adapter.newChatContinuation(entry.source)) {
+        this.#newChatTokens.set(scope, { ...entry, expires: performance.now() + 5000 });
+      }
+      this.#captureTokens.delete(scope);
+    }
     return sources.map(source => {
-      if (!this.#captureTokens.has(source.scope)) this.#captureTokens.set(source.scope, randomUUID());
-      return { profile: CHATGPT_CAPTURE_PROFILE, token: this.#captureTokens.get(source.scope),
+      if (!this.#captureTokens.has(source.scope)) this.#captureTokens.set(source.scope, { token: randomUUID(), source });
+      return { profile: CHATGPT_CAPTURE_PROFILE, token: this.#captureTokens.get(source.scope).token,
         runtimeEpoch: this.#epoch, browserSessionId: source.browserSessionId, scope: source.scope,
         tabId: source.tabId, windowId: source.windowId, tabEpoch: source.tabEpoch,
         expectedUrl: source.url, destination: source.destination };
@@ -80,14 +90,31 @@ export class ResidentEngine {
       state: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
         || !this.#adapter.observationEligible(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
   }
-  observe(input) {
+  observe(input, { newChatContinuation = false } = {}) {
     let observation;
     try { observation = validateCapture(input); } catch (error) { return Promise.reject(error); }
     return this.#serial(async () => {
       const { eventId, source } = observation;
-      const policy = this.capturePolicy().find(value => value.scope === source.scope);
-      if (!policy || policy.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
-      this.#adapter.assertObservationSource(source);
+      this.capturePolicy();
+      const active = this.#captureTokens.get(source.scope);
+      const entry = active ?? (newChatContinuation ? this.#newChatTokens.get(source.scope) : null);
+      if (!entry || entry.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
+      if (newChatContinuation) {
+        // The authenticated worker confirms the original document's pending
+        // snapshot. Retired authority is usable for this one intent only.
+        if (observation.kind !== 'send-intent' || entry.source.url !== 'https://chatgpt.com/'
+            || source.destination !== 'new-chat'
+            || entry.eventId && entry.eventId !== eventId
+            || entry.documentId && entry.documentId !== source.documentId
+            || ['scope', 'runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch', 'destination']
+              .some(key => source[key] !== entry.source[key])) reject('CAPTURE_NOT_ENABLED');
+        entry.eventId = eventId; entry.documentId = source.documentId;
+      }
+      if (active) this.#adapter.assertObservationSource(source);
+      else if (!this.#adapter.newChatContinuation(entry.source)) reject('CAPTURE_NOT_ENABLED');
+      if (source.destination === 'new-chat' && observation.kind === 'send-intent' && !entry.eventId) {
+        entry.eventId = eventId; entry.documentId = source.documentId;
+      }
       const prior = this.#session.status().versions.some(value => value.id === eventId);
       let version;
       try {
@@ -150,7 +177,7 @@ export class ResidentEngine {
       }
       if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
       if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
-      if (this.#state.recording !== command.enabled) this.#captureTokens.clear();
+      if (this.#state.recording !== command.enabled) { this.#captureTokens.clear(); this.#newChatTokens.clear(); }
       this.#state.recording = command.enabled;
       // Publish revocation immediately; acknowledge the setting only after fsync.
       this.#publish();

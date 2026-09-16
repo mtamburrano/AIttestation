@@ -4,10 +4,11 @@ const $ = id => document.getElementById(id);
 const model = new SidePanelModel(requestPanel, render);
 function render() {
   const state = model.state;
-  $('recording').textContent = state?.recording ? 'Turn OFF' : 'Turn ON';
-  $('recording').disabled = model.busy || !state?.available;
-  $('connection').textContent = recordingStatus(state);
-  $('error').textContent = model.error;
+  const update = (id, key, value) => { if ($(id)[key] !== value) $(id)[key] = value; };
+  update('recording', 'textContent', state?.recording ? 'Turn OFF' : 'Turn ON');
+  update('recording', 'disabled', model.busy || !state?.available);
+  update('connection', 'textContent', recordingStatus(state));
+  update('error', 'textContent', model.error);
 }
 // A full navigation (not replaceState/hash) makes Chrome's sender URL and live
 // runtime context share a fresh URL discriminator. The Port binds the requester.

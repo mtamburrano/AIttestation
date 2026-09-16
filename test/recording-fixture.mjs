@@ -22,7 +22,7 @@ export async function until(check) {
 // scripts. Only page/browser/platform identity and anchoring are synthetic.
 export async function recordingFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
   collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
-  dropPanelAck = false, installation = null, debugSession = null } = {}) {
+  dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
@@ -55,14 +55,21 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
     commandId: randomUUID(), expectedRevision: runtime.engine.state().revision, kind, ...data }, { surface: 'desktop' });
   const addPage = (id, overrides = {}) => {
     const tab = testTab({ id, windowId: id - 16,
-      url: `https://chatgpt.com/c/fixture-${id}`, destination: `conversation:fixture-${id}`, ...overrides });
+      url: newChat && id === 17 ? 'https://chatgpt.com/' : `https://chatgpt.com/c/fixture-${id}`,
+      destination: newChat && id === 17 ? 'new-chat' : `conversation:fixture-${id}`, ...overrides });
     inventory.set(id, tab);
-    const sender = page => page.sender({ tab: { id, windowId: tab.windowId, url: page.location.href }, documentId: `synthetic-${id}` });
+    const sender = page => page.sender({ tab: { id, windowId: tab.windowId, url: page.location.href }, documentId: page.documentId,
+      ...(fixedSenderURL ? { url: tab.url } : {}) });
     const page = pageFixture({ textarea, url: tab.url,
       authorize: (message, page) => worker.message(message, sender(page)),
       notify: (message, page) => worker?.chrome.runtime.onMessage.emit(message, sender(page)),
-      capture: (message, page) => worker ? worker.message(message, sender(page)) : Promise.resolve({ state: 'RECORDING_UNAVAILABLE' }),
+      capture: async (message, page) => {
+        const source = sender(page);
+        if (message.kind === 'PAP_CAPTURE') await beforeCapture?.(message, page);
+        return worker ? worker.message(message, source) : { state: 'RECORDING_UNAVAILABLE' };
+      },
     });
+    page.documentId = `synthetic-${id}`;
     page.captureSender = () => sender(page); pages.set(id, page);
   };
   for (let i = 0; i < tabs; i++) addPage(17 + i);
@@ -85,7 +92,11 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
     worker = await workerFixture({ clock: { setTimeout, clearTimeout, performance }, permission: async () => allow,
       contexts: panelContexts,
       query: async () => [...inventory.values()].map(tab => ({ ...tab, url: pages.get(tab.id).location.href })),
-      inspect: (id, message) => pages.get(id).send(message),
+      inspect: (id, message, options) => {
+        const page = pages.get(id);
+        if (options?.documentId && options.documentId !== page.documentId) return Promise.reject(Error('FIXTURE_DOCUMENT_GONE'));
+        return page.send(message);
+      },
       onConnect(value) {
         port = value;
         port.close = () => socket?.destroy();
@@ -137,11 +148,11 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
       storageFault() { captureFault = true; }, keyFault() { keyFault = true; },
       revokePermission() { allow = false; worker.chrome.permissions.onRemoved.emit(); },
       disconnect() { port.disconnect(); },
-      navigate(id = 17, url = 'https://chatgpt.com/c/different') {
+      navigate(id = 17, url = 'https://chatgpt.com/c/different', change = {}) {
         pages.get(id).location.href = url;
-        worker.chrome.tabs.onUpdated.emit(id, { url }); pages.get(id).changed();
+        worker.chrome.tabs.onUpdated.emit(id, { ...change, url }); pages.get(id).changed();
       },
-      replay(message) { input.write(encodeNativeFrame({ ...message, requestId: randomUUID() })); },
+      replay(message) { const requestId = randomUUID(); input.write(encodeNativeFrame({ ...message, requestId })); return requestId; },
       async restart() {
         await f.close(); runtime = await startPackagedChatGPT(runtimeOptions); revoke = network?.allowRuntime(runtime);
       },

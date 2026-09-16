@@ -17,11 +17,11 @@ try {
   await installation.enable();
   const installStatus = installation.status.bind(installation);
   installation.status = async () => ({ ...await installStatus(), releaseClass: 'SYNTHETIC_FIXTURE', releaseChannel: null });
-  let connected = true; const opened = [];
+  let connected = true, accountState = { state: 'ACTIVE', remaining: 7, month: '2026-09' }; const opened = [];
   debugSession = new OwnerDebugSession(root);
   f = await recordingFixture(root, { installation, debugSession, diagnostics: debugSession.diagnostics,
     openDashboard: async url => { opened.push(url); }, managed: {
-    status: () => ({ state: connected ? 'ACTIVE' : 'ACCOUNT_REQUIRED' }),
+    status: () => connected ? { ...accountState, token: 'SYNTHETIC_ACCOUNT_SECRET' } : { state: 'ACCOUNT_REQUIRED' },
     disconnect: () => { connected = false; return { state: 'ACCOUNT_REQUIRED' }; },
     submit: async (_payload, { beforeSubmit }) => { beforeSubmit(); return { transactionId: 'A'.repeat(52) }; },
   } });
@@ -86,6 +86,32 @@ try {
   await wait("document.querySelector('#prompt-count')?.textContent === '1'");
   assert.equal(await evaluate('document.title'), 'Attestamp · Your prompts');
   assert.doesNotMatch(await evaluate('document.body.innerText'), /SYNTHETIC_DASHBOARD_CANARY/);
+  for (const [value, expected] of [
+    [{ state: 'ACTIVE', remaining: 7, month: '2026-09' }, '7 anchors remaining. Period: 2026-09.'],
+    [{ state: 'ACTIVE', remaining: 0, month: '2026-09' }, 'Anchoring quota exhausted.'],
+    [{ state: 'ACCOUNT_REQUIRED' }, 'No anchoring account connected.'],
+    [{ state: 'UNPAID' }, 'Anchoring account unpaid or expired.'],
+    [{ state: 'QUOTA_EXHAUSTED' }, 'Anchoring quota exhausted.'],
+    [{ state: 'SERVICE_UNAVAILABLE' }, 'Anchoring service unavailable.'],
+    [{ state: '__proto__', remaining: 'SYNTHETIC_ACCOUNT_SECRET', month: 'SYNTHETIC_ACCOUNT_SECRET' }, 'Anchoring service unavailable.'],
+  ]) {
+    accountState = value; await click('refresh-account');
+    await wait(`document.querySelector('#account').textContent.includes(${JSON.stringify(expected)})`);
+    assert.doesNotMatch(await evaluate('document.body.innerText'), /SYNTHETIC_ACCOUNT_SECRET/);
+    assert.equal(await evaluate('document.activeElement.id'), 'feedback-refresh-account');
+  }
+  const list = f.runtime.session.receipts.list.bind(f.runtime.session.receipts);
+  f.runtime.session.receipts.list = () => [...list(), ...['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].map((outcome, index) => ({
+    id: `synthetic-history-${index}`, prompt: { mode: 'Historical', outcome, anchor: 'PENDING' },
+  }))];
+  await click('refresh'); await wait("document.querySelector('#attention-count').textContent === '2'");
+  await click('filter-attention'); await wait("document.querySelector('#filter-attention').getAttribute('aria-pressed') === 'true'");
+  assert.equal(await evaluate("document.querySelectorAll('#prompts article').length"), 2);
+  assert.equal(await evaluate("document.querySelectorAll('#prompts article.attention').length"), 2);
+  assert.match(await evaluate("document.querySelector('#prompts').textContent"), /Do not resend automatically/);
+  assert.match(await evaluate("document.querySelector('#history-filter').textContent"), /1–2 of 2/);
+  f.runtime.session.receipts.list = list;
+  await click('all-prompts'); await wait("document.querySelectorAll('#prompts article').length === 1");
   assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), true);
   await click('debug-session-toggle'); await wait("document.querySelector('#debug-session-status').textContent.startsWith('Debug recording active')");
   assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), false);
@@ -97,7 +123,7 @@ try {
   await wait("!document.querySelector('#save-export').disabled");
   assert.match(await evaluate("document.querySelector('#preview-texts').textContent"), /SYNTHETIC_DASHBOARD_CANARY/);
   assert.equal(await evaluate("document.querySelector('#preview-texts img') === null"), true);
-  await click('disconnect-account'); await wait("document.querySelector('#account').textContent.startsWith('Anchoring unavailable')");
+  await click('disconnect-account'); await wait("document.querySelector('#account').textContent.startsWith('No anchoring account connected')");
   await click('save-export');
   await until(async () => { try { return (await readFile(join(root, 'attestamp-evidence.json'))).length > 0; } catch { return false; } });
   const screenshotRoot = await mkdtemp('/private/tmp/attestamp-dashboard-preview-');
@@ -105,7 +131,8 @@ try {
   await writeFile(join(screenshotRoot, 'dashboard.png'), Buffer.from(screenshot.data, 'base64'));
   await click('close'); await wait("document.querySelector('#message').textContent.startsWith('Dashboard closed.')");
   assert.equal(f.runtime.engine.state().recording, false);
-  await call('Page.reload'); await wait("document.querySelector('#effective-state')?.textContent === 'Attestamp is OFF'");
+  await evaluate('globalThis.__departingDashboard = true');
+  await call('Page.reload'); await wait("!globalThis.__departingDashboard && document.querySelector('#effective-state')?.textContent === 'Attestamp is OFF'");
   assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), false);
   assert.equal(await evaluate("document.querySelector('#prompt-count').textContent"), '1');
   await click('disable'); await wait("document.querySelector('#effective-state').textContent === 'Chrome connection disabled'");
@@ -119,8 +146,11 @@ try {
   await click('debug-session-save');
   await until(async () => { try { return (await readFile(join(root, 'attestamp-debug-session.json'))).length > 0; } catch { return false; } });
   const debugExport = await readFile(join(root, 'attestamp-debug-session.json'), 'utf8');
+  await wait("document.querySelector('#feedback-debug-session-save')?.textContent.startsWith('Private debug session saved.')");
+  assert.equal(await evaluate(`(()=>{const node=document.querySelector('#feedback-debug-session-save'), rect=node.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= innerHeight && document.activeElement === node;})()`), true);
   assert.ok(JSON.parse(debugExport).segments.flatMap(segment => segment.events).some(event => event.code === 'BRIDGE_DISCONNECTED'));
-  assert.doesNotMatch(debugExport, /SYNTHETIC_DASHBOARD_CANARY|https:\/\/|token|digest|DOM/);
+  assert.doesNotMatch(debugExport, /SYNTHETIC_DASHBOARD_CANARY|SYNTHETIC_ACCOUNT_SECRET|https:\/\/|token|digest|DOM/);
   await click('verifier'); await until(() => opened.length === 1);
   await call('Page.navigate', { url: opened[0] }); await wait("document.querySelector('#bundle') !== null");
   const dom = await call('DOM.getDocument'), field = await call('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#bundle' });

@@ -6,10 +6,10 @@ explicit quit. Starting the app leaves browser views closed.
 
 The existing Chrome **sidebar stays**. It contains one integration-wide toggle,
 effective status and Dashboard/History. It has no prompt field, tab picker,
-per-conversation settings or popup replacement. Existing trusted-context checks
-are preserved. Their installed-context false rejection and actual sidebar
-interaction remain a separate validation boundary; synthetic tests do not claim
-to fix it.
+per-conversation settings or popup replacement. Its document-owned control channel
+is described in [Sidebar trust](SIDEBAR.md). Background polling keeps the existing
+button enabled and makes no DOM change when its displayed state is unchanged.
+Commands remain serialized, and older poll replies cannot replace a newer command.
 
 ## State and authority
 
@@ -45,8 +45,13 @@ History groups genuine normal-Send observations and authenticated historical
 records. Distinct equal-text Sends remain distinct. Legacy cancellations and
 unknown outcomes stay readable with no action controls. Counts use known
 conversation identities; unresolved/new chats and older records remain unassigned.
-The dashboard displays the latest 200 prompt groups and counts all retained
-groups; the engine/API and vault retain older evidence.
+The dashboard displays 200 prompt groups per page and counts all retained groups.
+The Need attention count filters the exact contributing rows, including older
+pages. Only historical `OUTCOME_UNKNOWN` and `FAILED_BEFORE_EGRESS` contribute;
+each row explains its reason and a safe manual next action. Unknown delivery
+explicitly says not to resend automatically. Anchor-pending has a separate count
+and does not by itself require attention. The count, highlighting, explanations
+and filter share the same server-side mapping; signed history is unchanged.
 
 Local save, pending anchor, source corroboration and portable State-Proof assurance
 have separate labels. Exact text appears only in an explicit disclosure preview.
@@ -60,6 +65,17 @@ Prepared copies expire after one minute or view closure. Restoration targets a
 new vault and starts recording OFF. Export, recovery and independent verification
 remain free during account or service loss. OFF permits bounded pending anchor
 work for already-durable evidence; it does not delete or recall evidence.
+
+Account refresh displays ACTIVE with remaining anchors and the returned monthly
+period. Missing credentials, unpaid/expired accounts, quota exhaustion (including
+ACTIVE with zero remaining), and service failures have distinct guidance. Only
+allowlisted copy and validated quota/period fields render; no account token or
+access code is echoed. Recording and evidence access remain independent.
+
+Every action has a status region beside its control. Completion/failure is focused
+and scrolled into view when necessary, including private debug export near the
+bottom. If an action hides its controls, its feedback moves outside that hidden
+container. The global message remains available, but is never the sole feedback.
 
 ## Isolated checks
 

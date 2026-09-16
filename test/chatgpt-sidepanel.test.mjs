@@ -257,3 +257,25 @@ test('disconnect makes sidebar status unavailable without replaying a prior comm
   assert.equal(model.state, null); assert.match(model.error, /unavailable/);
   assert.equal(f.requests.filter(value => value.action === 'COMMAND').length, before);
 });
+
+test('background sidebar refresh leaves stable controls enabled and cannot overwrite a newer command', async () => {
+  const { SidePanelModel } = await import('../spikes/browser/chatgpt/extension/sidepanel-model.js');
+  let resolvePoll;
+  const snapshots = [], initial = { profile: CHATGPT_PANEL_PROFILE, available: true, recording: false, revision: 1 };
+  const model = new SidePanelModel(async request => {
+    if (request.action === 'STATE') return new Promise(resolve => { resolvePoll = resolve; });
+    return { state: { ...initial, recording: true, revision: 2 } };
+  }, () => snapshots.push({ busy: model.busy, recording: model.state?.recording, error: model.error }));
+  model.state = initial;
+  for (let index = 0; index < 3; index++) {
+    const refreshing = model.refresh(); assert.equal(model.busy, false);
+    assert.equal(model.refresh(), refreshing, 'polls coalesce');
+    resolvePoll({ state: initial }); await refreshing;
+  }
+  assert.ok(snapshots.every(value => !value.busy && !value.recording));
+  const stale = model.refresh(); await model.toggle();
+  resolvePoll({ state: initial }); await stale;
+  assert.equal(model.state.recording, true); assert.equal(model.busy, false);
+  const unavailable = model.refresh(); resolvePoll({ error: 'PANEL_UNAVAILABLE' }); await unavailable;
+  assert.equal(model.state, null); assert.match(model.error, /unavailable/);
+});

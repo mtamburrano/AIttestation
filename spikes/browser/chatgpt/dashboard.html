@@ -10,8 +10,9 @@
 <p id="debug-session-banner" role="status" hidden></p>
 <section id="history"><h2>Prompt history</h2><div class="stats">
 <div><strong id="prompt-count">0</strong><span>Prompts</span></div><div><strong id="conversation-count">0</strong><span>Known conversations</span></div>
-<div><strong id="anchor-count">0</strong><span>Pending anchors</span></div><div><strong id="attention-count">0</strong><span>Need attention</span></div></div>
-<p id="history-note"></p><div id="prompts">Loading retained history…</div>
+<div><strong id="anchor-count">0</strong><span>Pending anchors</span></div><div><button id="filter-attention" aria-pressed="false"><strong id="attention-count">0</strong><span>Need attention</span></button></div></div>
+<p id="history-note"></p><p id="history-filter" role="status"></p><button id="all-prompts" hidden>Show all prompts</button><div id="prompts">Loading retained history…</div>
+<div class="actions"><button id="history-newer" hidden>Newer prompts</button><button id="history-older" hidden>Older prompts</button></div>
 <details><summary>Other retained receipts</summary><p>Derivatives and unassociated legacy cancellations are available for export; they do not increase the prompt count.</p><div id="other-receipts"></div></details>
 <div class="actions"><button id="preview-export">Review selected evidence</button><button id="save-export" disabled>Save reviewed export</button><button id="verifier">Open free verifier</button></div>
 <label><input id="include-evidence" type="checkbox" checked> Include exact selected text bytes in the export</label>
@@ -28,7 +29,7 @@
 </article></section>
 <section id="settings"><h2>Settings</h2><h3>Feedback</h3><p>Successful saves appear quietly in the Chrome panel or recording indicator. System success notifications are off. No prompt text appears in notifications.</p>
 <h3>App updates</h3><p id="update-state">Private builds use the documented private setup. Automatic updates are off.</p><button id="check-update">Check for updates</button><button id="download-update" disabled>Download verified update</button>
-<h3>Anchoring account</h3><p id="account">Refresh to check anchoring availability. History, recovery, export and verification remain free without an account.</p>
+<h3>Anchoring account</h3><p id="account" role="status">Refresh to check anchoring availability.</p><p>Local recording, history, recovery, export and verification remain available independently of managed anchoring. Provider Send continues normally.</p>
 <label>Access code <input id="access-code" type="password" autocomplete="off" maxlength="43"></label><div class="actions"><button id="connect-account">Connect account</button><button id="refresh-account">Refresh account</button><button id="disconnect-account">Disconnect account</button></div>
 <h3>Recovery copy</h3><p>Create an encrypted snapshot of retained evidence and a separate recovery key. Store the key securely, separately from the snapshot. Recovery restores history with recording OFF, and cannot prove this was the latest snapshot.</p>
 <label><input id="recovery-consent" type="checkbox"> I will keep the recovery key separate and private</label><button id="prepare-recovery">Prepare recovery copy</button><div id="recovery" hidden><button id="save-recovery">Save encrypted snapshot</button><button id="save-recovery-key">Save separate recovery key</button><button id="clear-recovery">Clear prepared copy</button><p>Prepared downloads expire in one minute. Existing documented recovery tools restore into a new vault and leave this vault untouched.</p></div>

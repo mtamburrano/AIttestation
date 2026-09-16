@@ -277,6 +277,14 @@ try {
     await screenshot(panel, 'baseline-rejection.png');
   } else {
     assert.equal(state.state.recording, false); assert.equal((await visible(panel)).disabled, false);
+    await evaluate(panel, `globalThis.__stableControl = document.getElementById('recording'); globalThis.__controlChanges = [];
+      globalThis.__controlObserver = new MutationObserver(records => __controlChanges.push(...records.map(record => record.type)));
+      __controlObserver.observe(__stableControl, {attributes:true,childList:true,subtree:true,characterData:true});`);
+    await delay(3200);
+    assert.equal(await evaluate(panel, 'document.getElementById("recording") === __stableControl && !__stableControl.disabled'), true);
+    assert.deepEqual(await evaluate(panel, '__controlChanges'), []);
+    await evaluate(panel, '__controlObserver.disconnect()');
+    report.checks.push('STABLE_PERIODIC_REFRESH_PRESERVES_ENABLED_CONTROL_WITHOUT_DOM_MUTATIONS');
     await click(panel, 'recording'); await wait(() => runtime.engine.state().recording, 'sidebar ON');
     await wait(async () => (await visible(panel)).status.startsWith('ON'), 'ON status');
     await screenshot(panel, 'sidebar-on.png');
