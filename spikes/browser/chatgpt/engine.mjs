@@ -39,7 +39,7 @@ export class ResidentEngine {
   state() {
     const scopes = this.#adapter.scopes().map(source => ({ ...source,
       effectiveRecording: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
-        || !this.#adapter.observationEligible(source.scope) ? 'UNAVAILABLE' : 'ON' }));
+        || !this.#adapter.offersCapture(source.scope) ? 'UNAVAILABLE' : 'ON' }));
     return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, adapterProfile: CHATGPT_ADAPTER_PROFILE,
       revision: this.#state.revision, available: !this.#closed && !this.#failed,
       recording: this.#state.recording, migration: this.#state.migration,
@@ -88,7 +88,7 @@ export class ResidentEngine {
   captureStates() {
     return this.#adapter.scopes().map(source => ({ tabId: source.tabId,
       state: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
-        || !this.#adapter.observationEligible(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
+        || !this.#adapter.offersCapture(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
   }
   observe(input, { newChatContinuation = false } = {}) {
     let observation;

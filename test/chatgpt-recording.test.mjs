@@ -501,7 +501,10 @@ test('a churn window closes and republishes without any further provider event',
   const controls = page.buttons, before = inspections;
   page.buttons = [page.button, page.button]; page.changed();
   await until(() => inspections > before);
-  assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'READY');
+  // The surface cannot synchronously observe a new Send, so READY is withdrawn
+  // at once, while the retained policy still covers an already-observed Send.
+  await until(async () => (await f.refresh()).state === 'RECORDING_UNAVAILABLE');
+  assert.ok((await f.refresh()).policy, 'the grace retains capture authority');
   await new Promise(resolve => setTimeout(resolve, SURFACE_CHURN_MS + 500));
   await until(() => !f.runtime.adapter.observationEligible(scope));
   // The worker's published policy and state are what actually withdraw capture,
@@ -552,16 +555,13 @@ test('staggered multi-tab churn expires each tab without further provider events
   await until(() => inspections > before);
   pageB.buttons = [pageB.button, pageB.button]; pageB.changed();
   await until(() => inspections > before + 1);
-  // A closes on its own deadline and is republished while B is still inside its
-  // own window, so B must still be offered capture at that moment.
-  await until(async () => (await f.refresh(17)).state === 'RECORDING_UNAVAILABLE');
+  // A is retired first; B keeps its own grace because its churn started later.
+  await until(async () => (await f.refresh(17)).policy === null);
   assert.equal(f.runtime.adapter.observationEligible(scopeA), false);
-  assert.equal((await f.refresh(18)).state, 'READY', 'B is still inside its own window');
-  assert.ok((await f.refresh(18)).policy);
-  // B must then close from its own re-armed deadline, with no further event.
-  await until(async () => (await f.refresh(18)).state === 'RECORDING_UNAVAILABLE');
+  assert.ok((await f.refresh(18)).policy, 'B retains its own grace after A is retired');
+  // B must then retire from its own re-armed deadline, with no further event.
+  await until(async () => (await f.refresh(18)).policy === null);
   assert.equal(f.runtime.adapter.observationEligible(scopeB), false);
-  assert.equal((await f.refresh(18)).policy, null);
   assert.equal(pageB.feedback, 'Attestamp · Recording unavailable');
   const stale = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT, token: policyB.token,
     eventId: crypto.randomUUID(), observationKind: 'send-intent', inputMethod: 'send-button', text: exact }, pageB.captureSender());
@@ -569,6 +569,38 @@ test('staggered multi-tab churn expires each tab without further provider events
   assert.equal(saved(f).length, 0); assert.equal(f.prevention, 0);
   pageA.buttons = controlsA; pageA.changed();
   pageB.buttons = controlsB; pageB.changed();
+});
+
+test('an ambiguous surface withdraws READY before a new Send can gap', async t => {
+  let inspections = 0;
+  const f = await fixture(t, {});
+  const inspect = f.worker.chrome.tabs.sendMessage;
+  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
+    const result = await inspect(id, message, options);
+    if (message.kind === 'PAP_INSPECT') inspections++;
+    return result;
+  };
+  await f.recording(true);
+  const page = f.pages.get(17);
+  assert.equal(page.feedback, 'Attestamp · ON');
+  assert.equal((await f.refresh()).state, 'READY');
+  // The provider exposes ambiguous Send controls, which is exactly the state in
+  // which a new Send cannot be observed at all.
+  const controls = page.buttons, before = inspections;
+  page.buttons = [page.button, page.button]; page.changed();
+  await until(() => inspections > before);
+  await until(async () => (await f.refresh()).state === 'RECORDING_UNAVAILABLE');
+  await until(() => page.feedback === 'Attestamp · Recording unavailable');
+  // A new Send during this state does gap, but only after the surface said so:
+  // the indicator never claimed this Send would be recorded.
+  const displayed = page.feedback;
+  f.send(exact);
+  await until(() => /gap/.test(page.feedback));
+  assert.equal(displayed, 'Attestamp · Recording unavailable');
+  assert.equal(saved(f).length, 0); assert.equal(f.prevention, 0);
+  page.buttons = controls; page.changed();
+  await until(async () => (await f.refresh()).state === 'READY');
+  await until(() => page.feedback === 'Attestamp · ON');
 });
 
 test('an observed Send still saves inside the window while the surface is unsupported', async t => {

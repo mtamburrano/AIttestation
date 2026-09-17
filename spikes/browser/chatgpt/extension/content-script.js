@@ -114,7 +114,10 @@ function setCapturePolicy(message) {
   const policy = message.policy;
   const next = policy?.profile === CAPTURE_PROFILE && policy.expectedUrl === location.href
     && policy.destination === destination() ? policy : null;
-  const state = next ? 'READY' : message.state;
+  // The worker reports the advertised state. A retained policy still lets an
+  // already-observed Send finish, but it must not advertise this surface as
+  // recording new Sends while the composer controls cannot be observed.
+  const state = message.state;
   if (capturePolicy?.token !== next?.token) {
     const continuing = [...observations.values()].find(value => value.firstNewChat && continuationCurrent(value)
       && message.browserSessionId === value.policy.browserSessionId && state === 'READY');
@@ -194,7 +197,10 @@ function continuationCurrent(pending) {
 }
 
 function pendingCurrent(pending) {
-  return policyCurrent(pending.policy) || policyState === 'READY' && continuationCurrent(pending);
+  // An already-observed first Send keeps its own bounded continuation window; a
+  // transient unsupported surface must not discard it. OFF, a token change and a
+  // destination change already clear the observation outright.
+  return policyCurrent(pending.policy) || continuationCurrent(pending);
 }
 
 function reportObservation(pending, state) {

@@ -198,7 +198,16 @@ export class ChatGPTChromeAdapter {
     emit(this.#diagnostics, 'SOURCE_FOLLOWED');
   }
 
-  eligibility(scope) { return this.observationEligible(scope) ? 'ELIGIBLE' : 'TEMPORARILY_UNAVAILABLE'; }
+  eligibility(scope) { return this.offersCapture(scope) ? 'ELIGIBLE' : 'TEMPORARILY_UNAVAILABLE'; }
+
+  // Advertised capability: a surface that cannot synchronously observe a new Send
+  // must not report READY, or a genuine steering Send made during the churn would
+  // gap under a displayed ON. observationEligible() additionally retains the
+  // bounded churn grace, which is capture authority for an already-observed Send.
+  offersCapture(scope) {
+    const followed = this.#sources.get(scope);
+    return Boolean(followed && this.#connection && this.#strictlyObservable(followed));
+  }
 
   observationEligible(scope) {
     const followed = this.#sources.get(scope);
@@ -252,16 +261,18 @@ export class ChatGPTChromeAdapter {
   #expireChurn() {
     this.#churnTimer = undefined;
     const now = performance.now();
-    let expired = false;
+    let retired = false;
     for (const [scope, deadline] of [...this.#churnHeld]) {
       if (deadline > now) continue;
       this.#churnHeld.delete(scope);
+      // The advertised transition already fired when the surface churned; this
+      // retires the retained capture authority and republishes without it.
       if (!this.#sources.has(scope) || this.observationEligible(scope)) continue;
-      emit(this.#diagnostics, 'CAPABILITY_UNAVAILABLE'); expired = true;
+      retired = true;
     }
     // Scopes whose window is still open stay held and keep their own deadline.
     this.#armChurnExpiry();
-    if (expired) this.#changed();
+    if (retired) this.#changed();
   }
 
   assertObservationSource(source) {
