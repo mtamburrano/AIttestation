@@ -35,9 +35,17 @@ function surface() {
 if (typeof MutationObserver === 'function') {
   let lastSurface = JSON.stringify(surface());
   const changed = () => {
-    const next = JSON.stringify(surface());
+    const current = surface(), next = JSON.stringify(current);
     if (next === lastSurface) return;
     lastSurface = next;
+    // A surface that cannot synchronously authenticate a Send must stop being
+    // advertised as ON in this task, not after a worker/native round-trip: the
+    // provider can re-render its composer and the next input task can already
+    // carry a genuine Send. Only the advertisement drops here; the retained
+    // policy, its token and pending observations still cover an already-observed
+    // Send for the bounded grace.
+    surfaceAvailable = current.surfaceSupported;
+    render();
     chrome.runtime.sendMessage({ kind: 'PAP_SURFACE_CHANGED' }).catch(() => {});
   };
   new MutationObserver(changed).observe(document.documentElement, {
@@ -82,6 +90,11 @@ const CAPTURE_PROFILE = 'pap-chatgpt-capture/2';
 const MESSAGE_SELECTOR = '[data-message-author-role="user"][data-message-id]';
 let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0;
 let composing = false, compositionEnded = -Infinity, keyboardIntent = false, stopped = false, feedback;
+// null until this document has computed its own surface. Once it has, a surface
+// that is not synchronously observable bounds every advertised state, so an
+// asynchronous worker reply can never restore READY while this document still
+// cannot authenticate a Send.
+let surfaceAvailable = null, lastReported = null;
 let latestIntent = null;
 let newChatToken = null;
 const observations = new Map();
@@ -100,6 +113,31 @@ function showRecording(state) {
   const label = labels[state] ?? '';
   if (feedback.textContent !== label) feedback.textContent = label;
   if (feedback.hidden !== !label) feedback.hidden = !label;
+}
+
+function observationFresh(pending) {
+  return !stopped && pending.firstNewChat && observations.get(pending.eventId) === pending
+    && performance.now() - pending.observedAt < 5000 && pendingCurrent(pending);
+}
+
+// The single advertised-state decision. `reported` is the state the worker last
+// published for this document; this document can only withhold it, never invent
+// a higher one. `pending` is the evidence this decision speaks for, which is not
+// always what is still tracked: a revocation drops its observations and then
+// still has to report the gap they proved.
+function advertised(pending, authority) {
+  if (surfaceAvailable === false) return 'RECORDING_UNAVAILABLE';
+  if (lastReported === 'OFF') return 'OFF';
+  const continuing = pending.find(observationFresh);
+  if (continuing) return continuing.saved ? 'PROMPT_SAVED' : 'SAVING';
+  if (authority) return lastReported;
+  return pending.length ? pending.every(value => value.saved) && observations.size <= pending.length
+    ? 'OBSERVATION_GAP' : 'GAP' : lastReported;
+}
+
+function render({ pending = [...observations.values()], reported = lastReported, authority = capturePolicy } = {}) {
+  lastReported = reported;
+  showRecording(advertised(pending, authority));
 }
 
 function clearObservations() {
@@ -121,16 +159,23 @@ function setCapturePolicy(message) {
   if (capturePolicy?.token !== next?.token) {
     const continuing = [...observations.values()].find(value => value.firstNewChat && continuationCurrent(value)
       && message.browserSessionId === value.policy.browserSessionId && state === 'READY');
-    const hadPending = observations.size > 0, saved = [...observations.values()].every(value => value.saved);
-    for (const [id, pending] of observations) if (pending !== continuing) {
-      clearTimeout(pending.timer); observations.delete(id);
+    // The branch below drops the observations this state no longer covers, so
+    // capture what they proved before clearing them.
+    const pending = [...observations.values()].filter(value => value !== continuing);
+    for (const [id, value] of observations) if (value !== continuing) {
+      clearTimeout(value.timer); observations.delete(id);
     }
     if (!continuing) latestIntent = null;
     capturePolicy = next;
-    showRecording(state === 'OFF' ? 'OFF' : continuing ? continuing.saved ? 'PROMPT_SAVED' : 'SAVING'
-      : next ? 'READY' : hadPending ? saved ? 'OBSERVATION_GAP' : 'GAP' : state);
-  } else if (state !== policyState) showRecording(state);
-  policyState = state;
+    policyState = state;
+    // The revoked observations are already gone from the map, so this decision
+    // has to be told what they proved.
+    render({ pending, reported: state, authority: next });
+    return;
+  }
+  // A steady poll must not overwrite transient page feedback (a save, a gap or a
+  // withdrawal) that no newer worker state contradicts.
+  if (state !== policyState) { policyState = state; render({ reported: state, authority: next }); }
 }
 
 async function refreshCapturePolicy() {
@@ -147,7 +192,8 @@ async function refreshCapturePolicy() {
     setCapturePolicy(status);
   } catch {
     if (revision !== policyRevision || stopped) return;
-    capturePolicy = null; policyState = 'RECORDING_UNAVAILABLE'; clearObservations(); showRecording(policyState);
+    capturePolicy = null; policyState = 'RECORDING_UNAVAILABLE'; clearObservations();
+    render({ reported: policyState, authority: null });
   } finally {
     clearTimeout(timer);
     if (!stopped) setTimeout(refreshCapturePolicy, 1000);
@@ -236,6 +282,11 @@ function reportRejection() {
 function observeSend(event, inputMethod) {
   const policy = capturePolicy;
   if (!event.isTrusted || !policy || !policyCurrent(policy) || document.visibilityState !== 'visible') return;
+  // A Send is observed only on a surface this document has synchronously
+  // authenticated. A surface that churned refuses deterministically here instead
+  // of minting an observation it would then have to gap. Already-observed Sends
+  // keep their own boundary above and are unaffected.
+  if (surfaceAvailable === false) { reportRejection(); return; }
   let editor, text, baseline;
   try {
     const current = composers(); editor = current[0];
@@ -309,11 +360,15 @@ document.addEventListener('click', event => {
     // is a Send the page declined to observe; unrelated clicks during a render
     // are not gaps. No DOM detail leaves the page.
     if (capturePolicy && sendControls().some(control => event.target === control || control.contains(event.target))) {
-      latestIntent = null; showRecording('GAP'); reportRejection();
+      reportRejection();
+      // While the surface is unobservable the advertisement already says so, and
+      // the owner must not be told the Send was lost after that truthful warning.
+      if (surfaceAvailable === false) return;
+      latestIntent = null; showRecording('GAP');
     }
   }
 }, true);
 new MutationObserver(observeMessages).observe(document.documentElement, { subtree: true, childList: true, characterData: true });
-addEventListener('pagehide', () => { stopped = true; capturePolicy = null; clearObservations(); });
+addEventListener('pagehide', () => { stopped = true; capturePolicy = null; surfaceAvailable = null; clearObservations(); });
 addEventListener('pageshow', () => { if (stopped) { stopped = false; refreshCapturePolicy(); } });
 refreshCapturePolicy();

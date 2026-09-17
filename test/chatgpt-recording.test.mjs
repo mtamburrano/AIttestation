@@ -571,36 +571,97 @@ test('staggered multi-tab churn expires each tab without further provider events
   pageB.buttons = controlsB; pageB.changed();
 });
 
-test('an ambiguous surface withdraws READY before a new Send can gap', async t => {
-  let inspections = 0;
+test('an ambiguous surface withdraws READY in the same task, before the next Send', async t => {
   const f = await fixture(t, {});
-  const inspect = f.worker.chrome.tabs.sendMessage;
-  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
-    const result = await inspect(id, message, options);
-    if (message.kind === 'PAP_INSPECT') inspections++;
-    return result;
-  };
   await f.recording(true);
   const page = f.pages.get(17);
   assert.equal(page.feedback, 'Attestamp · ON');
   assert.equal((await f.refresh()).state, 'READY');
-  // The provider exposes ambiguous Send controls, which is exactly the state in
-  // which a new Send cannot be observed at all.
-  const controls = page.buttons, before = inspections;
+  // The provider exposes ambiguous Send controls and a genuine click follows in
+  // the next input task. No worker or native round-trip is awaited here: the
+  // document must stop advertising ON from its own observation, in the same task
+  // that saw the churn.
+  const controls = page.buttons;
   page.buttons = [page.button, page.button]; page.changed();
-  await until(() => inspections > before);
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable',
+    'the indicator must not stay ON while a Send cannot be observed');
+  const before = saved(f).length; f.send(exact);
+  // The refusal is what the owner was already told; it must not turn into a gap
+  // message that suggests a Send was lost after a truthful warning, and no
+  // capture may reach the engine.
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  assert.equal(saved(f).length, before); assert.equal(f.deliveries.length, 0); assert.equal(f.prevention, 0);
+  // The worker's own advertised view agrees once the round-trip lands, and the
+  // retained policy still carries the bounded grace for an already-observed Send.
   await until(async () => (await f.refresh()).state === 'RECORDING_UNAVAILABLE');
-  await until(() => page.feedback === 'Attestamp · Recording unavailable');
-  // A new Send during this state does gap, but only after the surface said so:
-  // the indicator never claimed this Send would be recorded.
-  const displayed = page.feedback;
-  f.send(exact);
-  await until(() => /gap/.test(page.feedback));
-  assert.equal(displayed, 'Attestamp · Recording unavailable');
-  assert.equal(saved(f).length, 0); assert.equal(f.prevention, 0);
+  assert.ok((await f.refresh()).policy, 'the grace retains capture authority');
   page.buttons = controls; page.changed();
-  await until(async () => (await f.refresh()).state === 'READY');
   await until(() => page.feedback === 'Attestamp · ON');
+  await until(async () => (await f.refresh()).state === 'READY');
+});
+
+test('a stale READY reply cannot restore ON after the surface already churned', async t => {
+  let status = { kind: 'PAP_CAPTURE_POLICY', pageContract: CHATGPT_PAGE_CONTRACT,
+    browserSessionId: 'synthetic-churn-session', revision: 0, state: 'OFF', policy: null };
+  const page = pageFixture({ draft: 'SYNTHETIC_CHURN', capture: async message => message.kind === 'PAP_CAPTURE_STATUS'
+    ? status : { profile: CHATGPT_CAPTURE_PROFILE, eventId: message.eventId, kind: message.observationKind, state: 'PROMPT_SAVED' } });
+  t.after(() => page.close());
+  await page.send(status);
+  // The retained policy is the worker's last word before it has seen the churn.
+  const policy = { profile: CHATGPT_CAPTURE_PROFILE, token: 'retained-token',
+    expectedUrl: page.location.href, destination: 'conversation:test-conversation' };
+  status = { ...status, revision: 1, state: 'READY', policy }; await page.send(status);
+  assert.equal(page.feedback, 'Attestamp · ON');
+  const controls = page.buttons;
+  page.buttons = [page.button, page.button]; page.changed();
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  // The worker has not republished yet, so its next reply still claims READY for
+  // the same token. Delayed propagation must not win the race against this
+  // document's own observation.
+  status = { ...status, revision: 2, state: 'READY', policy }; await page.send(status);
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  // A surface that can observe a Send again restores ON under the same policy.
+  page.buttons = controls; page.changed();
+  assert.equal(page.feedback, 'Attestamp · ON');
+});
+
+test('a revoked capture still reports its gap instead of a generic state', async t => {
+  const captured = [], replies = [];
+  let status = { kind: 'PAP_CAPTURE_POLICY', pageContract: CHATGPT_PAGE_CONTRACT,
+    browserSessionId: 'synthetic-revocation-session', revision: 0, state: 'OFF', policy: null };
+  const page = pageFixture({ draft: 'SYNTHETIC_REVOKE', capture: async message => {
+    if (message.kind === 'PAP_CAPTURE_STATUS') return status;
+    captured.push(message);
+    return new Promise(resolve => replies.push(() => resolve({ profile: CHATGPT_CAPTURE_PROFILE,
+      eventId: message.eventId, kind: message.observationKind, state: 'PROMPT_SAVED' })));
+  } });
+  t.after(() => page.close());
+  await page.send(status);
+  status = { ...status, revision: 1, state: 'READY', policy: { profile: CHATGPT_CAPTURE_PROFILE,
+    token: 'revoked-token', expectedUrl: page.location.href, destination: 'conversation:test-conversation' } };
+  await page.send(status);
+  assert.equal(page.feedback, 'Attestamp · ON');
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  assert.equal(captured.length, 1);
+  // The worker revokes the policy while that Send is still in flight. The page
+  // drops the observation but must report the gap it proved, not the worker's
+  // generic unavailability.
+  status = { ...status, revision: 2, state: 'RECORDING_UNAVAILABLE', policy: null }; await page.send(status);
+  assert.match(page.feedback, /Recording gap/);
+  // A revocation whose Send was already acknowledged, and whose correlation can
+  // no longer be observed, keeps the quieter wording.
+  status = { ...status, revision: 3, state: 'READY', policy: { profile: CHATGPT_CAPTURE_PROFILE,
+    token: 'second-token', expectedUrl: page.location.href, destination: 'conversation:test-conversation' } };
+  await page.send(status); assert.equal(page.feedback, 'Attestamp · ON');
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  assert.equal(captured.length, 2);
+  replies[1](); await until(() => page.feedback === 'Attestamp · Prompt saved');
+  status = { ...status, revision: 4, state: 'RECORDING_UNAVAILABLE', policy: null }; await page.send(status);
+  assert.match(page.feedback, /Prompt saved/);
 });
 
 test('an observed Send still saves inside the window while the surface is unsupported', async t => {
