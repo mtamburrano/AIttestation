@@ -18,16 +18,33 @@ function attachmentsPresent() {
   return document.querySelector('[data-testid="composer-file-chip"], [data-testid="attachment-preview"]') !== null;
 }
 
-function surface() {
+function composerHidden(editor) {
+  return editor.hidden || getComputedStyle(editor).display === 'none' || getComputedStyle(editor).visibility === 'hidden';
+}
+
+// The one local decision about whether a new Send could be observed right now.
+// It returns exactly the editor a genuine Send would be read from, or null.
+// Every stable DOM capability that would make a Send unobservable is here, and
+// nothing content-dependent is: the exact bytes, their encoding and their
+// structure stay checks at Send time, because only then is there content to
+// judge. The same predicate drives the advertised page state, so the indicator
+// and the Send observation cannot disagree about what this document can do.
+function newSendEligible() {
   const editor = composers();
+  if (editor.length !== 1) return null;
+  const current = editor[0];
+  if (!current.isConnected || current.disabled || current.readOnly || composerHidden(current)
+      || attachmentsPresent()) return null;
+  try { return sendControl() ? current : null; } catch { return null; }
+}
+
+// The capability bits this document publishes. `surfaceSupported` is the local
+// new-Send eligibility, so the worker, the adapter and the page all advertise
+// the same fact instead of each deriving it from a different subset.
+function surface() {
   const target = destination();
-  let unambiguous = true;
-  try { sendControl(); } catch { unambiguous = false; }
-  return {
-    destination: target ?? '',
-    surfaceSupported: target !== null && editor.length === 1 && unambiguous,
-    attachmentsPresent: attachmentsPresent(),
-  };
+  return { destination: target ?? '', surfaceSupported: target !== null && newSendEligible() !== null,
+    attachmentsPresent: attachmentsPresent() };
 }
 
 // Only fixed capability bits leave the page on drift; no DOM text, selectors,
@@ -283,15 +300,14 @@ function observeSend(event, inputMethod) {
   const policy = capturePolicy;
   if (!event.isTrusted || !policy || !policyCurrent(policy) || document.visibilityState !== 'visible') return;
   // A Send is observed only on a surface this document has synchronously
-  // authenticated. A surface that churned refuses deterministically here instead
-  // of minting an observation it would then have to gap. Already-observed Sends
-  // keep their own boundary above and are unaffected.
-  if (surfaceAvailable === false) { reportRejection(); return; }
-  let editor, text, baseline;
+  // authenticated, which is the same predicate that decided what to advertise.
+  // When it fails the refusal is deterministic and happens before any
+  // observation exists; already-observed Sends keep their own boundary above.
+  const editor = newSendEligible();
+  if (!editor) { reportRejection(); return; }
+  let text, baseline;
   try {
-    const current = composers(); editor = current[0];
-    if (current.length !== 1 || !editor.isConnected || editor.disabled || editor.readOnly || attachmentsPresent()
-        || !sendControl() || observations.size >= 16) throw Object.assign(Error('unsupported send'), { eligibility: true });
+    if (observations.size >= 16) throw Object.assign(Error('unsupported send'), { eligibility: true });
     if (inputMethod === 'enter' && event.target !== editor && !editor.contains(event.target)) return;
     text = observedText(editor);
     if (!text.length || text.length > MAX_TEXT_BYTES || !text.isWellFormed()

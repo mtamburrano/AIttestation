@@ -223,17 +223,72 @@ test('supported textarea and paragraph projections preserve edits and explicit l
   });
 });
 
-test('unsupported rich content, attachments and ambiguous controls report gaps without inferred events', async t => {
-  for (const drift of ['attachment', 'rich', 'hidden', 'ambiguous']) await t.test(drift, async t => {
+test('unsupported rich content and ambiguous controls report gaps without inferred events', async t => {
+  for (const drift of ['rich', 'ambiguous']) await t.test(drift, async t => {
     const f = await fixture(t); await f.recording(true); const page = f.pages.get(17); page.text = exact;
-    if (drift === 'attachment') page.attachments = true;
     if (drift === 'rich') page.editor.replaceChildren(new page.Element('IMG'));
-    if (drift === 'hidden') page.editor.visible = false;
     if (drift === 'ambiguous') page.buttons.push(page.button);
     f.send(undefined); await until(() => /gap|unavailable/.test(page.feedback));
     assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0); assert.equal(f.prevention, 0);
   });
 });
+
+// Every stable DOM capability that makes a new Send unobservable must reach the
+// indicator in the same task that sees it, with no worker or native reply
+// awaited, and the next deliberate Send must then be refused instead of gapping
+// under a displayed ON.
+const ineligibleSurfaces = [
+  { drift: 'attachment', method: 'send-button',
+    apply: page => { page.attachments = true; }, restore: page => { page.attachments = false; } },
+  { drift: 'missing-control', method: 'send-button',
+    apply: page => { page.buttons = []; }, restore: page => { page.buttons = [page.button]; } },
+  { drift: 'disabled-control', method: 'send-button',
+    apply: page => { page.button.disabled = true; }, restore: page => { page.button.disabled = false; } },
+  { drift: 'aria-disabled-control', method: 'enter',
+    apply: page => { page.button.ariaDisabled = true; }, restore: page => { page.button.ariaDisabled = false; } },
+  { drift: 'hidden-control', method: 'send-button',
+    apply: page => { page.button.visible = false; }, restore: page => { page.button.visible = true; } },
+  { drift: 'readonly-editor', method: 'enter',
+    apply: page => { page.editor.readOnly = true; }, restore: page => { page.editor.readOnly = false; } },
+  { drift: 'disabled-editor', method: 'send-button',
+    apply: page => { page.editor.disabled = true; }, restore: page => { page.editor.disabled = false; } },
+  { drift: 'hidden-editor', method: 'enter',
+    apply: page => { page.editor.hidden = true; }, restore: page => { page.editor.hidden = false; } },
+  { drift: 'hidden-editor-style', method: 'send-button',
+    apply: page => { page.editor.visible = false; }, restore: page => { page.editor.visible = true; } },
+];
+for (const { drift, method, apply, restore } of ineligibleSurfaces)
+  test(`an ineligible ${drift} surface is refused in the same task as the next ${method} Send`, async t => {
+    const f = await fixture(t); await f.recording(true); const page = f.pages.get(17);
+    page.text = exact;
+    assert.equal(page.feedback, 'Attestamp · ON');
+    const before = saved(f).length;
+    apply(page); page.changed();
+    // No worker or native reply is awaited: the document must withdraw ON from
+    // its own observation, in the same task that saw the change.
+    assert.equal(page.feedback, 'Attestamp · Recording unavailable',
+      `${drift} must not keep advertising ON before its Send is refused`);
+    f.send(undefined, { method });
+    // The refusal is immediate and stays a refusal; it never becomes a saving
+    // Send, a gap, a delivery or durable evidence.
+    const observed = []; let pending = true;
+    const sample = () => { if (pending) observed.push(page.feedback); };
+    const sampler = setInterval(sample, 5); sample();
+    await new Promise(resolve => setTimeout(resolve, 60)); pending = false; clearInterval(sampler);
+    assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+    assert.ok(observed.every(value => value === 'Attestamp · Recording unavailable'),
+      `${drift} moved through ${JSON.stringify([...new Set(observed)])}`);
+    assert.equal(saved(f).length, before); assert.equal(f.deliveries.length, 0); assert.equal(f.prevention, 0);
+    // A worker READY that predates this observation is still only the worker's
+    // claim; it cannot raise what this document already knows it cannot do.
+    await f.refresh(); assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+    // Restoring the surface clears the withdrawal but does not by itself claim
+    // ON again: only the worker republishing READY restores the advertised state.
+    restore(page); page.changed();
+    assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+    assert.ok(page.checks.every(check => check.kind === 'PAP_PAGE_DIAGNOSTIC'),
+      `the refused Send reached the worker: ${JSON.stringify(page.checks.map(check => check.kind))}`);
+  });
 
 test('hydrated message IDs and ambiguous equal-text appearances cannot supply message assertions', async t => {
   const f = await fixture(t); await f.recording(true); const page = f.pages.get(17);
@@ -264,15 +319,21 @@ test('new observations survive restart and cannot inherit a fabricated legacy re
   assert.equal(f.runtime.session.runtime, undefined);
 });
 
-test('an older delayed save cannot hide a newer recording gap', async t => {
-  const f = await fixture(t, { dropAck: true }); await f.recording(true);
-  f.send(exact); await until(() => f.results.length === 1);
-  const page = f.pages.get(17); page.editor.readOnly = true;
-  f.send(undefined); assert.match(page.feedback, /gap/);
-  page.editor.readOnly = false;
-  await until(() => f.results.length === 2);
-  await new Promise(resolve => setTimeout(resolve, 30));
-  assert.match(page.feedback, /gap/); assert.equal(saved(f).length, 1); assert.equal(f.prevention, 0);
+test('an unobserved Send creates no evidence while an earlier capture is live', async t => {
+  const f = await fixture(t); await f.recording(true);
+  f.send(exact); await until(() => saved(f).length === 1);
+  const page = f.pages.get(17);
+  // A later Send on a surface this document can see is unobservable is refused
+  // on the spot: it is never read, never delivered and never durable, and the
+  // indicator carries that refusal rather than a pending save.
+  page.editor.readOnly = true; page.changed();
+  f.send(undefined);
+  // The refusal is immediate, and the earlier capture that is still being
+  // observed keeps its own outcome rather than being replaced by this Send.
+  assert.notEqual(page.feedback, 'Attestamp · Saving prompt…');
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.notEqual(page.feedback, 'Attestamp · Saving prompt…');
+  assert.equal(f.deliveries.length, 1); assert.equal(saved(f).length, 1); assert.equal(f.prevention, 0);
 });
 
 test('interruption between exact bytes, signed intent and engine metadata never returns premature success', async t => {
