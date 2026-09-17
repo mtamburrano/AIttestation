@@ -46,7 +46,7 @@ function macOSSupported(version) {
 export class ChatGPTChromeAdapter {
   #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
   #sources = new Map(); #generation = 0; #listeners = new Set();
-  #diagnostics;
+  #diagnostics; #churnTimer; #churnHeld = new Set();
 
   constructor({ extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
     if (typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
@@ -142,7 +142,7 @@ export class ChatGPTChromeAdapter {
           || tab.destination !== followed.destination && (tab.destination !== '' || tab.surfaceSupported)) {
         emit(this.#diagnostics, 'SCOPE_DESTINATION_CHANGED'); this.#sources.delete(followed.scope);
       } else {
-        if (this.#observableTabs().some(value => value.id === followed.tabId)) followed.eligibleAt = performance.now();
+        if (this.#strictlyObservable(followed)) followed.eligibleAt = performance.now();
         const next = this.eligibility(followed.scope);
         if (next !== previous.get(followed.scope)) emit(this.#diagnostics, next === 'ELIGIBLE' ? 'CAPABILITY_RESTORED' : 'CAPABILITY_UNAVAILABLE');
       }
@@ -151,6 +151,7 @@ export class ChatGPTChromeAdapter {
       if (![...this.#sources.values()].some(source => source.tabId === tab.id)) this.#follow(tab);
     }
     const chatGPTTabs = this.#chatGPTTabs();
+    this.#syncChurnExpiry();
     this.#changed();
     return { eligible: this.#observableTabs().length > 0,
       tabCount: chatGPTTabs.length,
@@ -177,6 +178,7 @@ export class ChatGPTChromeAdapter {
   }
   #invalidate(reason) {
     emit(this.#diagnostics, 'SCOPE_INVALIDATED');
+    clearTimeout(this.#churnTimer); this.#churnTimer = undefined; this.#churnHeld.clear();
     this.#generation++; this.#sources.clear(); this.#changed();
     return reason;
   }
@@ -201,10 +203,13 @@ export class ChatGPTChromeAdapter {
   observationEligible(scope) {
     const followed = this.#sources.get(scope);
     if (!followed || !this.#connection) return false;
-    if (this.#observableTabs().some(tab => tab.id === followed.tabId && tab.windowId === followed.windowId
+    return this.#strictlyObservable(followed) || this.#churnWindowOpen(followed);
+  }
+
+  #strictlyObservable(followed) {
+    return this.#observableTabs().some(tab => tab.id === followed.tabId && tab.windowId === followed.windowId
       && tab.tabEpoch === followed.tabEpoch && tab.url === followed.url
-      && tab.destination === followed.destination)) return true;
-    return this.#surfaceChurn(followed);
+      && tab.destination === followed.destination);
   }
 
   // A provider render can momentarily hide, disable or duplicate its composer
@@ -213,13 +218,41 @@ export class ChatGPTChromeAdapter {
   // genuine Send is not discarded mid-render. Every other condition - identity,
   // destination, attachments and a sustained loss of support - still ends
   // eligibility immediately or on expiry.
-  #surfaceChurn(followed) {
+  #churnWindowOpen(followed) {
     if (!this.capabilities.observation || performance.now() - (followed.eligibleAt ?? 0) >= SURFACE_CHURN_MS) return false;
     const tab = this.#tabs.find(value => value.id === followed.tabId);
     if (!tab || tab.surfaceSupported || tab.attachmentsPresent || !supportedURL(tab.url)
         || tab.url !== followed.url || tab.windowId !== followed.windowId || tab.tabEpoch !== followed.tabEpoch
         || tab.destination !== followed.destination) return false;
     return tab.destination === this.#expectedDestination(tab.url);
+  }
+
+  // Eligibility is otherwise only recomputed on a provider or tab event, so a
+  // tab that stays unsupported would keep the churn window's published policy
+  // and READY status indefinitely. Arm one bounded expiry for the earliest held
+  // scope so the window closes and republishes on its own.
+  #syncChurnExpiry() {
+    clearTimeout(this.#churnTimer); this.#churnTimer = undefined; this.#churnHeld.clear();
+    let deadline = Infinity;
+    for (const followed of this.#sources.values()) {
+      if (this.#strictlyObservable(followed) || !this.#churnWindowOpen(followed)) continue;
+      this.#churnHeld.add(followed.scope);
+      deadline = Math.min(deadline, (followed.eligibleAt ?? 0) + SURFACE_CHURN_MS);
+    }
+    if (deadline === Infinity) return;
+    this.#churnTimer = setTimeout(() => this.#expireChurn(), Math.max(0, deadline - performance.now()));
+    this.#churnTimer?.unref?.();
+  }
+
+  #expireChurn() {
+    this.#churnTimer = undefined;
+    let expired = false;
+    for (const scope of this.#churnHeld) {
+      if (!this.#sources.has(scope) || this.observationEligible(scope)) continue;
+      emit(this.#diagnostics, 'CAPABILITY_UNAVAILABLE'); expired = true;
+    }
+    this.#churnHeld.clear();
+    if (expired) this.#changed();
   }
 
   assertObservationSource(source) {

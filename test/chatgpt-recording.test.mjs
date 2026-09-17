@@ -6,7 +6,7 @@ import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { pageFixture } from './chatgpt-page-fixture.mjs';
-import { CHATGPT_PAGE_CONTRACT } from '../spikes/browser/chatgpt/adapter.mjs';
+import { CHATGPT_PAGE_CONTRACT, SURFACE_CHURN_MS } from '../spikes/browser/chatgpt/adapter.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from '../spikes/browser/chatgpt/capture.mjs';
 
 const exact = 'SYNTHETIC_NORMAL_e\u0301\r\n☕  ';
@@ -17,6 +17,16 @@ async function fixture(t, options) {
   f = await recordingFixture(root, options); return f;
 }
 const saved = f => f.runtime.session.receipts.list();
+// Status that reaches the page is push- or poll-driven, so allow a bounded
+// window for it instead of a single fixed wait under parallel test load.
+async function untilWithin(check, timeoutMs) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (await check()) return true;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return false;
+}
 const preview = (f, id = saved(f)[0].id) => {
   const value = f.runtime.session.receipts.prepare({ ids: [id] });
   return { value, bytes: f.runtime.session.receipts.export(value.previewId) };
@@ -471,6 +481,72 @@ test('sustained loss of the supported surface still reports unavailable', async 
   page.buttons = controls; page.changed();
   await until(() => f.runtime.adapter.observationEligible(scope) === true);
   assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'READY');
+});
+
+test('a churn window closes and republishes without any further provider event', async t => {
+  let inspections = 0;
+  const f = await fixture(t, {});
+  const inspect = f.worker.chrome.tabs.sendMessage;
+  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
+    const result = await inspect(id, message, options);
+    if (message.kind === 'PAP_INSPECT') inspections++;
+    return result;
+  };
+  await f.recording(true);
+  const page = f.pages.get(17), scope = f.runtime.adapter.scopes().find(source => source.tabId === 17).scope;
+  const policy = f.runtime.engine.capturePolicy().find(value => value.tabId === 17);
+  assert.ok(policy);
+  // The provider reports an ambiguous Send surface once. From here nothing else
+  // reaches the adapter: the expiry must republish on its own.
+  const controls = page.buttons, before = inspections;
+  page.buttons = [page.button, page.button]; page.changed();
+  await until(() => inspections > before);
+  assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'READY');
+  await new Promise(resolve => setTimeout(resolve, SURFACE_CHURN_MS + 500));
+  await until(() => !f.runtime.adapter.observationEligible(scope));
+  assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'RECORDING_UNAVAILABLE');
+  assert.equal(f.runtime.engine.capturePolicy().some(value => value.tabId === 17), false);
+  // The retired policy cannot deliver a capture once the window has closed.
+  const stale = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT, token: policy.token,
+    eventId: crypto.randomUUID(), observationKind: 'send-intent', inputMethod: 'send-button', text: exact }, page.captureSender());
+  assert.equal(stale.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(saved(f).length, 0);
+  // The worker and page indicators must lose READY too, with no further provider
+  // event. The page learns this from the worker push or its own one-second poll.
+  assert.ok(await untilWithin(() => page.feedback === 'Attestamp · Recording unavailable', 15_000),
+    `page indicator stayed ${JSON.stringify(page.feedback)}`);
+  page.buttons = controls; page.changed();
+});
+
+test('an observed Send still saves inside the window while the surface is unsupported', async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  let inspections = 0;
+  const f = await fixture(t, { beforeCapture: async () => { entered(); await gate; } });
+  const inspect = f.worker.chrome.tabs.sendMessage;
+  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
+    const result = await inspect(id, message, options);
+    if (message.kind === 'PAP_INSPECT') inspections++;
+    return result;
+  };
+  await f.recording(true);
+  const page = f.pages.get(17), scope = f.runtime.adapter.scopes().find(source => source.tabId === 17).scope;
+  f.send(exact);
+  await started;
+  // The surface is still ambiguous when the already-observed genuine Send
+  // reaches the engine, because the capture outlives the provider re-render.
+  const controls = page.buttons, before = inspections;
+  page.buttons = [page.button, page.button]; page.changed();
+  await until(() => inspections > before);
+  release();
+  await until(() => page.feedback === 'Attestamp · Prompt saved');
+  assert.equal(saved(f).length, 1);
+  assert.equal(preview(f).value.texts[0].preview, exact);
+  assert.equal(f.runtime.adapter.scopes().find(source => source.tabId === 17).scope, scope);
+  assert.equal(f.prevention, 0);
+  page.buttons = controls; page.changed();
 });
 
 test('a page Send rejection and a worker capture rejection are distinguishable in diagnostics', async t => {

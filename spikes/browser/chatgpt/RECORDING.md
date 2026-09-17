@@ -18,10 +18,12 @@ keeping history and bounded already-durable anchor work.
 - A provider render can momentarily hide, disable or duplicate the composer
   controls while the tab keeps the same document, which ChatGPT still accepts as
   a Send. A followed tab keeps its capture policy for a bounded two-second churn
-  window so an already-observed genuine Send is not dropped mid-render. Only that
-  one capability bit is tolerated: a different document, URL, window or
-  destination, an attachment indicator, a sustained loss of the surface, OFF and
-  disconnect all end eligibility immediately or on expiry.
+  window so an already-observed genuine Send is not dropped mid-render. The
+  window closes and republishes on its own, so a tab that stays unsupported
+  becomes unavailable without waiting for another provider event. Only that one
+  capability bit is tolerated: a different document, URL, window or destination,
+  an attachment indicator, a sustained loss of the surface, OFF and disconnect
+  all end eligibility immediately or on expiry.
 - Textarea capture uses its value. Contenteditable capture projects text nodes,
   explicit BR newlines and P/DIV paragraph boundaries. A lone BR in an empty
   paragraph is a placeholder. Supported inline wrappers: span, strong, em, b,
