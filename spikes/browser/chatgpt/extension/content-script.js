@@ -143,8 +143,12 @@ function observationFresh(pending) {
 // always what is still tracked: a revocation drops its observations and then
 // still has to report the gap they proved.
 function advertised(pending, authority) {
-  if (surfaceAvailable === false) return 'RECORDING_UNAVAILABLE';
+  // The worker's OFF is authoritative rather than a capability claim, so it is
+  // decided before this document's own surface. A tab that cannot observe a Send
+  // still has to let an explicit OFF clear its unavailable indicator: local
+  // unavailability is a fail-closed statement about capture, not about consent.
   if (lastReported === 'OFF') return 'OFF';
+  if (surfaceAvailable === false) return 'RECORDING_UNAVAILABLE';
   const continuing = pending.find(observationFresh);
   if (continuing) return continuing.saved ? 'PROMPT_SAVED' : 'SAVING';
   if (authority) return lastReported;

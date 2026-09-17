@@ -544,6 +544,39 @@ test('sustained loss of the supported surface still reports unavailable', async 
   assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'READY');
 });
 
+test('authoritative OFF clears the page indicator while the surface stays unsupported', async t => {
+  const f = await fixture(t, {}); await f.recording(true);
+  const page = f.pages.get(17);
+  assert.equal(page.feedback, 'Attestamp · ON');
+  const controls = page.buttons;
+  // The provider exposes an ambiguous Send control, so this document withdraws
+  // its own availability before any worker or native round-trip.
+  page.buttons = [page.button, page.button]; page.changed();
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  await until(async () => (await f.refresh()).state === 'RECORDING_UNAVAILABLE');
+  // The owner then turns recording OFF while the surface is still unsupported.
+  // OFF is an authoritative statement about consent, not a capability claim, so
+  // it must clear the unavailable indicator instead of being withheld by it.
+  await f.recording(false);
+  assert.equal(page.feedback, '', 'an unavailable indicator must not outlive OFF');
+  const off = await f.refresh();
+  assert.equal(off.state, 'OFF'); assert.equal(off.policy, null);
+  assert.equal(f.runtime.engine.state().recording, false);
+  // A genuine Send on the still-unsupported surface stays a non-capture: no
+  // observation, no delivery and no durable evidence.
+  f.send(exact);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(page.feedback, ''); assert.equal(page.clicks(), 0); assert.equal(page.injections(), 0);
+  // Recovering the surface does not re-enable anything by itself: only a later,
+  // explicit ON republishes READY.
+  page.buttons = controls; page.changed();
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(page.feedback, ''); assert.equal(f.deliveries.length, 0); assert.equal(saved(f).length, 0);
+  await f.recording(true);
+  await until(() => page.feedback === 'Attestamp · ON');
+  assert.equal(f.deliveries.length, 0); assert.equal(saved(f).length, 0); assert.equal(f.prevention, 0);
+});
+
 test('a churn window closes and republishes without any further provider event', async t => {
   let inspections = 0;
   const f = await fixture(t, {});
@@ -688,6 +721,46 @@ test('a stale READY reply cannot restore ON after the surface already churned', 
   // A surface that can observe a Send again restores ON under the same policy.
   page.buttons = controls; page.changed();
   assert.equal(page.feedback, 'Attestamp · ON');
+});
+
+test('an explicit worker OFF clears the indicator while the local surface is unsupported', async t => {
+  const captured = [];
+  let status = { kind: 'PAP_CAPTURE_POLICY', pageContract: CHATGPT_PAGE_CONTRACT,
+    browserSessionId: 'synthetic-off-precedence-session', revision: 0, state: 'OFF', policy: null };
+  const page = pageFixture({ draft: 'SYNTHETIC_OFF_PRECEDENCE', capture: async message => {
+    if (message.kind === 'PAP_CAPTURE_STATUS') return status;
+    captured.push(message);
+    return { profile: CHATGPT_CAPTURE_PROFILE, eventId: message.eventId, kind: message.observationKind, state: 'PROMPT_SAVED' };
+  } });
+  t.after(() => page.close());
+  await page.send(status);
+  const token = token => ({ profile: CHATGPT_CAPTURE_PROFILE, token,
+    expectedUrl: page.location.href, destination: 'conversation:test-conversation' });
+  status = { ...status, revision: 1, state: 'READY', policy: token('first-token') }; await page.send(status);
+  assert.equal(page.feedback, 'Attestamp · ON');
+  // The surface becomes locally unsupported and this document withdraws ON.
+  const controls = page.buttons;
+  page.buttons = [page.button, page.button]; page.changed();
+  assert.equal(page.feedback, 'Attestamp · Recording unavailable');
+  // Only the worker's explicit OFF may clear that withdrawal, and it must do so
+  // even though the local surface still cannot observe a Send.
+  status = { ...status, revision: 2, state: 'OFF', policy: null }; await page.send(status);
+  assert.equal(page.feedback, '', 'the authoritative OFF must outrank local unavailability');
+  // The cleared indicator is not re-derived from the surface, and the withdrawn
+  // Send still creates no capture.
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  assert.equal(page.feedback, ''); assert.equal(captured.length, 0);
+  // Recovering the surface while the worker still reports OFF stays OFF: the
+  // page's own observation cannot lift the authoritative OFF.
+  page.buttons = controls; page.changed();
+  assert.equal(page.feedback, '');
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  assert.equal(page.feedback, ''); assert.equal(captured.length, 0);
+  // A later explicit ON republishes READY with a fresh policy.
+  status = { ...status, revision: 3, state: 'READY', policy: token('second-token') }; await page.send(status);
+  assert.equal(page.feedback, 'Attestamp · ON');
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  assert.equal(captured.length, 1); assert.equal(captured[0].token, 'second-token');
 });
 
 test('a revoked capture still reports its gap instead of a generic state', async t => {
