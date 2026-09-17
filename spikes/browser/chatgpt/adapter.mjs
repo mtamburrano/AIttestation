@@ -46,7 +46,7 @@ function macOSSupported(version) {
 export class ChatGPTChromeAdapter {
   #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
   #sources = new Map(); #generation = 0; #listeners = new Set();
-  #diagnostics; #churnTimer; #churnHeld = new Set();
+  #diagnostics; #churnTimer; #churnHeld = new Map();
 
   constructor({ extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
     if (typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
@@ -229,29 +229,38 @@ export class ChatGPTChromeAdapter {
 
   // Eligibility is otherwise only recomputed on a provider or tab event, so a
   // tab that stays unsupported would keep the churn window's published policy
-  // and READY status indefinitely. Arm one bounded expiry for the earliest held
-  // scope so the window closes and republishes on its own.
+  // and READY status indefinitely. Each held scope keeps its own deadline and
+  // the earliest one is armed, so tabs that entered churn at different times
+  // close one by one without waiting for another provider event.
   #syncChurnExpiry() {
     clearTimeout(this.#churnTimer); this.#churnTimer = undefined; this.#churnHeld.clear();
-    let deadline = Infinity;
     for (const followed of this.#sources.values()) {
       if (this.#strictlyObservable(followed) || !this.#churnWindowOpen(followed)) continue;
-      this.#churnHeld.add(followed.scope);
-      deadline = Math.min(deadline, (followed.eligibleAt ?? 0) + SURFACE_CHURN_MS);
+      this.#churnHeld.set(followed.scope, (followed.eligibleAt ?? 0) + SURFACE_CHURN_MS);
     }
-    if (deadline === Infinity) return;
+    this.#armChurnExpiry();
+  }
+
+  #armChurnExpiry() {
+    clearTimeout(this.#churnTimer); this.#churnTimer = undefined;
+    if (!this.#churnHeld.size) return;
+    const deadline = Math.min(...this.#churnHeld.values());
     this.#churnTimer = setTimeout(() => this.#expireChurn(), Math.max(0, deadline - performance.now()));
     this.#churnTimer?.unref?.();
   }
 
   #expireChurn() {
     this.#churnTimer = undefined;
+    const now = performance.now();
     let expired = false;
-    for (const scope of this.#churnHeld) {
+    for (const [scope, deadline] of [...this.#churnHeld]) {
+      if (deadline > now) continue;
+      this.#churnHeld.delete(scope);
       if (!this.#sources.has(scope) || this.observationEligible(scope)) continue;
       emit(this.#diagnostics, 'CAPABILITY_UNAVAILABLE'); expired = true;
     }
-    this.#churnHeld.clear();
+    // Scopes whose window is still open stay held and keep their own deadline.
+    this.#armChurnExpiry();
     if (expired) this.#changed();
   }
 

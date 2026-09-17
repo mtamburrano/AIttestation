@@ -504,8 +504,11 @@ test('a churn window closes and republishes without any further provider event',
   assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'READY');
   await new Promise(resolve => setTimeout(resolve, SURFACE_CHURN_MS + 500));
   await until(() => !f.runtime.adapter.observationEligible(scope));
-  assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'RECORDING_UNAVAILABLE');
-  assert.equal(f.runtime.engine.capturePolicy().some(value => value.tabId === 17), false);
+  // The worker's published policy and state are what actually withdraw capture,
+  // so probe them rather than the lazily evaluated adapter predicate.
+  const published = await f.refresh();
+  assert.equal(published.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(published.policy, null);
   // The retired policy cannot deliver a capture once the window has closed.
   const stale = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT, token: policy.token,
     eventId: crypto.randomUUID(), observationKind: 'send-intent', inputMethod: 'send-button', text: exact }, page.captureSender());
@@ -516,6 +519,56 @@ test('a churn window closes and republishes without any further provider event',
   assert.ok(await untilWithin(() => page.feedback === 'Attestamp · Recording unavailable', 15_000),
     `page indicator stayed ${JSON.stringify(page.feedback)}`);
   page.buttons = controls; page.changed();
+});
+
+test('staggered multi-tab churn expires each tab without further provider events', async t => {
+  let inspections = 0;
+  const f = await fixture(t, {});
+  const inspect = f.worker.chrome.tabs.sendMessage;
+  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
+    const result = await inspect(id, message, options);
+    if (message.kind === 'PAP_INSPECT') inspections++;
+    return result;
+  };
+  await f.recording(true);
+  const pageA = f.pages.get(17), pageB = f.pages.get(18);
+  const scopeA = f.runtime.adapter.scopes().find(source => source.tabId === 17).scope;
+  const scopeB = f.runtime.adapter.scopes().find(source => source.tabId === 18).scope;
+  const policyB = f.runtime.engine.capturePolicy().find(value => value.tabId === 18);
+  assert.ok(policyB);
+  // The worker's published view, not the lazily evaluated adapter predicate, is
+  // what decides whether a tab is still offered capture.
+  assert.equal((await f.refresh(17)).state, 'READY'); assert.equal((await f.refresh(18)).state, 'READY');
+  const controlsA = pageA.buttons, controlsB = pageB.buttons;
+  // Tab A enters churn first.
+  let before = inspections;
+  pageA.buttons = [pageA.button, pageA.button]; pageA.changed();
+  await until(() => inspections > before);
+  // Let A's window age, then let a tab event refresh B's observability so the two
+  // deadlines differ. After B enters churn nothing else reaches the adapter.
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  before = inspections;
+  f.worker.chrome.tabs.onActivated.emit();
+  await until(() => inspections > before);
+  pageB.buttons = [pageB.button, pageB.button]; pageB.changed();
+  await until(() => inspections > before + 1);
+  // A closes on its own deadline and is republished while B is still inside its
+  // own window, so B must still be offered capture at that moment.
+  await until(async () => (await f.refresh(17)).state === 'RECORDING_UNAVAILABLE');
+  assert.equal(f.runtime.adapter.observationEligible(scopeA), false);
+  assert.equal((await f.refresh(18)).state, 'READY', 'B is still inside its own window');
+  assert.ok((await f.refresh(18)).policy);
+  // B must then close from its own re-armed deadline, with no further event.
+  await until(async () => (await f.refresh(18)).state === 'RECORDING_UNAVAILABLE');
+  assert.equal(f.runtime.adapter.observationEligible(scopeB), false);
+  assert.equal((await f.refresh(18)).policy, null);
+  assert.equal(pageB.feedback, 'Attestamp · Recording unavailable');
+  const stale = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT, token: policyB.token,
+    eventId: crypto.randomUUID(), observationKind: 'send-intent', inputMethod: 'send-button', text: exact }, pageB.captureSender());
+  assert.equal(stale.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(saved(f).length, 0); assert.equal(f.prevention, 0);
+  pageA.buttons = controlsA; pageA.changed();
+  pageB.buttons = controlsB; pageB.changed();
 });
 
 test('an observed Send still saves inside the window while the surface is unsupported', async t => {
