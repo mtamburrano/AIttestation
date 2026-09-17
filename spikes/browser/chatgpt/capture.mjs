@@ -3,6 +3,12 @@ import { validateText } from '../../vault/text.mjs';
 import { CHATGPT_CAPTURE_PROFILE, isUUID, validateCaptureSource } from '../../recipient/normal-observation.mjs';
 export { CHATGPT_CAPTURE_PROFILE };
 
+export const CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/1';
+// Fixed rejection vocabulary for the three layers that can drop an observation:
+// the page's own Send eligibility, the worker's sender/policy checks, and the
+// engine's ordered capture decision. Codes carry no DOM, prompt or URL data.
+export const CAPTURE_REJECTION_CODES = Object.freeze(['PAGE_SEND_REJECTED', 'CAPTURE_REJECTED']);
+
 export function validateCapture(input) {
   const kind = input?.kind;
   if (!['send-intent', 'message-observed'].includes(kind)) throw Error('INVALID_CAPTURE_OBSERVATION');

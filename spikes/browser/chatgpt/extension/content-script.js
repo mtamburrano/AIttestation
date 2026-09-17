@@ -46,8 +46,12 @@ if (typeof MutationObserver === 'function') {
   document.addEventListener('input', changed, true);
   document.addEventListener('change', changed, true);
 }
+function sendControls() {
+  return [...document.querySelectorAll('button[data-testid="send-button"]')];
+}
+
 function sendControl() {
-  const controls = document.querySelectorAll('button[data-testid="send-button"]');
+  const controls = sendControls();
   if (controls.length > 1) throw Error('ambiguous Send controls');
   const button = controls[0];
   if (!button || !button.isConnected || button.matches(':disabled') || button.getAttribute('aria-disabled') === 'true'
@@ -214,6 +218,15 @@ async function deliverObservation(pending, kind, messageId) {
   return false;
 }
 
+// Fixed capability bits only: one bounded rejection code leaves the page when a
+// genuine-looking Send cannot be observed, so an owner debug session can tell a
+// page-side eligibility rejection apart from a worker or engine rejection. No
+// DOM text, selectors, prompt bytes or identifiers are included.
+function reportRejection() {
+  chrome.runtime.sendMessage({ kind: 'PAP_PAGE_DIAGNOSTIC', pageContract: PAGE_CONTRACT, code: 'PAGE_SEND_REJECTED' })
+    .catch(() => {});
+}
+
 function observeSend(event, inputMethod) {
   const policy = capturePolicy;
   if (!event.isTrusted || !policy || !policyCurrent(policy) || document.visibilityState !== 'visible') return;
@@ -221,7 +234,7 @@ function observeSend(event, inputMethod) {
   try {
     const current = composers(); editor = current[0];
     if (current.length !== 1 || !editor.isConnected || editor.disabled || editor.readOnly || attachmentsPresent()
-        || !sendControl() || observations.size >= 16) throw Error('unsupported send');
+        || !sendControl() || observations.size >= 16) throw Object.assign(Error('unsupported send'), { eligibility: true });
     if (inputMethod === 'enter' && event.target !== editor && !editor.contains(event.target)) return;
     text = observedText(editor);
     if (!text.length || text.length > MAX_TEXT_BYTES || !text.isWellFormed()
@@ -229,7 +242,7 @@ function observeSend(event, inputMethod) {
     baseline = document.querySelectorAll(MESSAGE_SELECTOR);
     if (baseline.length > 256) throw Error('message limit');
     baseline = [...baseline];
-  } catch { latestIntent = null; showRecording('GAP'); return; }
+  } catch (error) { latestIntent = null; showRecording('GAP'); if (error.eligibility) reportRejection(); return; }
   const pending = { policy, eventId: crypto.randomUUID(), text, inputMethod, saved: false,
     observedAt: performance.now(), firstNewChat: policy.expectedUrl === 'https://chatgpt.com/' && newChatToken !== policy.token,
     baseline: new Set(baseline), ids: new Set(baseline.map(node => node.getAttribute('data-message-id'))) };
@@ -285,7 +298,14 @@ document.addEventListener('click', event => {
   try {
     const button = sendControl();
     if (button && (event.target === button || button.contains(event.target))) observeSend(event, 'send-button');
-  } catch { if (capturePolicy) { latestIntent = null; showRecording('GAP'); } }
+  } catch {
+    // Ambiguous Send controls. Only a click that actually landed on one of them
+    // is a Send the page declined to observe; unrelated clicks during a render
+    // are not gaps. No DOM detail leaves the page.
+    if (capturePolicy && sendControls().some(control => event.target === control || control.contains(event.target))) {
+      latestIntent = null; showRecording('GAP'); reportRejection();
+    }
+  }
 }, true);
 new MutationObserver(observeMessages).observe(document.documentElement, { subtree: true, childList: true, characterData: true });
 addEventListener('pagehide', () => { stopped = true; capturePolicy = null; clearObservations(); });

@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { CHATGPT_EXTENSION_ID, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT,
-  ChatGPTChromeAdapter } from '../spikes/browser/chatgpt/adapter.mjs';
+  ChatGPTChromeAdapter, SURFACE_CHURN_MS } from '../spikes/browser/chatgpt/adapter.mjs';
 import { ChromeBridgeController } from '../spikes/browser/chatgpt/bridge.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord, encodeNativeFrame, NativeFrameDecoder,
   runNativeHost } from '../spikes/browser/chatgpt/native-host.mjs';
@@ -174,16 +174,29 @@ test('an unresponsive content script times out into recoverable state on the sam
   assert.equal(port.messages.length, count); assert.equal(worker.ports.length, 1);
 });
 
-test('capability loss preserves a source while navigation and disconnect revoke its identity', () => {
+test('capability loss preserves a source while navigation and disconnect revoke its identity', async () => {
   const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
   const controller = new ChromeBridgeController(adapter, () => {}, { localBrowser: identity.browser, localPlatform: identity.platform });
   controller.receive(hello()); const scope = adapter.scopes()[0].scope;
   const state = tabs => ({ ...hello(), kind: 'PAP_STATE', tabs });
-  for (const tabs of [[testTab({ surfaceSupported: false })],
-    [testTab({ destination: '', surfaceSupported: false })], [testTab({ attachmentsPresent: true })]]) {
+  // A momentary composer/control loss keeps a followed scope eligible only inside
+  // the bounded churn window, so a Send the page already observed mid-render is
+  // not discarded; a sustained loss still reports unavailable.
+  controller.receive(state([testTab({ surfaceSupported: false })]));
+  assert.equal(adapter.observationEligible(scope), true, 'transient control churn keeps the followed scope');
+  controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
+  controller.receive(state([testTab({ surfaceSupported: false })]));
+  await delay(SURFACE_CHURN_MS + 50);
+  assert.equal(adapter.observationEligible(scope), false, 'sustained loss expires the churn window');
+  controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
+  for (const tabs of [[testTab({ destination: '', surfaceSupported: false })], [testTab({ attachmentsPresent: true })]]) {
     controller.receive(state(tabs)); assert.equal(adapter.observationEligible(scope), false);
     controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
   }
+  // Attachments are a deliberate, stable state and never inherit the churn window.
+  controller.receive(state([testTab({ attachmentsPresent: true })]));
+  assert.equal(adapter.observationEligible(scope), false, 'attachments revoke immediately');
+  controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
   controller.receive(state([testTab({ active: false })]));
   assert.equal(adapter.observationEligible(scope), true, 'recording does not require an empty active tab');
   controller.receive(state([testTab({ tabEpoch: 'new-document' })]));

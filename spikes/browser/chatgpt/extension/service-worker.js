@@ -8,6 +8,8 @@ const panelChannels = new Set();
 const PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
 const PANEL_REJECTIONS = new Set(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
   'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
+const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/1';
+const CAPTURE_REJECTIONS = new Set(['PAGE_SEND_REJECTED', 'CAPTURE_REJECTED']);
 let policyRevision = 0;
 const documents = new Map();
 const documentRoutes = new Map();
@@ -136,7 +138,8 @@ function connect() {
   const context = { port, closed: false, ready: false, epoch: null, revision: 0, dirty: false,
     publishing: false,
     policies: new Map(), states: new Map(), captures: new Map(), panels: new Map(), panelReady: false,
-    panelDiagnosticsReady: false, panelDiagnostics: new Set() };
+    panelDiagnosticsReady: false, panelDiagnostics: new Set(),
+    captureDiagnosticsReady: false, captureDiagnostics: new Set() };
   connection = context;
   context.handshakeTimer = setTimeout(() => retire(context), 10_000);
   port.onMessage.addListener(message => {
@@ -147,6 +150,7 @@ function connect() {
       context.ready = true; context.epoch = message.runtimeEpoch;
       context.panelReady = message.panelProfile === PANEL_PROFILE;
       context.panelDiagnosticsReady = message.panelDiagnosticProfile === PANEL_DIAGNOSTIC_PROFILE;
+      context.captureDiagnosticsReady = message.captureDiagnosticProfile === CAPTURE_DIAGNOSTIC_PROFILE;
       clearTimeout(context.handshakeTimer); reconnectDelay = 1000; publishState(); return;
     }
     if (context.ready && message?.kind === 'PAP_CAPTURE_POLICY') {
@@ -185,7 +189,22 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     respond(rejectPanel('PANEL_SENDER_REJECTED')); return;
   }
   if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message?.kind)) {
-    captureMessage(message, sender).then(respond).catch(() => respond({ state: 'RECORDING_UNAVAILABLE' })); return true;
+    const capture = message.kind === 'PAP_CAPTURE';
+    const unavailable = () => { if (capture) reportCaptureRejection('CAPTURE_REJECTED'); };
+    captureMessage(message, sender).then(result => { if (result?.state === 'RECORDING_UNAVAILABLE') unavailable(); respond(result); })
+      .catch(() => { unavailable(); respond({ state: 'RECORDING_UNAVAILABLE' }); });
+    return true;
+  }
+  if (message?.kind === 'PAP_PAGE_DIAGNOSTIC') {
+    // Fixed capability bits only: the page reports that it declined to observe a
+    // Send, never why in DOM terms and never any page content.
+    if (Object.keys(message).sort().join(',') !== 'code,kind,pageContract' || message.pageContract !== PAGE_CONTRACT
+        || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id)) return;
+    try {
+      if (new URL(sender.url).origin !== 'https://chatgpt.com') return;
+      reportCaptureRejection(message.code);
+    } catch {}
+    return;
   }
   if (message?.kind !== 'PAP_SURFACE_CHANGED' || Object.keys(message).length !== 1
       || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id)) return;
@@ -194,6 +213,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     publishState();
   } catch {}
 });
+
+// Bounded, once-per-code capture rejection vocabulary. It lets an owner debug
+// session tell a page eligibility rejection from a worker rejection, while the
+// engine's own CAPTURE_GAP marks the durable-capture decision.
+function reportCaptureRejection(code) {
+  const context = connection;
+  if (!CAPTURE_REJECTIONS.has(code) || !current(context) || !context.ready || !context.captureDiagnosticsReady
+      || context.captureDiagnostics.has(code)) return;
+  context.captureDiagnostics.add(code);
+  post(context, { kind: 'PAP_CAPTURE_DIAGNOSTIC', profile: CAPTURE_DIAGNOSTIC_PROFILE, code });
+}
 
 function rejectPanel(stage, error = 'UNTRUSTED_PANEL') {
   const context = connection;
@@ -331,22 +361,35 @@ chrome.tabs.onActivated.addListener(() => publishState());
 chrome.tabs.onCreated.addListener(() => publishState());
 chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); documents.delete(id); newChats.delete(id); documentRoutes.delete(id); publishState(); });
 chrome.tabs.onUpdated.addListener((id, change) => {
-  if (change.url || change.status === 'loading') {
-    const pending = newChats.get(id);
+  if (!change.url && change.status !== 'loading') { if (change.status === 'complete') publishState(); return; }
+  const pending = newChats.get(id);
+  if (!change.url) {
+    // Real Chrome delivers the navigation precursor and the conversation route
+    // as separate updates, so a status-only loading can arrive while this tab is
+    // still a pending first-New-chat candidate. Tolerate exactly one such
+    // precursor: it grants no capture authority, keeps the original document
+    // binding, and expires on its own. The later exact route, the same-document
+    // challenge and the pending genuine-event proof are all still required, and
+    // a second precursor, a later loading or any real navigation revokes below.
+    if (pending && !pending.navigated && !pending.navigating && pending.expires > performance.now()
+        && documents.get(id) === pending.documentId) {
+      pending.navigating = true;
+      pending.expires = Math.min(pending.expires, performance.now() + 5000);
+      publishState(); return;
+    }
+  } else if (pending && !pending.navigated && pending.expires > performance.now()
+      && conversationURL(change.url) && (!pending.url || pending.url === change.url)) {
     // Chrome can report loading even for pushState. Only the first expected
     // route may retain this epoch; the document-targeted challenge must prove
     // the original document now lives at that route. Further loading revokes.
-    if (pending && !pending.navigated && pending.expires > performance.now()
-        && conversationURL(change.url) && (!pending.url || pending.url === change.url)) {
-      pending.navigated = true;
-      if (!pending.url) { pending.url = change.url; pending.expires = performance.now() + 5000; }
-    } else {
-      if (tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
-      documents.delete(id); newChats.delete(id); documentRoutes.delete(id);
-    }
-    // Publish navigation immediately without revoking unrelated tab authority.
-    publishState();
-  } else if (change.status === 'complete') publishState();
+    pending.navigated = true;
+    if (!pending.url) { pending.url = change.url; pending.expires = performance.now() + 5000; }
+    publishState(); return;
+  }
+  if (tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
+  documents.delete(id); newChats.delete(id); documentRoutes.delete(id);
+  // Publish navigation immediately without revoking unrelated tab authority.
+  publishState();
 });
 
 function captureStatus(context, tabId, unavailable = false) {

@@ -384,6 +384,126 @@ for (const change of ['OFF/ON', 'reload', 'full navigation', 'different document
   });
 }
 
+test('first New-chat Send survives Chrome reporting loading before the conversation route', async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  const f = await fixture(t, { newChat: true, beforeCapture: async () => { entered(); await gate; } });
+  await f.recording(true);
+  f.send(exact);
+  await started;
+  // Real Chrome delivers the navigation precursor and the conversation route as
+  // separate tab updates. The status-only update must not retire the pending
+  // first-New-chat candidate before its route is known.
+  f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+  f.navigate(17, 'https://chatgpt.com/c/created-by-send');
+  await until(() => f.runtime.adapter.scopes().some(source => source.destination === 'conversation:created-by-send'));
+  release();
+  await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
+  await f.runtime.engine.drain();
+  assert.equal(saved(f).length, 1);
+  assert.equal(preview(f).value.texts[0].preview, exact);
+  assert.equal(f.sources[0].destination, 'new-chat');
+  assert.equal(f.userSends, 1); assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+});
+
+test('a repeated status-only loading precursor still revokes New-chat continuity', async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  const f = await fixture(t, { newChat: true, beforeCapture: async () => { entered(); await gate; } });
+  await f.recording(true); f.send(exact); await started;
+  // Only the first bounded precursor is tolerated; a second one is a real second
+  // navigation and must revoke before any durable capture.
+  f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+  f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+  f.navigate(17, 'https://chatgpt.com/c/created-by-send');
+  await until(() => f.runtime.adapter.scopes().some(source => source.destination === 'conversation:created-by-send'));
+  release();
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(saved(f).length, 0); assert.equal(f.anchorCalls, 0); assert.equal(f.prevention, 0);
+});
+
+test('a genuine steering Send during generation survives provider composer control churn', async t => {
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  t.after(() => release());
+  let inspections = 0;
+  const f = await fixture(t, { beforeCapture: async () => { entered(); await gate; } });
+  const inspect = f.worker.chrome.tabs.sendMessage;
+  f.worker.chrome.tabs.sendMessage = async (id, message, options) => {
+    const result = await inspect(id, message, options);
+    if (message.kind === 'PAP_INSPECT') inspections++;
+    return result;
+  };
+  await f.recording(true);
+  const page = f.pages.get(17), scope = f.runtime.adapter.scopes().find(source => source.tabId === 17).scope;
+  f.send(exact);
+  await started;
+  // The provider re-renders its composer while generating: the Send control is
+  // momentarily duplicated and then restored, exactly as the observed real
+  // sequence did. The captured Send must not be discarded by that churn.
+  const controls = page.buttons, before = inspections;
+  page.buttons = [page.button, page.button]; page.changed();
+  await until(() => inspections > before);
+  page.buttons = controls; page.changed();
+  release();
+  await until(() => saved(f).length === 1);
+  await f.runtime.engine.drain();
+  assert.equal(preview(f).value.texts[0].preview, exact);
+  assert.equal(f.runtime.adapter.scopes().find(source => source.tabId === 17).scope, scope,
+    'composer churn keeps the same capture scope');
+  assert.equal(f.sources[0].destination, 'conversation:fixture-17');
+  assert.equal(f.prevention, 0);
+});
+
+test('sustained loss of the supported surface still reports unavailable', async t => {
+  const f = await fixture(t, {}); await f.recording(true);
+  const page = f.pages.get(17), scope = f.runtime.adapter.scopes().find(source => source.tabId === 17).scope;
+  assert.equal(f.runtime.adapter.observationEligible(scope), true);
+  const controls = page.buttons;
+  page.buttons = [page.button, page.button]; page.changed();
+  await until(() => f.runtime.adapter.observationEligible(scope) === false);
+  assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'RECORDING_UNAVAILABLE');
+  page.buttons = controls; page.changed();
+  await until(() => f.runtime.adapter.observationEligible(scope) === true);
+  assert.equal(f.runtime.engine.captureStates().find(value => value.tabId === 17).state, 'READY');
+});
+
+test('a page Send rejection and a worker capture rejection are distinguishable in diagnostics', async t => {
+  const diagnostics = new LocalDiagnostics({ mode: 'SYNTHETIC_FIXTURE' });
+  const f = await fixture(t, { diagnostics }); await f.recording(true);
+  const page = f.pages.get(17);
+  // The provider briefly exposes two Send controls: the page declines to observe
+  // and reports only its fixed rejection code, never DOM or prompt detail.
+  const controls = page.buttons;
+  page.buttons = [page.button, page.button];
+  page.event('click', { isTrusted: true, target: page.button, button: 0, detail: 1 });
+  page.buttons = controls;
+  await until(() => (diagnostics.preview().report.events ?? []).some(event => event.code === 'PAGE_SEND_REJECTED'));
+  const codes = () => diagnostics.preview().report.events.map(event => ({ code: event.code, component: event.component }));
+  assert.deepEqual(codes().filter(value => value.code === 'PAGE_SEND_REJECTED'),
+    [{ code: 'PAGE_SEND_REJECTED', component: 'adapter' }]);
+  assert.equal(saved(f).length, 0);
+  // A stale token is rejected by the worker before any durable observation.
+  const stale = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT,
+    token: crypto.randomUUID(), eventId: crypto.randomUUID(), observationKind: 'send-intent',
+    inputMethod: 'send-button', text: exact }, page.captureSender());
+  assert.equal(stale.state, 'RECORDING_UNAVAILABLE');
+  await until(() => codes().some(value => value.code === 'CAPTURE_REJECTED'));
+  assert.deepEqual(codes().filter(value => value.code === 'CAPTURE_REJECTED'),
+    [{ code: 'CAPTURE_REJECTED', component: 'bridge' }]);
+  assert.equal(saved(f).length, 0);
+  // Each bounded code is reported once per session, not once per rejection.
+  await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT,
+    token: crypto.randomUUID(), eventId: crypto.randomUUID(), observationKind: 'send-intent',
+    inputMethod: 'send-button', text: exact }, page.captureSender());
+  assert.equal(codes().filter(value => value.code === 'CAPTURE_REJECTED').length, 1);
+});
+
 test('a saved prompt keeps simple success feedback when later message correlation expires', async t => {
   const timers = new Set();
   const page = pageFixture({ draft: exact, capture: async message => message.kind === 'PAP_CAPTURE_STATUS'

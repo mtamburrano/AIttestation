@@ -10,6 +10,13 @@ export const CHATGPT_ORIGIN = 'https://chatgpt.com';
 export const CHATGPT_EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
 export const CHROME_BASELINE_MAJOR = 153;
 
+// A provider render can momentarily hide, disable or duplicate the composer
+// controls while a tab keeps its exact identity. Eligibility is retained for
+// this bounded window so an already-observed genuine Send is not discarded
+// mid-render; a sustained loss of support still reports unavailable afterwards.
+const SURFACE_CHURN_MS = 2_000;
+export { SURFACE_CHURN_MS };
+
 const requiredPermissions = ['nativeMessaging'];
 
 function fail(message) {
@@ -135,6 +142,7 @@ export class ChatGPTChromeAdapter {
           || tab.destination !== followed.destination && (tab.destination !== '' || tab.surfaceSupported)) {
         emit(this.#diagnostics, 'SCOPE_DESTINATION_CHANGED'); this.#sources.delete(followed.scope);
       } else {
+        if (this.#observableTabs().some(value => value.id === followed.tabId)) followed.eligibleAt = performance.now();
         const next = this.eligibility(followed.scope);
         if (next !== previous.get(followed.scope)) emit(this.#diagnostics, next === 'ELIGIBLE' ? 'CAPABILITY_RESTORED' : 'CAPABILITY_UNAVAILABLE');
       }
@@ -152,15 +160,20 @@ export class ChatGPTChromeAdapter {
   onChange(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
   #changed() { for (const listener of this.#listeners) listener(); }
   scopes() {
-    return [...this.#sources.values()].map(value => ({ ...structuredClone(value),
+    // eligibleAt is internal churn bookkeeping, not part of a scope identity.
+    return [...this.#sources.values()].map(({ eligibleAt, ...value }) => ({ ...structuredClone(value),
       adapterId: CHATGPT_ADAPTER_ID, adapterEpoch: value.browserSessionId, eligibility: this.eligibility(value.scope) }));
   }
 
   #chatGPTTabs() { return this.#tabs.filter(tab => chatGPTURL(tab.url)); }
+  #expectedDestination(url) {
+    const pathname = new URL(url).pathname;
+    return pathname === '/' ? 'new-chat' : `conversation:${pathname.split('/')[2]}`;
+  }
   #observableTabs() {
     return this.capabilities.observation ? this.#chatGPTTabs().filter(tab => supportedURL(tab.url)
-      && tab.surfaceSupported && !tab.attachmentsPresent && tab.destination === (new URL(tab.url).pathname === '/'
-        ? 'new-chat' : `conversation:${new URL(tab.url).pathname.split('/')[2]}`)) : [];
+      && tab.surfaceSupported && !tab.attachmentsPresent
+      && tab.destination === this.#expectedDestination(tab.url)) : [];
   }
   #invalidate(reason) {
     emit(this.#diagnostics, 'SCOPE_INVALIDATED');
@@ -179,7 +192,7 @@ export class ChatGPTChromeAdapter {
     const scope = randomUUID();
     this.#sources.set(scope, { scope, tabId: tab.id, destination: tab.destination, url: tab.url,
       windowId: tab.windowId, tabEpoch: tab.tabEpoch, browserSessionId: this.#connection.browserSessionId,
-      runtimeEpoch: this.#runtimeEpoch, generation: this.#generation });
+      runtimeEpoch: this.#runtimeEpoch, generation: this.#generation, eligibleAt: performance.now() });
     emit(this.#diagnostics, 'SOURCE_FOLLOWED');
   }
 
@@ -187,9 +200,26 @@ export class ChatGPTChromeAdapter {
 
   observationEligible(scope) {
     const followed = this.#sources.get(scope);
-    return Boolean(followed && this.#connection && this.#observableTabs().some(tab => tab.id === followed.tabId
-      && tab.windowId === followed.windowId && tab.tabEpoch === followed.tabEpoch && tab.url === followed.url
-      && tab.destination === followed.destination));
+    if (!followed || !this.#connection) return false;
+    if (this.#observableTabs().some(tab => tab.id === followed.tabId && tab.windowId === followed.windowId
+      && tab.tabEpoch === followed.tabEpoch && tab.url === followed.url
+      && tab.destination === followed.destination)) return true;
+    return this.#surfaceChurn(followed);
+  }
+
+  // A provider render can momentarily hide, disable or duplicate its composer
+  // controls while the tab keeps the same document. Only that single capability
+  // bit is tolerated, and only inside a bounded window, so an already-observed
+  // genuine Send is not discarded mid-render. Every other condition - identity,
+  // destination, attachments and a sustained loss of support - still ends
+  // eligibility immediately or on expiry.
+  #surfaceChurn(followed) {
+    if (!this.capabilities.observation || performance.now() - (followed.eligibleAt ?? 0) >= SURFACE_CHURN_MS) return false;
+    const tab = this.#tabs.find(value => value.id === followed.tabId);
+    if (!tab || tab.surfaceSupported || tab.attachmentsPresent || !supportedURL(tab.url)
+        || tab.url !== followed.url || tab.windowId !== followed.windowId || tab.tabEpoch !== followed.tabEpoch
+        || tab.destination !== followed.destination) return false;
+    return tab.destination === this.#expectedDestination(tab.url);
   }
 
   assertObservationSource(source) {

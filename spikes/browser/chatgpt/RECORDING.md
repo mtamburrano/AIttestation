@@ -15,6 +15,13 @@ keeping history and bounded already-durable anchor work.
 - Shift/Ctrl/Meta/Alt+Enter, repeating Enter, IME composition/229 events and Enter
   within 50 ms of composition end are excluded. A later explicit Send can qualify.
   Typing, hydration and DOM churn do not create prompt events.
+- A provider render can momentarily hide, disable or duplicate the composer
+  controls while the tab keeps the same document, which ChatGPT still accepts as
+  a Send. A followed tab keeps its capture policy for a bounded two-second churn
+  window so an already-observed genuine Send is not dropped mid-render. Only that
+  one capability bit is tolerated: a different document, URL, window or
+  destination, an attachment indicator, a sustained loss of the surface, OFF and
+  disconnect all end eligibility immediately or on expiry.
 - Textarea capture uses its value. Contenteditable capture projects text nodes,
   explicit BR newlines and P/DIV paragraph boundaries. A lone BR in an empty
   paragraph is a placeholder. Supported inline wrappers: span, strong, em, b,
@@ -59,7 +66,12 @@ There is one narrow navigation exception for the first genuine Send observed at
 exactly `https://chatgpt.com/`. The worker can retain its old policy for at most
 five seconds across the first `/c/<id>` route change. Chrome may report loading
 even for this same-document navigation; loading alone cannot authenticate it.
-It keeps the original tab/window, browser/runtime and document epoch. Before
+Real Chrome delivers the navigation precursor and the conversation route as
+separate tab updates, so one status-only loading update is tolerated for a
+pending first-New-chat candidate while its route is still unknown. That
+transition grants no capture authority, keeps the original document binding and
+expires by itself; a second precursor, a later loading or any real navigation
+revokes. It keeps the original tab/window, browser/runtime and document epoch. Before
 forwarding, it challenges the original Chrome `documentId` with a fresh nonce;
 that content script must still hold the same first intent, exact bytes and input
 method captured before navigation, and now reside at the exact live tab URL.
@@ -101,7 +113,11 @@ Historical observation/1 and observation/2 retain their signed meaning through
 isolated readers. Legacy history has no recording consent, anchor retry or Send
 authority. Export/recovery preserves exact signatures, IDs and openings. Selected
 source metadata/text is disclosed only in the previewed export; diagnostics
-contain bounded fixed codes and temporary pseudonyms.
+contain bounded fixed codes and temporary pseudonyms. A dropped Send is
+attributable without page content: `PAGE_SEND_REJECTED` means the page declined
+to observe the Send, `CAPTURE_REJECTED` means the worker refused it before
+durable observation, and the engine's `CAPTURE_GAP` marks the ordered capture
+decision. Each code is reported at most once per session.
 
 Run `npm run test:chatgpt` and `npm run test:product` using the isolated
 [testing guide](../../development/PRODUCT-TESTING.md). These execute actual
