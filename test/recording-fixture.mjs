@@ -22,7 +22,8 @@ export async function until(check) {
 // scripts. Only page/browser/platform identity and anchoring are synthetic.
 export async function recordingFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
   collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
-  dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false } = {}) {
+  dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false,
+  fetchResponse = null } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
@@ -60,7 +61,7 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
     inventory.set(id, tab);
     const sender = page => page.sender({ tab: { id, windowId: tab.windowId, url: page.location.href }, documentId: page.documentId,
       ...(fixedSenderURL ? { url: tab.url } : {}) });
-    const page = pageFixture({ textarea, url: tab.url,
+    const page = pageFixture({ textarea, url: tab.url, fetchResponse,
       authorize: (message, page) => worker.message(message, sender(page)),
       notify: (message, page) => worker?.chrome.runtime.onMessage.emit(message, sender(page)),
       capture: async (message, page) => {
@@ -82,7 +83,7 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
         }
         if (message.kind === 'PAP_CAPTURE_RESULT') {
           results.push(message);
-          if (dropAck && message.result.kind === 'send-intent' && results.filter(value => value.result.kind === 'send-intent').length === 1) continue;
+          if (dropAck && message.result.kind === 'request-observed' && results.filter(value => value.result.kind === 'request-observed').length === 1) continue;
         }
         port.onMessage.emit(message);
       }
@@ -133,13 +134,14 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
           const status = await refresh(id); return enabled ? Boolean(status.policy) : !status.policy;
         });
       },
-      send(text, { id = 17, method = 'send-button', trusted = true, ...event } = {}) {
+      send(text, { id = 17, method = 'send-button', trusted = true, request = true, payload = {}, ...event } = {}) {
         const page = pages.get(id);
         if (text !== undefined) page.text = text;
         page.event(method === 'enter' ? 'keydown' : 'click', { isTrusted: trusted,
           target: method === 'enter' ? page.editor : page.button, key: 'Enter', button: 0, detail: 1,
           preventDefault: () => { prevention++; }, stopImmediatePropagation: () => { prevention++; }, ...event });
         userSends++;
+        if (request) return page.request(text ?? page.text, payload).catch(() => {});
       },
       appear(text, id = 17, messageId = randomUUID()) {
         const page = pages.get(id), node = new page.Element('DIV', text);

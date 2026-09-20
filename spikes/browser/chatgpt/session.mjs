@@ -9,6 +9,7 @@ import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verify
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
 import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from '../../recipient/normal-observation.mjs';
+import { DOM_OBSERVATION_PROFILE, validateDOMObservation } from '../../recipient/dom-observation.mjs';
 
 import { LEGACY_NORMAL_OBSERVATION_PROFILE, validateLegacyNormalObservation } from '../../recipient/legacy-observation.mjs';
 
@@ -58,7 +59,8 @@ export class ChatGPTRecordingSession {
     return this.vault.capture(wire(validateNormalObservation({ profile: NORMAL_OBSERVATION_PROFILE, ...value })), { type: 'observation' });
   }
   #observedVersion(record, value, text) {
-    return { id: value.eventId, observation: true, legacy: value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE, source: value.source, inputMethod: value.inputMethod,
+    return { id: value.eventId, observation: true, legacy: value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE,
+      observationProfile: value.profile, request: value.request, source: value.source, inputMethod: value.inputMethod,
       payload: { text }, scope: value.source.scope,
       mode: value.mode, descriptorId: record.manifest.eventId, recordDigest: record.recordDigest,
       state: 'PROMPT_SAVED', anchor: 'PENDING', timestamp: 'INDETERMINATE', anchorAttempts: 0, assuranceHistory: [] };
@@ -69,9 +71,10 @@ export class ChatGPTRecordingSession {
     for (const record of records.filter(value => value.manifest.type === 'observation')) {
       const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
       observations.push({ record, value });
-      if (![NORMAL_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
-      (value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation : validateLegacyNormalObservation)(value);
-      if (value.kind === 'normal-send-intent') {
+      if (![NORMAL_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
+      (value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation
+        : value.profile === DOM_OBSERVATION_PROFILE ? validateDOMObservation : validateLegacyNormalObservation)(value);
+      if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) {
         const text = records.find(entry => entry.manifest.eventId === value.textRecord
           && entry.manifest.evidence[0].objectDigest === value.textObject
           && entry.manifest.signingPublicKey === record.manifest.signingPublicKey);
@@ -81,11 +84,14 @@ export class ChatGPTRecordingSession {
       } else {
         const version = this.#versions.get(value.eventId);
         if (!version || value.recordDigest !== version.recordDigest || canonical(value.source) !== canonical(version.source)
-            || version.legacy !== (value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE)
+            || version.observationProfile !== value.profile
             || record.manifest.signingPublicKey !== records.find(entry => entry.manifest.eventId === version.descriptorId)?.manifest.signingPublicKey) {
           throw Error('INVALID_CAPTURE_HISTORY');
         }
-        version.messageId = value.messageId;
+        if (value.kind === 'normal-acknowledgement') {
+          if (version.request.conversationId !== null && version.request.conversationId !== value.acknowledgement.conversationId) throw Error('INVALID_CAPTURE_HISTORY');
+          version.acknowledgement = value.acknowledgement;
+        } else version.messageId = value.messageId;
       }
     }
     for (const { record, value } of observations) {
@@ -113,24 +119,26 @@ export class ChatGPTRecordingSession {
   observeNormal(input) {
     const { eventId, source, text } = input;
     const prior = this.#versions.get(eventId);
-    if (prior?.legacy) throw Error('Legacy evidence is read-only');
-    if (prior && (!prior.observation || canonical(prior.source) !== canonical(source) || prior.payload.text !== text
-        || input.kind === 'send-intent' && prior.inputMethod !== input.inputMethod)) throw Error('CAPTURE_REPLAY_CONFLICT');
-    if (input.kind === 'message-observed') {
-      if (!prior || prior.messageId && prior.messageId !== input.messageId) throw Error('CAPTURE_CORRELATION_CONFLICT');
-      if (!prior.messageId) {
-        this.#normalEvent({ kind: 'normal-message-observed', eventId, source, recordDigest: prior.recordDigest,
-          messageId: input.messageId, correlation: 'UNIQUE_NEW_EXACT_TEXT_DOM_MATCH', providerReceipt: 'UNKNOWN' });
-        prior.messageId = input.messageId;
-        emit(this.#diagnostics, 'MESSAGE_APPEARANCE_RECORDED', { operationId: eventId });
+    if (prior && prior.observationProfile !== NORMAL_OBSERVATION_PROFILE) throw Error('Legacy evidence is read-only');
+    if (prior && (!prior.observation || canonical(prior.source) !== canonical(source)
+        || input.kind === 'request-observed' && (prior.payload.text !== text || prior.inputMethod !== input.inputMethod
+          || canonical(prior.request) !== canonical(input.request)))) throw Error('CAPTURE_REPLAY_CONFLICT');
+    if (input.kind === 'acknowledgement') {
+      if (!prior || prior.request.conversationId !== null && prior.request.conversationId !== input.acknowledgement.conversationId
+          || prior.acknowledgement && canonical(prior.acknowledgement) !== canonical(input.acknowledgement)) throw Error('CAPTURE_CORRELATION_CONFLICT');
+      if (!prior.acknowledgement) {
+        this.#normalEvent({ kind: 'normal-acknowledgement', eventId, source, recordDigest: prior.recordDigest,
+          acknowledgement: input.acknowledgement, correlation: 'SAME_FETCH_CALL', providerReceipt: 'UNKNOWN' });
+        prior.acknowledgement = input.acknowledgement;
       }
       return this.#public(prior);
     }
     if (prior) return this.#public(prior);
     const captured = this.vault.capture(Buffer.from(text, 'utf8'));
-    const value = { kind: 'normal-send-intent', eventId, source, inputMethod: input.inputMethod,
+    const value = { profile: NORMAL_OBSERVATION_PROFILE, kind: 'normal-request-observed', eventId, source,
+      inputMethod: input.inputMethod, request: input.request,
       textRecord: captured.manifest.eventId, textObject: captured.manifest.evidence[0].objectDigest,
-      mode: 'ON', boundary: 'provider_dom', coverage: 'UTF8_COMPOSER_TEXT',
+      mode: 'ON', boundary: 'provider_fetch', coverage: 'UTF8_NEW_USER_MESSAGE',
       releaseClass: 'RETROSPECTIVE_OBSERVATION', attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
     const record = this.#normalEvent(value), version = this.#observedVersion(record, value, text);
     this.#versions.set(eventId, version);

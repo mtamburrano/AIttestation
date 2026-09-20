@@ -99,15 +99,17 @@ conflicting anchor results remain visible and aggregate to indeterminate.
 Selection never proves global completeness or latest state. Release-control
 results describe signed client assertions, not independent evidence of egress.
 
-New normal ChatGPT Send uses the closed `pap-chatgpt-observation/3` vocabulary:
-`normal-send-intent` binds the selected text record and source scope/document;
-`normal-message-observed` separately binds an exact-text DOM appearance to that
-intent by signed record digest, event ID, source and signing key. The verifier
-reports `OBSERVED_ONLY`, explicit retrospective coverage and unknown provider
-receipt. It cannot turn a legacy release assertion aimed at this descriptor into
-pre-egress control. Missing bytes remain missing evidence; omitted appearances
-make no appearance claim. Historical observation/1 Continuous/Sealed and normal observation/2 exports
-are read under their original semantics, without executable workflow authority. See the [capture contract](../browser/chatgpt/RECORDING.md).
+New ChatGPT transport observations use `pap-chatgpt-observation/4`:
+`normal-request-observed` binds the decoded new user text and authenticated source
+under `chatgpt-new-user-text/1`. `normal-acknowledgement` separately binds an early
+client-observed handoff or inline start to the same descriptor digest, event,
+source and signing key. The verifier reports `OBSERVED_ONLY`, explicit transport
+coverage and unknown provider receipt. Neither HTTP status nor acknowledgement
+proves provider receipt or authorship. Missing ack never erases saved evidence.
+Historical observation/3 stays DOM intent/appearance through `dom-observation.mjs`;
+observation/2 and /1 retain their original meanings and immutable signed bytes.
+All legacy readers lack recording/Send authority. See the
+[capture contract](../browser/chatgpt/RECORDING.md).
 
 ## Hostile input limits and offline behavior
 

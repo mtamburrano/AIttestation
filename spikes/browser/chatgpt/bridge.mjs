@@ -77,9 +77,11 @@ export class ChromeBridgeController {
           (message.newChatContinuation === true ? 'kind,newChatContinuation,observation,requestId' : 'kind,observation,requestId')
           || !/^[a-f0-9-]{36}$/.test(message.requestId ?? '')) throw Error('Invalid capture delivery');
       const { textBytes, ...observation } = message.observation ?? {};
-      if (typeof textBytes !== 'string' || textBytes.length > 349528 || Object.hasOwn(observation, 'text')
-          || Buffer.from(textBytes, 'base64').toString('base64') !== textBytes) throw Error('Invalid capture encoding');
-      observation.text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(textBytes, 'base64'));
+      if (observation.kind === 'request-observed') {
+        if (typeof textBytes !== 'string' || textBytes.length > 349528 || Object.hasOwn(observation, 'text')
+            || Buffer.from(textBytes, 'base64').toString('base64') !== textBytes) throw Error('Invalid capture encoding');
+        observation.text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(textBytes, 'base64'));
+      } else if (textBytes !== undefined) throw Error('Invalid capture encoding');
       this.#observations++;
       this.#engine.observe(observation, { newChatContinuation: message.newChatContinuation === true }).then(result => {
         if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId, result });

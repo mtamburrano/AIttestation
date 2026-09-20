@@ -164,8 +164,9 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
   const policy = engine.capturePolicy()[0], source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
     runtimeEpoch: epoch, browserSessionId: policy.browserSessionId, scope: policy.scope, tabId: policy.tabId,
     windowId: policy.windowId, tabEpoch: policy.tabEpoch, documentId: 'queue-document', destination: policy.destination };
-  const observation = { profile: CHATGPT_CAPTURE_PROFILE, kind: 'send-intent', token: policy.token,
-    eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'send-button' };
+  const observation = { profile: CHATGPT_CAPTURE_PROFILE, kind: 'request-observed', token: policy.token,
+    eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'send-button',
+    request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'queued-message', conversationId: source.destination.slice(13) } };
   const ack = await engine.observe(observation);
   assert.equal(ack.state, 'PROMPT_SAVED');
   assert.deepEqual(await engine.observe(observation), ack);
@@ -203,13 +204,13 @@ test('a freed anchor slot cannot schedule capture while its engine metadata save
   f.send('STILL_SAVING_SYNTHETIC'); await saving;
   finishAnchor({ synthetic: true }); await f.runtime.session.drain(); await new Promise(setImmediate);
   assert.equal(f.anchorCalls, 1); assert.equal(f.confirmed, 1);
-  assert.equal(f.results.filter(value => value.result.kind === 'send-intent').length, 1);
+  assert.equal(f.results.filter(value => value.result.kind === 'request-observed').length, 1);
   EngineStateStore.prototype.save = save; finishSave(); await f.runtime.engine.drain();
-  await until(() => f.results.filter(value => value.result.kind === 'send-intent').length === 2);
+  await until(() => f.results.filter(value => value.result.kind === 'request-observed').length === 2);
   assert.equal(f.anchorCalls, 2); assert.equal(f.confirmed, 2); assert.equal(f.prevention, 0);
 });
 
-test('legacy normal observations stay byte-identical and independently readable without new anchor or capture authority', async t => {
+for (const profile of ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3']) test(`${profile} retains signed meanings and existing anchor policy without new capture authority`, async t => {
   const directory = await root(t), vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true });
   t.after(() => vault.close());
   const text = vault.capture(Buffer.from('LEGACY_SYNTHETIC_\uFEFFe\u0301'));
@@ -219,20 +220,38 @@ test('legacy normal observations stay byte-identical and independently readable 
     inputMethod: 'send-button', textRecord: text.manifest.eventId, textObject: text.manifest.evidence[0].objectDigest,
     mode: 'Continuous', boundary: 'provider_dom', coverage: 'UTF8_COMPOSER_TEXT', releaseClass: 'RETROSPECTIVE_CONTINUOUS',
     attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
+  if (profile === 'pap-chatgpt-observation/3') {
+    value.profile = profile; value.source.adapterProfile = 'pap-chatgpt-chrome/6';
+    value.source.pageContract = 'chatgpt-web-text/2026-09-15'; value.mode = 'ON'; value.releaseClass = 'RETROSPECTIVE_OBSERVATION';
+  }
   const record = vault.capture(Buffer.from(canonical(value)), { type: 'observation' });
+  vault.capture(Buffer.from(canonical({ profile, kind: 'normal-message-observed', eventId: value.eventId,
+    source: value.source, recordDigest: record.recordDigest, messageId: 'legacy-message',
+    correlation: 'UNIQUE_NEW_EXACT_TEXT_DOM_MATCH', providerReceipt: 'UNKNOWN' })), { type: 'observation' });
   const before = canonical(vault.inspect().records); let submissions = 0;
   const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
   const session = await new ChatGPTRecordingSession(directory, adapter, { vault, fastTrust: { profile: FAST_CONFIRM_PROFILE },
-    managed: { submit: async () => { submissions++; throw Error('LEGACY_MUST_NOT_SUBMIT'); } } }).init();
+    managed: { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
+      if (profile === 'pap-chatgpt-observation/2') throw Error('LEGACY_MUST_NOT_SUBMIT');
+      beforeSubmit(); submissions++; return { transactionId: 'A'.repeat(52) };
+    } }, collectFast: async () => ({ synthetic: true }),
+    verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
+      assurance: FAST_CONFIRM_PROFILE, round: 42 }) }).init();
   const preview = session.receipts.prepare({ ids: [record.manifest.eventId] });
   const report = verifyPortable(session.receipts.export(preview.previewId));
   assert.equal(report.records.find(entry => entry.recordDigest === record.recordDigest).releaseControl, 'OBSERVED_ONLY');
-  await assert.rejects(session.anchorManaged({ id: value.eventId }), /unavailable/);
-  await assert.rejects(session.upgradeConsensus({ id: value.eventId }), /read-only/);
+  assert.ok(report.records.find(entry => entry.recordDigest === record.recordDigest).localAssertions.some(assertion => assertion.kind === 'normal-message-observed'));
+  if (profile === 'pap-chatgpt-observation/2') {
+    await assert.rejects(session.anchorManaged({ id: value.eventId }), /unavailable/);
+    await assert.rejects(session.upgradeConsensus({ id: value.eventId }), /read-only/);
+  }
   assert.throws(() => session.observeNormal({ eventId: value.eventId }), /read-only/);
   assert.equal(canonical(vault.inspect().records), before);
   const engine = await new ResidentEngine(directory, session, adapter, randomUUID()).init(); t.after(() => engine.stop());
-  await engine.drain(); assert.equal(submissions, 0); assert.equal(engine.state().recording, false);
+  await engine.drain(); assert.equal(submissions, profile === 'pap-chatgpt-observation/3' ? 1 : 0);
+  assert.equal(engine.state().recording, false);
+  assert.deepEqual(vault.inspect().records.slice(0, JSON.parse(before).length), JSON.parse(before));
+  if (profile === 'pap-chatgpt-observation/3') assert.equal(session.status().versions[0].anchor, 'SOURCE_CORROBORATED');
 });
 
 test('the resident lock prevents two recorders loading one directory', async t => {
@@ -302,8 +321,9 @@ test('an unconfigured client consumes no attempts across restart and can later a
   const id = randomUUID(), source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
     runtimeEpoch: randomUUID(), browserSessionId: 'synthetic-unconfigured', scope: randomUUID(), tabId: 17,
     windowId: 1, tabEpoch: 'synthetic-epoch', documentId: 'synthetic-document', destination: 'conversation:synthetic' };
-  const original = session.observeNormal({ kind: 'send-intent', eventId: id, source,
-    text: 'UNCONFIGURED_SYNTHETIC', inputMethod: 'send-button' });
+  const original = session.observeNormal({ kind: 'request-observed', eventId: id, source,
+    text: 'UNCONFIGURED_SYNTHETIC', inputMethod: 'send-button',
+    request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'unconfigured-message', conversationId: 'synthetic' } });
   await assert.rejects(session.confirmFast({ id, transactionId: 'invalid' }), /Algorand transaction ID required/);
   assert.equal(session.status().versions[0].anchorAttempts, 0);
   for (let index = 0; index < 4; index++) {

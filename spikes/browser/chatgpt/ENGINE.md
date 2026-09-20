@@ -15,7 +15,7 @@ only `pap-resident-command/2` with these exact fields:
 | --- | --- |
 | profile | pap-resident-command/2 |
 | runtimeEpoch | Current engine UUID |
-| adapterProfile | pap-chatgpt-chrome/6 |
+| adapterProfile | pap-chatgpt-chrome/7 |
 | commandId | Fresh UUID, retained for identical transport retry |
 | expectedRevision | Displayed nonnegative integer revision |
 | kind | SET_RECORDING |
@@ -88,7 +88,7 @@ Migration preserves signed historical objects without rewriting their bytes.
 Recent state lists the last 512 observation versions; the vault retains history.
 Source policies, command acknowledgements and undelivered captures are not
 restored. New signed records use `pap-local-record/2` and normal observations use
-`pap-chatgpt-observation/3`. Legacy schemas remain isolated read compatibility.
+`pap-chatgpt-observation/4`. Legacy schemas remain isolated read compatibility.
 Native framing, bundle identities, cryptographic domains and portable export
 formats retain their established identities.
 

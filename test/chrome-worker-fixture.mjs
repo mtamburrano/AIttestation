@@ -5,7 +5,7 @@ import { CHATGPT_EXTENSION_ID } from '../spikes/browser/chatgpt/adapter.mjs';
 
 export const turn = () => new Promise(resolve => setImmediate(resolve));
 export const testTab = (overrides = {}) => ({ id: 17, windowId: 1, tabEpoch: 'test-document-epoch', url: 'https://chatgpt.com/c/test-conversation', active: true,
-  destination: 'conversation:test-conversation', surfaceSupported: true, composerEmpty: true,
+  destination: 'conversation:test-conversation', surfaceSupported: true,
   attachmentsPresent: false, ...overrides });
 const event = () => {
   const listeners = new Set();

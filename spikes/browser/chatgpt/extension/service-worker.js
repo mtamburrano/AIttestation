@@ -1,7 +1,7 @@
-const ADAPTER_PROFILE = 'pap-chatgpt-chrome/6';
-const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-15';
+const ADAPTER_PROFILE = 'pap-chatgpt-chrome/7';
+const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-20';
 const NATIVE_HOST = 'ai.provenance.consumer';
-const CAPTURE_PROFILE = 'pap-chatgpt-capture/2';
+const CAPTURE_PROFILE = 'pap-chatgpt-capture/3';
 const PANEL_PROFILE = 'pap-chatgpt-panel/2';
 const PANEL_CHANNEL = 'pap-chatgpt-panel-channel/1';
 const panelChannels = new Set();
@@ -13,8 +13,21 @@ const CAPTURE_REJECTIONS = new Set(['PAGE_SEND_REJECTED', 'CAPTURE_REJECTED']);
 let policyRevision = 0;
 const documents = new Map();
 const documentRoutes = new Map();
+const routeChecks = new Map();
 const newChats = new Map();
 const conversationURL = url => typeof url === 'string' && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(url);
+const supportedURL = url => url === 'https://chatgpt.com/' || conversationURL(url);
+const exactKeys = (value, keys) => value && Object.keys(value).sort().join(',') === keys.sort().join(',');
+const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+function validRequest(value) {
+  return exactKeys(value, ['profile', 'path', 'messageId', 'conversationId']) && value.profile === 'chatgpt-new-user-text/1'
+    && ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value.path)
+    && wireId(value.messageId) && (value.conversationId === null || wireId(value.conversationId));
+}
+function validAcknowledgement(value) {
+  return exactKeys(value, ['profile', 'kind', 'conversationId', 'correlationId']) && value.profile === 'chatgpt-early-ack/1'
+    && ['stream-handoff', 'inline-message'].includes(value.kind) && wireId(value.conversationId) && wireId(value.correlationId);
+}
 function noteNewChatRoute(id, url) {
   const pending = newChats.get(id);
   if (pending && !pending.url && conversationURL(url)) {
@@ -25,7 +38,8 @@ function rememberNewChatPolicy(context, id, documentId) {
   const policy = context.policies.get(id), previous = newChats.get(id);
   if (policy?.expectedUrl === 'https://chatgpt.com/' && policy.tabEpoch === tabEpochs.get(id)
       && (!previous || previous.policy.token !== policy.token || previous.documentId !== documentId)) {
-    newChats.set(id, { policy, documentId, expires: Infinity, url: null, eventId: null });
+    newChats.set(id, { policy, documentId, creationUrl: documentRoutes.get(id)?.creationUrl ?? policy.expectedUrl,
+      expires: Infinity, url: null, eventId: null });
   }
 }
 const browserSessionId = `${crypto.randomUUID()}-${crypto.randomUUID()}`;
@@ -386,6 +400,29 @@ chrome.tabs.onUpdated.addListener((id, change) => {
     if (!pending.url) { pending.url = change.url; pending.expires = performance.now() + 5000; }
     publishState(); return;
   }
+  if (change.url && supportedURL(change.url) && documents.has(id)) {
+    const documentId = documents.get(id), epoch = tabEpochs.get(id), context = connection;
+    // A route change is not a new document. Challenge the exact old document
+    // before accepting its creation URL at the new route. Full navigation fails
+    // this proof and rotates authority instead of borrowing the old scope.
+    const check = (async () => {
+      let valid = false;
+      try {
+        const nonce = crypto.randomUUID();
+        const proof = await bounded(chrome.tabs.sendMessage(id, { kind: 'PAP_CONFIRM_DOCUMENT', pageContract: PAGE_CONTRACT, nonce }, { documentId, frameId: 0 }));
+        const [tabs, permission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
+        const live = tabs.find(tab => tab.id === id);
+        valid = current(context) && permission === 'granted' && tabs.length <= 32 && live && !live.incognito
+          && live.url === change.url && proof?.nonce === nonce && proof.active === true && proof.url === live.url;
+      } catch {}
+      if (documents.get(id) !== documentId || tabEpochs.get(id) !== epoch || routeChecks.get(id) !== check) return;
+      if (valid) documentRoutes.set(id, { documentId, epoch, url: change.url,
+        creationUrl: documentRoutes.get(id)?.creationUrl });
+      else { tabEpochs.set(id, crypto.randomUUID()); documents.delete(id); newChats.delete(id); documentRoutes.delete(id); }
+      routeChecks.delete(id); publishState();
+    })();
+    routeChecks.set(id, check); return;
+  }
   if (tabEpochs.has(id)) tabEpochs.set(id, crypto.randomUUID());
   documents.delete(id); newChats.delete(id); documentRoutes.delete(id);
   // Publish navigation immediately without revoking unrelated tab authority.
@@ -415,6 +452,7 @@ async function captureMessage(message, sender) {
       || typeof sender.documentId !== 'string' || !sender.documentId.length || sender.documentId.length > 128
       || message.pageContract !== PAGE_CONTRACT) return { state: 'RECORDING_UNAVAILABLE' };
   if (!context || !context.ready || !current(context)) return captureStatus(context, sender.tab.id, true);
+  if (routeChecks.has(sender.tab.id)) await bounded(routeChecks.get(sender.tab.id));
   const epoch = tabEpoch(sender.tab.id);
   const candidate = newChats.get(sender.tab.id);
   const [tabs, permission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
@@ -424,10 +462,10 @@ async function captureMessage(message, sender) {
       || tabs.length > 32 || !tab || tab.incognito || tab.windowId !== sender.tab.windowId) return { state: 'RECORDING_UNAVAILABLE' };
   const route = documentRoutes.get(tab.id);
   let senderURLMatches = tab.url === sender.url || route?.documentId === sender.documentId
-    && route.epoch === epoch && route.url === tab.url && sender.url === 'https://chatgpt.com/';
+    && route.epoch === epoch && route.url === tab.url && sender.url === route.creationUrl;
   if (message.kind === 'PAP_CAPTURE_STATUS') {
     if (Object.keys(message).sort().join(',') !== 'kind,pageContract') return { state: 'RECORDING_UNAVAILABLE' };
-    if (!senderURLMatches && sender.url === 'https://chatgpt.com/' && candidate?.documentId === sender.documentId
+    if (!senderURLMatches && sender.url === candidate?.creationUrl && candidate?.documentId === sender.documentId
         && candidate.policy.tabEpoch === epoch && candidate.url === tab.url && candidate.expires > performance.now()) {
       // Chrome retains the document's creation URL in MessageSender after
       // pushState. Authenticate its new exact URL without granting old events
@@ -442,35 +480,48 @@ async function captureMessage(message, sender) {
           && livePermission === 'granted' && liveTabs.length <= 32 && live && !live.incognito
           && live.windowId === tab.windowId && live.url === tab.url
           && proof?.nonce === nonce && proof.active === true && proof.url === live.url) {
-        documentRoutes.set(tab.id, { documentId: sender.documentId, epoch, url: live.url }); senderURLMatches = true;
+        documentRoutes.set(tab.id, { documentId: sender.documentId, epoch, url: live.url, creationUrl: sender.url }); senderURLMatches = true;
       }
     }
     if (!senderURLMatches) return { state: 'RECORDING_UNAVAILABLE' };
+    if (documents.has(tab.id) && documents.get(tab.id) !== sender.documentId) {
+      tabEpochs.set(tab.id, crypto.randomUUID()); newChats.delete(tab.id); documentRoutes.delete(tab.id);
+      documents.set(tab.id, sender.documentId); publishState(); return { state: 'RECORDING_UNAVAILABLE' };
+    }
     documents.set(tab.id, sender.documentId);
+    if (!documentRoutes.has(tab.id)) documentRoutes.set(tab.id, { documentId: sender.documentId, epoch, url: tab.url, creationUrl: sender.url });
     if (tab.url === 'https://chatgpt.com/') rememberNewChatPolicy(context, tab.id, sender.documentId);
     return captureStatus(context, tab.id);
   }
   const kind = message.observationKind;
-  const continuing = kind === 'send-intent' && candidate?.policy.token === message.token;
+  const continuing = candidate?.policy.token === message.token;
   const policy = continuing ? candidate.policy : context.policies.get(tab.id);
   if (!policy || policy.token !== message.token || policy.tabEpoch !== epoch || policy.windowId !== tab.windowId
       || !continuing && (!senderURLMatches || policy.expectedUrl !== tab.url)
       || policy.runtimeEpoch !== context.epoch
       || policy.browserSessionId !== browserSessionId || documents.get(tab.id) !== sender.documentId
-      || context.captures.size >= 32 || !['send-intent', 'message-observed'].includes(kind)
-      || Object.keys(message).sort().join(',') !== ['kind', 'pageContract', 'token', 'eventId', 'observationKind', 'text',
-        kind === 'send-intent' ? 'inputMethod' : 'messageId'].sort().join(',')
-      || typeof message.text !== 'string' || message.text.length > 256 * 1024 || !message.text.isWellFormed()
-      || new TextEncoder().encode(message.text).length > 256 * 1024) return { state: 'RECORDING_UNAVAILABLE' };
+      || context.captures.size >= 32 || !['request-observed', 'acknowledgement'].includes(kind)
+      || Object.keys(message).sort().join(',') !== ['kind', 'pageContract', 'token', 'eventId', 'observationKind',
+        ...(kind === 'request-observed' ? ['text', 'inputMethod', 'request'] : ['acknowledgement'])].sort().join(',')
+      || !/^[a-f0-9-]{36}$/.test(message.eventId ?? '')
+      || kind === 'request-observed' && (typeof message.text !== 'string' || message.text.length > 256 * 1024
+        || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > 256 * 1024
+        || !['enter', 'send-button'].includes(message.inputMethod) || !validRequest(message.request))
+      || kind === 'acknowledgement' && !validAcknowledgement(message.acknowledgement)) return { state: 'RECORDING_UNAVAILABLE' };
+  if (kind === 'acknowledgement' && conversationURL(tab.url)
+      && message.acknowledgement.conversationId !== new URL(tab.url).pathname.split('/')[2]) return { state: 'RECORDING_UNAVAILABLE' };
   if (continuing) {
     if (candidate !== newChats.get(tab.id) || candidate.documentId !== sender.documentId
         || candidate.expires <= performance.now() || candidate.eventId && candidate.eventId !== message.eventId
-        || ![policy.expectedUrl, candidate.url].includes(sender.url)
+        || ![policy.expectedUrl, candidate.url, candidate.creationUrl].includes(sender.url)
         || tab.url !== policy.expectedUrl && !conversationURL(tab.url)
         || candidate.url && ![policy.expectedUrl, candidate.url].includes(tab.url)) return { state: 'RECORDING_UNAVAILABLE' };
+    if (kind === 'acknowledgement' && candidate.eventId !== message.eventId) return { state: 'RECORDING_UNAVAILABLE' };
     const nonce = crypto.randomUUID();
     const proof = await bounded(chrome.tabs.sendMessage(tab.id, { kind: 'PAP_CONFIRM_NEW_CHAT', pageContract: PAGE_CONTRACT,
-      nonce, token: message.token, eventId: message.eventId, text: message.text, inputMethod: message.inputMethod },
+      nonce, token: message.token, eventId: message.eventId,
+      ...(kind === 'request-observed' ? { text: message.text, inputMethod: message.inputMethod, request: message.request }
+        : { acknowledgement: message.acknowledgement }) },
     { documentId: sender.documentId, frameId: 0 }));
     const [liveTabs, livePermission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
     const live = liveTabs.find(value => value.id === tab.id);
@@ -480,7 +531,8 @@ async function captureMessage(message, sender) {
         || ![policy.expectedUrl, candidate.url].includes(live.url)
         || proof?.nonce !== nonce || proof?.confirmed !== true || proof.url !== live.url) return { state: 'RECORDING_UNAVAILABLE' };
     candidate.eventId = message.eventId;
-    if (conversationURL(live.url)) documentRoutes.set(tab.id, { documentId: sender.documentId, epoch, url: live.url });
+    candidate.expires = Math.min(candidate.expires, performance.now() + 5000);
+    if (conversationURL(live.url)) documentRoutes.set(tab.id, { documentId: sender.documentId, epoch, url: live.url, creationUrl: sender.url });
   }
   const requestId = crypto.randomUUID();
   const result = new Promise(resolve => context.captures.set(requestId, { resolve }));
@@ -488,8 +540,8 @@ async function captureMessage(message, sender) {
   const observation = { profile: CAPTURE_PROFILE, kind, token, eventId: message.eventId,
     source: { adapterProfile: ADAPTER_PROFILE, pageContract: PAGE_CONTRACT, scope, runtimeEpoch,
       browserSessionId: session, tabId, windowId, tabEpoch: documentEpoch, destination, documentId: sender.documentId },
-    textBytes: btoa(Array.from(new TextEncoder().encode(message.text), byte => String.fromCharCode(byte)).join('')),
-    ...(kind === 'send-intent' ? { inputMethod: message.inputMethod } : { messageId: message.messageId }) };
+    ...(kind === 'request-observed' ? { textBytes: btoa(Array.from(new TextEncoder().encode(message.text), byte => String.fromCharCode(byte)).join('')),
+      inputMethod: message.inputMethod, request: message.request } : { acknowledgement: message.acknowledgement }) };
   try {
     post(context, { kind: 'PAP_CAPTURE', requestId, observation, ...(continuing ? { newChatContinuation: true } : {}) });
     return await bounded(result);

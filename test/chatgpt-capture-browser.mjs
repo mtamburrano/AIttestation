@@ -40,7 +40,13 @@ async function wait(check) {
 const html = `<!doctype html><meta charset="utf-8"><title>Synthetic capture test</title>
 <textarea id="prompt-textarea" style="width:400px;height:120px"></textarea><button data-testid="send-button">Send</button>
 <script>globalThis.providerSends=0;document.querySelector('button').onclick=()=>{
-providerSends++;document.querySelector('textarea').value='';
+providerSends++;
+const payload={action:'next',parent_message_id:crypto.randomUUID(),
+  conversation_id:location.pathname==='/'?null:location.pathname.split('/')[2],
+  messages:[{id:crypto.randomUUID(),author:{role:'user'},content:{content_type:'text',parts:[document.querySelector('textarea').value]}}]};
+fetch(new Request('https://chatgpt.com/backend-api/f/conversation',{method:'POST',body:JSON.stringify(payload)}))
+  .then(response=>response.text()).then(()=>globalThis.providerResponses=(globalThis.providerResponses??0)+1);
+document.querySelector('textarea').value='';
 if(location.pathname==='/')history.pushState(null,'','/c/synthetic-conversation');
 };</script>`;
 try {
@@ -48,6 +54,7 @@ try {
   await cp(new URL('../spikes/browser/chatgpt/extension/', import.meta.url), extension, { recursive: true });
   const worker = await readFile(join(extension, 'service-worker.js'), 'utf8');
   report.workerSHA256 = createHash('sha256').update(worker).digest('hex');
+  report.observerSHA256 = createHash('sha256').update(await readFile(join(extension, 'fetch-observer.js'))).digest('hex');
   report.contentSHA256 = createHash('sha256').update(await readFile(join(extension, 'content-script.js'))).digest('hex');
   await writeFile(join(extension, 'service-worker.js'), `
     globalThis.__writes=[];globalThis.__gate=null;globalThis.__captureProbes=[];globalThis.__routes=[];globalThis.__proofs=[];
@@ -105,9 +112,12 @@ try {
     const value = JSON.parse(event.data);
     if (value.method === 'Fetch.requestPaused') {
       const isPage = value.params.request.url === 'https://chatgpt.com/' && value.params.resourceType === 'Document';
-      void call('Fetch.fulfillRequest', { requestId: value.params.requestId, responseCode: isPage ? 200 : 404,
-        responseHeaders: [{ name: 'Content-Type', value: 'text/html; charset=utf-8' }],
-        body: Buffer.from(isPage ? html : '').toString('base64') }, value.sessionId).catch(error => { failure = error; });
+      const isSend = value.params.request.url === 'https://chatgpt.com/backend-api/f/conversation' && value.params.request.method === 'POST';
+      const responseBody = isPage ? html : isSend ? 'data: ' + JSON.stringify({ type: 'stream_handoff',
+        conversation_id: 'synthetic-conversation', turn_exchange_id: 'synthetic-' + randomUUID() }) + '\n\n' : '';
+      void call('Fetch.fulfillRequest', { requestId: value.params.requestId, responseCode: isPage || isSend ? 200 : 404,
+        responseHeaders: [{ name: 'Content-Type', value: isSend ? 'text/event-stream' : 'text/html; charset=utf-8' }],
+        body: Buffer.from(responseBody).toString('base64') }, value.sessionId).catch(error => { failure = error; });
     }
     if (!value.id) return;
     const operation = pending.get(value.id); if (!operation) return;
@@ -152,6 +162,11 @@ try {
   await wait(() => runtime.adapter.scopes().some(source => source.destination === 'new-chat'));
   await setRecording(true);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  await evaluate(page, `globalThis.savedSendButton=document.querySelector('button');savedSendButton.remove();document.querySelector('textarea').value='temporary';document.querySelector('textarea').value=''`);
+  await delay(1100);
+  assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
+  await evaluate(page, 'document.body.append(savedSendButton)');
+  report.checks.push('EMPTY_TYPE_CLEAR_WITHOUT_SEND_BUTTON_STAYS_ARMED');
   const text = 'SYNTHETIC_BROWSER_e\u0301\n☕  ';
   const send = async () => {
     await evaluate(page, 'document.querySelector("textarea").focus()');
@@ -181,10 +196,18 @@ try {
   await send(); await wait(() => runtime.session.receipts.list().length === 2);
   assert.equal(await evaluate(page, 'providerSends'), 2);
   report.checks.push('LATER_EQUAL_TEXT_SEND_HAS_DISTINCT_RECEIPT_ON_CURRENT_CONVERSATION');
+  await wait(() => runtime.session.status().versions.every(version => version.acknowledgement?.kind === 'stream-handoff'));
+  report.checks.push('EARLY_HANDOFF_BINDS_TO_BOTH_DURABLE_EVENTS');
+  await evaluate(page, `history.pushState(null,'','/')`);
+  await wait(() => runtime.adapter.scopes().some(source => source.destination === 'new-chat'));
+  await delay(1100);
+  assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
+  await send(); await wait(() => runtime.session.receipts.list().length === 3);
+  report.checks.push('CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD');
   await setRecording(false);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));
   await send(); await delay(250);
-  assert.equal(runtime.session.receipts.list().length, 2); assert.equal(await evaluate(page, 'providerSends'), 3);
+  assert.equal(runtime.session.receipts.list().length, 3); assert.equal(await evaluate(page, 'providerSends'), 4);
   report.checks.push('OFF_CONTINUES_PROVIDER_ACTION_WITHOUT_NEW_CAPTURE');
   report.result = 'PASS';
   await writeFile(join(reportDirectory, 'report.json'), JSON.stringify(report, null, 2));

@@ -7,7 +7,10 @@ const prompt = 'SYNTHETIC_RECORDING_e\u0301\r\n☕  ';
 const check = condition => { if (!condition) throw Object.assign(Error('SCENARIO_ASSERTION_FAILED'), { code: 'SCENARIO_ASSERTION_FAILED' }); };
 
 export async function recordingProductFixture(directory, scenario, diagnostics, network) {
-  const f = await recordingFixture(directory, { diagnostics, network, dropAck: scenario === 'recording-normal-send' });
+  const f = await recordingFixture(directory, { diagnostics, network, dropAck: scenario === 'recording-normal-send',
+    fetchResponse: async (_url, init) => new Response('data: ' + JSON.stringify({ type: 'stream_handoff',
+      conversation_id: JSON.parse(init.body).conversation_id, turn_exchange_id: 'synthetic-turn' }) + '\n\n',
+      { headers: { 'content-type': 'text/event-stream' } }) });
   let observed, operationId = null;
   try {
     await f.recording(true);
@@ -19,22 +22,23 @@ export async function recordingProductFixture(directory, scenario, diagnostics, 
       check(f.deliveries.length === 0);
       f.send(prompt, { method: 'enter' });
       await until(() => page.feedback === 'Attestamp · Prompt saved');
-      check(f.deliveries.length === 2 && f.deliveries[0].observation.eventId === f.deliveries[1].observation.eventId);
+      const requests = f.deliveries.filter(value => value.observation.kind === 'request-observed');
+      check(requests.length === 2 && requests[0].observation.eventId === requests[1].observation.eventId);
       operationId = f.deliveries[0].observation.eventId;
-      f.appear(prompt); await until(() => f.results.some(value => value.result.kind === 'message-observed'));
+      f.appear(prompt); await until(() => f.results.some(value => value.result.kind === 'acknowledgement'));
       f.send(prompt); await until(() => f.runtime.session.receipts.list().length === 2);
       f.send('SYNTHETIC_OTHER_TAB', { id: 18 });
       await until(() => f.runtime.session.receipts.list().length === 3);
       f.navigate(); await until(() => !f.runtime.adapter.scopes().some(value => value.scope === f.scopes.get(17)));
-      const before = f.results.length; f.replay(f.deliveries[0]);
-      await until(() => f.results.length > before);
-      check(f.results.at(-1).result.state === 'RECORDING_UNAVAILABLE');
+      const replayId = f.replay(f.deliveries[0]);
+      await until(() => f.results.some(value => value.requestId === replayId));
+      check(f.results.find(value => value.requestId === replayId).result.state === 'RECORDING_UNAVAILABLE');
       await f.runtime.engine.drain();
       const receipts = f.runtime.session.receipts.list(), selection = f.runtime.session.receipts.prepare({ ids: [receipts[0].id] });
       check(selection.texts[0].preview === prompt);
       const report = verifyPortable(f.runtime.session.receipts.export(selection.previewId));
       const target = report.records.find(value => value.recordDigest === receipts[0].recordDigest);
-      check(target.releaseControl === 'OBSERVED_ONLY' && target.localAssertions.some(value => value.kind === 'normal-message-observed'));
+      check(target.releaseControl === 'OBSERVED_ONLY' && target.localAssertions.some(value => value.kind === 'normal-acknowledgement'));
       check(f.anchorCalls === 3 && f.confirmed === 3);
       observed = 'NORMAL_PROMPT_SAVED';
     } else {

@@ -179,7 +179,7 @@ test('current, previous, and future compatibility fixtures do not broaden the pi
   for (const fixture of matrix.cases) {
     const adapter = new ChatGPTChromeAdapter({ extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca' });
     const pair = () => adapter.pair({ extensionId: 'medilhopfckldjgdnchfkpmfmfnkadca', adapterProfile: fixture.adapterProfile,
-      captureProfile: 'pap-chatgpt-capture/2', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session',
+      captureProfile: 'pap-chatgpt-capture/3', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session',
       browser: { product: 'Google Chrome', channel: 'stable', major: fixture.chromeMajor },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.9' },
       permissionState: 'granted', permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*' });

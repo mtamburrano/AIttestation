@@ -445,7 +445,7 @@ Record unexecuted checks as null, not zero or passed.
 | Updates | Actual current/previous signed artifacts; tampered download/signature rejection; no unauthorized rollback |
 | Migration | Known pre-upgrade export matches after interrupted migration and reopen; recovered recording starts OFF |
 | Removal | Export opportunity, manifest removal, extension/app removal, evidence retained, verifier usable offline |
-| Provider drift | Missing/changed composer/send controls, attachments, tab ambiguity and revoked permissions remove eligibility |
+| Provider drift | Missing fetch observer, unsupported request shapes, document ambiguity and revoked permissions prevent capture; composer emptiness does not change readiness |
 
 The installation diagnostics API records application action counts, while external
 OS/store permission measurements remain null until these checks are performed. The

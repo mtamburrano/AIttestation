@@ -25,13 +25,13 @@ There is no live mode or fallback.
 
 The fixtures use `startPackagedChatGPT`, `ChatGPTRecordingSession`, resident
 engine, durable vault, actual page/worker/sidebar model, native framing and local
-API. Browser DOM/API/platform identity and anchor verdicts are explicitly
+API. Browser transport/DOM/API/platform identity and anchor verdicts are explicitly
 synthetic. The runner separately checks real managed accounting with local
 fixtures. No provider action is performed by Attestamp.
 
 | Scenario | Expected invariant |
 | --- | --- |
-| recording-normal-send | Genuine intent, exact bytes, retry dedup, equal-text separate events, independent tabs, appearance assertion and retrospective export |
+| recording-normal-send | Genuine intent, exact bytes, retry dedup, equal-text separate events, independent tabs, early transport acknowledgement and retrospective export |
 | recording-storage-gap | No save acknowledgement or provider replay on unavailable storage |
 | recording-key-gap | No save acknowledgement or provider replay on unavailable keys |
 | recording-connection-gap | Unavailable feedback without collecting disconnected input |

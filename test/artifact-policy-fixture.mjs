@@ -92,14 +92,14 @@ export async function fixture(t, channel = 'release-candidate') {
   sourceBytes.set('spikes/browser/chatgpt/runtime-main.mjs', "import './bridge-runtime.mjs';\n");
   // Keep the synthetic producer independent of the verifier's resource list.
   const recipientSources = ['vault/format.mjs', 'vault/records.mjs', 'anchor/verifier.mjs', 'anchor/merkle.mjs',
-    'recipient/portable.mjs', 'recipient/normal-observation.mjs', 'recipient/legacy-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
+    'recipient/portable.mjs', 'recipient/normal-observation.mjs', 'recipient/dom-observation.mjs', 'recipient/legacy-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
     'recipient/recipient.html', 'recipient/recipient.js', 'recipient/recipient.css'];
   for (const path of recipientSources) {
     const bytes = path === 'recipient/main.mjs' ? "import './server.mjs';\n" : `// Synthetic approved source for ${path}\n`;
     sourceBytes.set(`spikes/${path}`, bytes);
     await write(`${verifier}/Contents/Resources/spikes/${path}`, bytes);
   }
-  for (const path of ['service-worker.js', 'content-script.js', 'sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel-channel.js', 'sidepanel.css',
+  for (const path of ['service-worker.js', 'content-script.js', 'fetch-observer.js', 'sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel-channel.js', 'sidepanel.css',
     ...Object.values(manifest.icons)]) sourceBytes.set(`spikes/browser/chatgpt/extension/${path}`, 'Synthetic extension bytes');
   for (const [path, bytes] of sourceBytes) await write(`${resources}/${path}`, bytes);
   const source = { files: [...sourceBytes].map(([path, bytes]) => ({ path, sha256: sha256(bytes) })).sort((a, b) => a.path < b.path ? -1 : 1) };

@@ -32,14 +32,15 @@ export class LocalReceipts {
       return { record, value: signedObservation(record, bytes, verifyRecord(record, bytes)) };
     }).filter(entry => entry.value);
     const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version'
-      || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3'].includes(entry.value.profile) && entry.value.kind === 'normal-send-intent').map(({ record, value }) => {
+      || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3', 'pap-chatgpt-observation/4'].includes(entry.value.profile)
+        && ['normal-send-intent', 'normal-request-observed'].includes(entry.value.kind)).map(({ record, value }) => {
       const text = records.find(r => r.manifest.eventId === value.textRecord
         && r.manifest.evidence[0].objectDigest === value.textObject);
       if (!text) throw Error('Receipt text reference missing');
       const related = observations.filter(entry => entry.value.recordDigest === record.recordDigest
         && entry.record.manifest.signingPublicKey === record.manifest.signingPublicKey
         && (entry.value.kind !== 'release-cancelled' || linksCancellation(entry.record, entry.value, record, value))
-        && (entry.value.kind !== 'normal-message-observed' || linksNormalMessage(entry.record, entry.value, record, value)));
+        && (!['normal-message-observed', 'normal-acknowledgement'].includes(entry.value.kind) || linksNormalMessage(entry.record, entry.value, record, value)));
       return { id: record.manifest.eventId, title: `${value.mode} · ${record.manifest.localClaimedTime}`,
         prompt: { mode: value.mode, savedAt: record.manifest.localClaimedTime,
           scope: value.source?.scope ?? value.scope ?? null, destination: value.source?.destination ?? null,

@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { webcrypto, createHash } from 'node:crypto';
-import { runInNewContext } from 'node:vm';
+import { createContext, runInContext } from 'node:vm';
 import { CHATGPT_EXTENSION_ID, CHATGPT_PAGE_CONTRACT } from '../spikes/browser/chatgpt/adapter.mjs';
 
 const source = await readFile(new URL('../spikes/browser/chatgpt/extension/content-script.js', import.meta.url), 'utf8');
+const observerSource = await readFile(new URL('../spikes/browser/chatgpt/extension/fetch-observer.js', import.meta.url), 'utf8');
 export const pageCommand = (text = 'SYNTHETIC_EXACT_e\u0301\r\n☕', overrides = {}) => ({
   kind: 'PAP_RELEASE', pageContract: CHATGPT_PAGE_CONTRACT, expectedUrl: 'https://chatgpt.com/c/test-conversation',
   destination: 'conversation:test-conversation', attemptId: webcrypto.randomUUID(),
@@ -14,7 +15,8 @@ export const pageCommand = (text = 'SYNTHETIC_EXACT_e\u0301\r\n☕', overrides =
 export function pageFixture({ draft = '', textarea = false, supported = true, sendState = 'enabled',
   attachments = false, onInput = () => {}, authorize = async () => true, notify = () => {},
   capture = async () => ({ kind: 'PAP_CAPTURE_POLICY', browserSessionId: 'synthetic-unpaired', revision: 0, policy: null, state: 'OFF' }),
-  url = 'https://chatgpt.com/c/test-conversation', clock = { setTimeout, clearTimeout, performance } } = {}) {
+  url = 'https://chatgpt.com/c/test-conversation', fetchResponse = null,
+  clock = { setTimeout, clearTimeout, performance } } = {}) {
   let listener, clicks = 0, injections = 0;
   const timers = new Set();
   const observers = [], events = {}, windowEvents = {}, notifications = [], checks = [];
@@ -77,7 +79,10 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     },
     inspect() { return page.send({ kind: 'PAP_INSPECT', pageContract: CHATGPT_PAGE_CONTRACT }); },
   };
-  runInNewContext(source, { document, location: page.location, HTMLTextAreaElement: Textarea, InputEvent: class {},
+  const sandbox = { document, location: page.location, HTMLTextAreaElement: Textarea, InputEvent: class {},
+    URL, Request, Response, Blob, AbortController, queueMicrotask,
+    CustomEvent: class { constructor(type, options) { this.type = type; this.detail = options.detail; } },
+    dispatchEvent: event => { for (const callback of windowEvents[event.type] ?? []) callback(event); },
     TextEncoder, TextDecoder, atob, btoa, crypto: webcrypto, performance: clock.performance,
     setTimeout(callback, delay) {
       const timer = clock.setTimeout(() => { timers.delete(timer); callback(); }, delay);
@@ -94,6 +99,24 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
         if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message.kind)) return capture(message, page);
         checks.push(structuredClone(message)); return authorize(message, page);
       } } },
+  };
+  sandbox.window = sandbox; sandbox.top = sandbox;
+  sandbox.postMessage = (message, origin) => queueMicrotask(() => {
+    for (const callback of windowEvents.message ?? []) callback({ source: runInContext('window', context), origin, data: structuredClone(message) });
   });
+  page.requests = [];
+  sandbox.fetch = (...args) => {
+    page.requests.push(args);
+    return page.fetchResponse ? page.fetchResponse(...args) : Promise.resolve(new Response('', { status: 200 }));
+  };
+  page.fetchResponse = fetchResponse;
+  const context = createContext(sandbox);
+  runInContext(source, context); runInContext(observerSource, context);
+  page.fetch = (...args) => sandbox.fetch(...args);
+  page.request = (text, overrides = {}) => page.fetch('/backend-api/f/conversation', { method: 'POST',
+    body: JSON.stringify({ action: 'next', messages: [{ id: webcrypto.randomUUID(), author: { role: 'user' },
+      content: { content_type: 'text', parts: [text] } }], parent_message_id: webcrypto.randomUUID(),
+    conversation_id: page.location.pathname === '/' ? null : page.location.pathname.split('/')[2], ...overrides }) });
+  page.transportMessage = data => sandbox.postMessage({ channel: 'pap-chatgpt-transport/1', ...data }, 'https://chatgpt.com');
   return page;
 }

@@ -3,19 +3,12 @@ import { emit } from '../../diagnostics/local.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
 import { CHATGPT_PANEL_PROFILE } from './panel.mjs';
 
-export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/6';
-export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-15';
+export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/7';
+export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-20';
 export const CHATGPT_ADAPTER_ID = 'chrome-chatgpt';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
 export const CHATGPT_EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
 export const CHROME_BASELINE_MAJOR = 153;
-
-// A provider render can momentarily hide, disable or duplicate the composer
-// controls while a tab keeps its exact identity. Eligibility is retained for
-// this bounded window so an already-observed genuine Send is not discarded
-// mid-render; a sustained loss of support still reports unavailable afterwards.
-const SURFACE_CHURN_MS = 2_000;
-export { SURFACE_CHURN_MS };
 
 const requiredPermissions = ['nativeMessaging'];
 
@@ -46,7 +39,7 @@ function macOSSupported(version) {
 export class ChatGPTChromeAdapter {
   #extensionId; #runtimeEpoch; #connection = null; #tabs = [];
   #sources = new Map(); #generation = 0; #listeners = new Set();
-  #diagnostics; #churnTimer; #churnHeld = new Map();
+  #diagnostics;
 
   constructor({ extensionId, diagnostics = null, runtimeEpoch = randomUUID() }) {
     if (typeof extensionId !== 'string' || !/^[a-p]{32}$/.test(extensionId)
@@ -61,7 +54,7 @@ export class ChatGPTChromeAdapter {
   get capabilities() {
     return Object.freeze({
       adapter: CHATGPT_ADAPTER_PROFILE,
-      boundary: 'provider_dom',
+      boundary: 'provider_fetch',
       provider: CHATGPT_ORIGIN,
       payload: 'exact UTF-8 text up to 256 KiB',
       attachments: 'UNSUPPORTED',
@@ -142,7 +135,6 @@ export class ChatGPTChromeAdapter {
           || tab.destination !== followed.destination && (tab.destination !== '' || tab.surfaceSupported)) {
         emit(this.#diagnostics, 'SCOPE_DESTINATION_CHANGED'); this.#sources.delete(followed.scope);
       } else {
-        if (this.#strictlyObservable(followed)) followed.eligibleAt = performance.now();
         const next = this.eligibility(followed.scope);
         if (next !== previous.get(followed.scope)) emit(this.#diagnostics, next === 'ELIGIBLE' ? 'CAPABILITY_RESTORED' : 'CAPABILITY_UNAVAILABLE');
       }
@@ -151,7 +143,6 @@ export class ChatGPTChromeAdapter {
       if (![...this.#sources.values()].some(source => source.tabId === tab.id)) this.#follow(tab);
     }
     const chatGPTTabs = this.#chatGPTTabs();
-    this.#syncChurnExpiry();
     this.#changed();
     return { eligible: this.#observableTabs().length > 0,
       tabCount: chatGPTTabs.length,
@@ -161,8 +152,7 @@ export class ChatGPTChromeAdapter {
   onChange(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
   #changed() { for (const listener of this.#listeners) listener(); }
   scopes() {
-    // eligibleAt is internal churn bookkeeping, not part of a scope identity.
-    return [...this.#sources.values()].map(({ eligibleAt, ...value }) => ({ ...structuredClone(value),
+    return [...this.#sources.values()].map(value => ({ ...structuredClone(value),
       adapterId: CHATGPT_ADAPTER_ID, adapterEpoch: value.browserSessionId, eligibility: this.eligibility(value.scope) }));
   }
 
@@ -178,7 +168,6 @@ export class ChatGPTChromeAdapter {
   }
   #invalidate(reason) {
     emit(this.#diagnostics, 'SCOPE_INVALIDATED');
-    clearTimeout(this.#churnTimer); this.#churnTimer = undefined; this.#churnHeld.clear();
     this.#generation++; this.#sources.clear(); this.#changed();
     return reason;
   }
@@ -194,85 +183,23 @@ export class ChatGPTChromeAdapter {
     const scope = randomUUID();
     this.#sources.set(scope, { scope, tabId: tab.id, destination: tab.destination, url: tab.url,
       windowId: tab.windowId, tabEpoch: tab.tabEpoch, browserSessionId: this.#connection.browserSessionId,
-      runtimeEpoch: this.#runtimeEpoch, generation: this.#generation, eligibleAt: performance.now() });
+      runtimeEpoch: this.#runtimeEpoch, generation: this.#generation });
     emit(this.#diagnostics, 'SOURCE_FOLLOWED');
   }
 
   eligibility(scope) { return this.offersCapture(scope) ? 'ELIGIBLE' : 'TEMPORARILY_UNAVAILABLE'; }
 
-  // Advertised capability: a surface that cannot synchronously observe a new Send
-  // must not report READY, or a genuine steering Send made during the churn would
-  // gap under a displayed ON. observationEligible() additionally retains the
-  // bounded churn grace, which is capture authority for an already-observed Send.
   offersCapture(scope) {
     const followed = this.#sources.get(scope);
     return Boolean(followed && this.#connection && this.#strictlyObservable(followed));
   }
 
-  observationEligible(scope) {
-    const followed = this.#sources.get(scope);
-    if (!followed || !this.#connection) return false;
-    return this.#strictlyObservable(followed) || this.#churnWindowOpen(followed);
-  }
+  observationEligible(scope) { return this.offersCapture(scope); }
 
   #strictlyObservable(followed) {
     return this.#observableTabs().some(tab => tab.id === followed.tabId && tab.windowId === followed.windowId
       && tab.tabEpoch === followed.tabEpoch && tab.url === followed.url
       && tab.destination === followed.destination);
-  }
-
-  // A provider render can momentarily hide, disable or duplicate its composer
-  // controls while the tab keeps the same document. Only that single capability
-  // bit is tolerated, and only inside a bounded window, so an already-observed
-  // genuine Send is not discarded mid-render. Every other condition - identity,
-  // destination, attachments and a sustained loss of support - still ends
-  // eligibility immediately or on expiry.
-  #churnWindowOpen(followed) {
-    if (!this.capabilities.observation || performance.now() - (followed.eligibleAt ?? 0) >= SURFACE_CHURN_MS) return false;
-    const tab = this.#tabs.find(value => value.id === followed.tabId);
-    if (!tab || tab.surfaceSupported || tab.attachmentsPresent || !supportedURL(tab.url)
-        || tab.url !== followed.url || tab.windowId !== followed.windowId || tab.tabEpoch !== followed.tabEpoch
-        || tab.destination !== followed.destination) return false;
-    return tab.destination === this.#expectedDestination(tab.url);
-  }
-
-  // Eligibility is otherwise only recomputed on a provider or tab event, so a
-  // tab that stays unsupported would keep the churn window's published policy
-  // and READY status indefinitely. Each held scope keeps its own deadline and
-  // the earliest one is armed, so tabs that entered churn at different times
-  // close one by one without waiting for another provider event.
-  #syncChurnExpiry() {
-    clearTimeout(this.#churnTimer); this.#churnTimer = undefined; this.#churnHeld.clear();
-    for (const followed of this.#sources.values()) {
-      if (this.#strictlyObservable(followed) || !this.#churnWindowOpen(followed)) continue;
-      this.#churnHeld.set(followed.scope, (followed.eligibleAt ?? 0) + SURFACE_CHURN_MS);
-    }
-    this.#armChurnExpiry();
-  }
-
-  #armChurnExpiry() {
-    clearTimeout(this.#churnTimer); this.#churnTimer = undefined;
-    if (!this.#churnHeld.size) return;
-    const deadline = Math.min(...this.#churnHeld.values());
-    this.#churnTimer = setTimeout(() => this.#expireChurn(), Math.max(0, deadline - performance.now()));
-    this.#churnTimer?.unref?.();
-  }
-
-  #expireChurn() {
-    this.#churnTimer = undefined;
-    const now = performance.now();
-    let retired = false;
-    for (const [scope, deadline] of [...this.#churnHeld]) {
-      if (deadline > now) continue;
-      this.#churnHeld.delete(scope);
-      // The advertised transition already fired when the surface churned; this
-      // retires the retained capture authority and republishes without it.
-      if (!this.#sources.has(scope) || this.observationEligible(scope)) continue;
-      retired = true;
-    }
-    // Scopes whose window is still open stay held and keep their own deadline.
-    this.#armChurnExpiry();
-    if (retired) this.#changed();
   }
 
   assertObservationSource(source) {

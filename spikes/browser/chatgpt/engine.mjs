@@ -102,17 +102,18 @@ export class ResidentEngine {
       if (newChatContinuation) {
         // The authenticated worker confirms the original document's pending
         // snapshot. Retired authority is usable for this one intent only.
-        if (observation.kind !== 'send-intent' || entry.source.url !== 'https://chatgpt.com/'
+        if (entry.source.url !== 'https://chatgpt.com/'
             || source.destination !== 'new-chat'
             || entry.eventId && entry.eventId !== eventId
             || entry.documentId && entry.documentId !== source.documentId
+            || observation.kind === 'acknowledgement' && entry.eventId !== eventId
             || ['scope', 'runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch', 'destination']
               .some(key => source[key] !== entry.source[key])) reject('CAPTURE_NOT_ENABLED');
         entry.eventId = eventId; entry.documentId = source.documentId;
       }
       if (active) this.#adapter.assertObservationSource(source);
       else if (!this.#adapter.newChatContinuation(entry.source)) reject('CAPTURE_NOT_ENABLED');
-      if (source.destination === 'new-chat' && observation.kind === 'send-intent' && !entry.eventId) {
+      if (source.destination === 'new-chat' && observation.kind === 'request-observed' && !entry.eventId) {
         entry.eventId = eventId; entry.documentId = source.documentId;
       }
       const prior = this.#session.status().versions.some(value => value.id === eventId);
@@ -121,7 +122,7 @@ export class ResidentEngine {
         version = this.#session.observeNormal(observation);
         if (!prior) await this.#commit();
       } catch (error) {
-        if (!['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
+        if (observation.kind === 'request-observed' && !['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
           this.#failed = true; this.#captureTokens.clear(); this.#publish();
         }
         emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;

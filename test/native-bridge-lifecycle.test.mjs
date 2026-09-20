@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { CHATGPT_EXTENSION_ID, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT,
-  ChatGPTChromeAdapter, SURFACE_CHURN_MS } from '../spikes/browser/chatgpt/adapter.mjs';
+  ChatGPTChromeAdapter } from '../spikes/browser/chatgpt/adapter.mjs';
 import { ChromeBridgeController } from '../spikes/browser/chatgpt/bridge.mjs';
 import { NATIVE_BRIDGE_PROFILE, rendezvousRecord, encodeNativeFrame, NativeFrameDecoder,
   runNativeHost } from '../spikes/browser/chatgpt/native-host.mjs';
@@ -24,7 +24,7 @@ const origin = `chrome-extension://${CHATGPT_EXTENSION_ID}/`;
 const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } };
 const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
-  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/2',
+  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/3',
   pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session', ...identity,
   permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [testTab()] });
 const fastTrust = { profile: FAST_CONFIRM_PROFILE };
@@ -179,21 +179,19 @@ test('capability loss preserves a source while navigation and disconnect revoke 
   const controller = new ChromeBridgeController(adapter, () => {}, { localBrowser: identity.browser, localPlatform: identity.platform });
   controller.receive(hello()); const scope = adapter.scopes()[0].scope;
   const state = tabs => ({ ...hello(), kind: 'PAP_STATE', tabs });
-  // A momentary composer/control loss keeps a followed scope eligible only inside
-  // the bounded churn window, so a Send the page already observed mid-render is
-  // not discarded; a sustained loss still reports unavailable.
+  // Transport capability loss revokes capture immediately without losing the
+  // document identity. Composer markup no longer drives this capability.
   controller.receive(state([testTab({ surfaceSupported: false })]));
-  assert.equal(adapter.observationEligible(scope), true, 'transient control churn keeps the followed scope');
+  assert.equal(adapter.observationEligible(scope), false);
   controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
   controller.receive(state([testTab({ surfaceSupported: false })]));
-  await delay(SURFACE_CHURN_MS + 50);
-  assert.equal(adapter.observationEligible(scope), false, 'sustained loss expires the churn window');
+  assert.equal(adapter.observationEligible(scope), false, 'missing transport remains unavailable');
   controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
   for (const tabs of [[testTab({ destination: '', surfaceSupported: false })], [testTab({ attachmentsPresent: true })]]) {
     controller.receive(state(tabs)); assert.equal(adapter.observationEligible(scope), false);
     controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);
   }
-  // Attachments are a deliberate, stable state and never inherit the churn window.
+  // Unsupported payload capability cannot inherit capture authority.
   controller.receive(state([testTab({ attachmentsPresent: true })]));
   assert.equal(adapter.observationEligible(scope), false, 'attachments revoke immediately');
   controller.receive(state([testTab()])); assert.equal(adapter.observationEligible(scope), true);

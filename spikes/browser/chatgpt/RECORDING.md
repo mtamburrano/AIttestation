@@ -1,145 +1,161 @@
-# Best-effort normal-Send recording
+# Best-effort transport recording
 
 Turn the integration ON once. Supported existing and new ChatGPT tabs/windows
-are followed automatically, including duplicate conversation tabs. Use ChatGPT's
-own composer and Send. **Prompt saved** appears only after durable encrypted
-signed evidence; anchoring follows asynchronously. OFF stops new capture while
-keeping history and bounded already-durable anchor work.
+are followed automatically. Use ChatGPT's own Send. **Prompt saved** means the
+new prompt and its client observation are durably encrypted and signed locally.
+Anchoring follows asynchronously. OFF stops new capture while preserving history
+and already-durable anchor work. Capture never blocks, rewrites or replays Send.
 
-## Supported observation boundary
+## Acquisition and exact text
 
-- A trusted primary click or keyboard activation of the unique enabled
-  `button[data-testid="send-button"]`, or plain Enter in the unique
-  `#prompt-textarea`, signals intent. The event is never cancelled, replayed or
-  replaced; Attestamp never injects text or clicks Send.
-- Shift/Ctrl/Meta/Alt+Enter, repeating Enter, IME composition/229 events and Enter
-  within 50 ms of composition end are excluded. A later explicit Send can qualify.
-  Typing, hydration and DOM churn do not create prompt events.
-- A provider render can momentarily hide, disable or duplicate the composer
-  controls while the tab keeps the same document, which ChatGPT still accepts as
-  a Send. Such a surface cannot observe a new Send at all, so it stops being
-  reported as recording immediately: the page indicator and the tab status drop
-  out of READY before any later Send, which then truthfully reports a gap instead
-  of failing under a displayed ON. A bounded two-second churn window survives
-  only as capture authority for a Send the page already observed, so that intent
-  is still saved rather than dropped mid-render, and it closes and republishes on
-  its own without waiting for another provider event. Only that one capability
-  bit is tolerated: a different document, URL, window or destination, an
-  attachment indicator, a sustained loss of the surface, OFF and disconnect all
-  end recording immediately or on expiry.
-- Textarea capture uses its value. Contenteditable capture projects text nodes,
-  explicit BR newlines and P/DIV paragraph boundaries. A lone BR in an empty
-  paragraph is a placeholder. Supported inline wrappers: span, strong, em, b,
-  i, code, s and u. Mixed block/inline structures, hidden/unknown rich content,
-  ambiguous composers/Send controls and attachment indicators produce a gap.
-- Text must be well-formed UTF-8, at most 256 KiB, without trimming, BOM removal
-  or Unicode normalization. The declared DOM projection may differ from a
-  provider-transformed network payload. Existing drafts remain untouched.
-- A unique exact-text user message with a bounded new `data-message-id`, absent
-  from the intent's visible baseline, can add a separate appearance assertion
-  within ten seconds in the same document. Old IDs, ambiguous matches and
-  concurrent identical candidates remain unconfirmed.
-- Attachments, voice, responses, edits/resubmits, regeneration and hidden requests
-  are outside the contract. Page content can lie. Neither intent nor appearance
-  proves provider receipt, authorship, ownership, event truth or complete history.
+The extension bundles one MAIN-world fetch observer and an isolated relay at
+`document_start`, scoped to `https://chatgpt.com/*`. `transport/chatgpt.mjs` owns
+provider matching/extraction/acknowledgement; `transport/fetch-observer.mjs` owns
+fetch observation and bounded streams; `transport/main.mjs` bridges the page.
+None of the shared transport/parser modules depends on Chrome APIs. Run
+`npm run build:observer` after editing these modules; `node
+spikes/browser/chatgpt/build-observer.mjs --check` verifies the shipped bundle.
+There is no XHR, WebSocket, webRequest, debugger, proxy, iframe or prototype hook,
+remote executable adapter, CSP change, secondary recorder or provider refetch.
 
-## Source, delivery and failure
+Supported requests are POSTs to exactly `/backend-api/conversation` or
+`/backend-api/f/conversation` on the provider origin, without URL query/fragment
+or credentials in the URL. The JSON must have `action: "next"`, one new user
+message with an ID, a parent ID, and `content_type: "text"` with one string part.
+The conversation ID must match the qualified source (null for New Chat).
+Anonymous endpoints/omitted credentials, prepare/history/resume, other operations,
+attachments/voice/multimodal parts, edits/resubmits and regeneration are excluded.
+The normal composer qualifier and payload exclusions jointly define this narrow
+scope; this is not a universal detector of every provider operation.
 
-The engine distributes `pap-chatgpt-capture/2` policies only while ON and eligible.
-The worker validates the sender, top-level document, tab/window, URL, permissions
-and document epoch, then supplies source metadata. The engine rechecks it at the
-ordered cutoff. Page messages cannot choose another source or toggle recording;
-sidebar controls cannot manufacture prompt evidence.
+Only that string becomes evidence. Its validated UTF-8 retains BOM, whitespace,
+CR/LF, combining characters and trailing newlines without trimming or Unicode
+normalization. Prompt limit: 256 KiB. Serialized request limit: 2 MiB, allowing
+JSON escapes at the prompt limit. Duplicate JSON keys, excessive nesting, invalid
+UTF-8/lone surrogates and oversized bodies fail without truncation. Strings, URL
+inputs, standard Requests and data-valued init overrides are supported; bodies
+may be strings, ArrayBuffers/views or Blobs. Request bodies use a clone with a
+750 ms read deadline. Direct stream/FormData/URLSearchParams bodies and accessor
+init options report a gap, without reading/mutating the provider's body.
+No request headers, credentials, history, model context or answer text are saved.
 
-Each genuine intent has a fresh UUID. Identical transport retry keeps its event,
-source and exact text. Distinct equal-text Sends retain distinct signed records
-while encrypted byte storage can deduplicate. Each page retains at most 16 pending
-intents; the bridge bounds capture deliveries to 32. Delivery has a two-second
-worker deadline, 2.5-second page deadline and at most one retry of the original
-observation. Policy refresh is every second and expires locally after three
-seconds. OFF and invalidated policies discard pending page observations.
-The page indicator follows effective state changes even when both policies are
-empty: OFF clears an unavailable indicator. Stale refresh successes or failures
-cannot replace a newer policy; unchanged ON refreshes preserve saved/gap feedback.
-Missing later message appearance never changes a durable save into a primary
-warning: the page continues to say **Prompt saved**. Appearance remains a separate
-technical assertion and never establishes provider receipt.
+## Human Send qualification and page state
 
-### First Send in a new chat
+A trusted primary click/keyboard activation of the unique enabled Send button,
+or plain Enter in the unique visible enabled `#prompt-textarea`, supplies a
+single-use qualifier lasting 1.5 seconds in that document. It never supplies
+text or evidence by itself. The matching fetch supplies the text. Unrelated
+URLs, methods, operations and conversations cannot consume the qualifier.
+Shift/Ctrl/Meta/Alt+Enter, repeat, composition/229 and Enter within 50 ms of
+composition end do not qualify. Synthetic input, typing and hydration do not
+record. Attachment indicators prevent qualification. No event is cancelled.
 
-There is one narrow navigation exception for the first genuine Send observed at
-exactly `https://chatgpt.com/`. The worker can retain its old policy for at most
-five seconds across the first `/c/<id>` route change. Chrome may report loading
-even for this same-document navigation; loading alone cannot authenticate it.
-Real Chrome delivers the navigation precursor and the conversation route as
-separate tab updates, so one status-only loading update is tolerated for a
-pending first-New-chat candidate while its route is still unknown. That
-transition grants no capture authority, keeps the original document binding and
-expires by itself; a second precursor, a later loading or any real navigation
-revokes. It keeps the original tab/window, browser/runtime and document epoch. Before
-forwarding, it challenges the original Chrome `documentId` with a fresh nonce;
-that content script must still hold the same first intent, exact bytes and input
-method captured before navigation, and now reside at the exact live tab URL.
-The worker checks the live tab, permission,
-epoch and retained policy again after the challenge. Navigation alone supplies
-no evidence and cannot create an intent.
+Readiness comes from the supported route, observer availability and engine
+policy. Empty/type/clear, rich editor markup, an absent Send button or rendered
+message churn do not withdraw transport readiness. DOM text projection,
+composer emptiness and rendered-message confirmation are removed. The minimal
+qualifier still needs its supported controls when an actual Send occurs.
+The existing sidebar remains ON/OFF, effective status and Dashboard/History.
 
-The engine retains only the corresponding New-chat policy for five seconds and
-binds it to one event and document. This allowance is carried separately from the
-signed observation; the evidence keeps its original `new-chat` source. Identical
-delivery remains idempotent. A different event or later message appearance cannot
-use retired authority. OFF/ON, disconnect, restart, permission loss, reload,
-replacement/copy documents and further navigation revoke the exception. Normal
-conversation captures still require current exact scope authority. Neither path
-waits on, blocks, synthesizes or replays the provider action.
+The isolated relay accepts only a bounded request/ack message for its own pending
+trusted qualifier. MAIN never receives an engine token or control API. The worker
+supplies source metadata after authenticating extension sender, active top-level
+Chrome document, tab/window, route, permissions and epoch. Engine consent/source
+checks run again at the ordered cutoff. Page observations are untrusted client
+assertions, not tamper-proof attestations about a hostile page or provider.
 
-Chrome also retains the creation URL in content-script `MessageSender` after
-this transition. A separate document-targeted URL confirmation can establish
-the original document's new exact route for status polling. It carries no event
-or text authority. A successful intent confirmation can establish the same route.
-Later captures use the fresh conversation policy and scope; the retired token
-cannot capture a later Send. This URL binding is removed on further navigation,
-reload, permission loss or disconnection.
+## Forwarding, acknowledgement and resource limits
 
-Storage, key, IPC, permission or markup failure produces a gap or unavailable
-status without acknowledging a save or replaying Send. Delayed old acknowledgements
-cannot replace newer gap feedback. Restart never backfills unobserved prompts.
-An old capture policy cannot revive after OFF/ON or a new runtime epoch.
+Original fetch is called exactly once with its original receiver and arguments;
+the page receives its original promise and Response. Capture, storage and
+acknowledgement are detached. Provider rejection, abort, HTTP failure, stream
+failure, missing/unknown acknowledgement and navigation cannot erase or downgrade
+a saved observation. Storage failure cannot return **Prompt saved**.
 
-## Evidence and compatibility
+A successful SSE response may yield a separate `chatgpt-early-ack/1` assertion.
+The reader accepts a `stream_handoff` with a bounded exchange/topic ID, or an
+inline new-user echo with the exact request message ID, or an empty assistant
+message marked `in_progress`. Any supplied conversation must match the request.
+The correlation is the same fetch closure, never the latest request in a tab.
+HTTP status and completion alone are not semantic acknowledgement. No token is
+decoded, WebSocket followed, full answer accumulated or history fetched.
 
-New `pap-chatgpt-observation/3` intent records bind exact text and source;
-appearance records additionally bind intent digest, event ID and signing key.
-The standalone verifier reports OBSERVED_ONLY control, retrospective coverage,
-client-only assertions and unknown provider receipt. It rejects manufactured
-legacy control claims aimed at these observations.
+The response clone reader inspects at most 64 KiB for at most two seconds; the
+whole observation branch expires after four seconds from fetch invocation. It
+cancels/releases only its own branch after ack, failure, abort or limit. Browser
+chunks can exceed the inspection budget, and tee cloning can buffer additional
+bytes on the provider branch: these are bounded inspection limits, not a claim
+of zero overhead or control over the browser's chunk allocation.
+There are at most eight active MAIN observations and sixteen isolated pending
+qualifiers per document. Up to 1,024 observed message IDs are retained per document
+to exclude retries/resubmits from consuming later qualifiers; exhausting that
+identity budget reports a gap until a fresh document. No prompt history is read.
+Pending relay records expire after 6.5 seconds; new-chat
+authority expires after five. Native deliveries are capped at 32. The page uses
+a 2.5-second delivery deadline and at most one retry; the worker deadline is two
+seconds. Policy polls run each second and expire locally after three seconds.
 
-Historical observation/1 and observation/2 retain their signed meaning through
-isolated readers. Legacy history has no recording consent, anchor retry or Send
-authority. Export/recovery preserves exact signatures, IDs and openings. Selected
-source metadata/text is disclosed only in the previewed export; diagnostics
-contain bounded fixed codes and temporary pseudonyms. A dropped Send is
-attributable without page content: `PAGE_SEND_REJECTED` means the page declined
-to observe the Send, `CAPTURE_REJECTED` means the worker refused it before
-durable observation, and the engine's `CAPTURE_GAP` marks the ordered capture
-decision. Each code is reported at most once per session.
+Each accepted Send has a fresh UUID, even for equal text. Identical delivery
+retries are idempotent; conflicting retries fail. An ack cannot create a prompt
+and must reference its saved event/source/digest/signing key. Duplicate acks are
+idempotent; stale/foreign acks reject. OFF/ON, restart, disconnect or permission
+loss cannot revive old capture authority. An unavailable state cannot hide OFF.
 
-Run `npm run test:chatgpt` and `npm run test:product` using the isolated
-[testing guide](../../development/PRODUCT-TESTING.md). These execute actual
-page/worker code against synthetic dependencies and do not establish installed
-sidebar or real provider acceptance.
+## Navigation and evidence compatibility
 
-`npm run test:capture-browser` exercises a genuine Chrome input event and
-same-document route change while holding a browser lookup across navigation.
-Every page response is a synthetic intercepted fixture; external DNS is blocked.
-It uses a disposable profile/extension, temporary vault, memory keys and synthetic
-native ancestry, without a provider request or sponsor transaction. It complements
-the deterministic failure/race cases; it does not establish installed ChatGPT
-acceptance or app-bound key custody.
+The first qualified request at New Chat may finish across the first same-document
+`/c/<id>` transition. A five-second retained policy is bound to one event and
+document. A fresh challenge targets that Chrome document ID, confirms the
+pending exact request or saved ack, and rechecks live URL, permission and epoch.
+One status-only loading precursor is tolerated without granting new authority;
+repeated loading, replacement documents, unrelated tabs/routes and OFF/ON revoke.
+The evidence retains its original `new-chat` source.
 
-The [recorded Chrome 153 result](../../../test/evidence/new-chat-chrome-153/capture.json)
-binds the test to the worker and content-script hashes. Chrome 153.0.8010.48
-reported both `url` and `status: loading` for the fixture's `history.pushState`,
-and kept the original sender URL. The test holds the first capture lookup until
-the engine follows the conversation, then confirms one exact durable receipt,
-a distinct equal-text later receipt and no new capture while OFF.
+Other same-document navigation, including conversation to New Chat, gets a fresh
+source policy after a document-targeted route challenge. Chrome's stale creation
+URL is accepted only for that authenticated document and current route. No old
+conversation capture authority transfers to the new conversation.
+
+Current contracts: adapter/7, page `2026-09-20`, capture/3, observation/4,
+extraction `chatgpt-new-user-text/1`, acknowledgement `chatgpt-early-ack/1`.
+`normal-request-observed` binds the exact new text, request metadata and source;
+`normal-acknowledgement` binds the existing descriptor digest/event/source/key.
+The verifier reports `OBSERVED_ONLY`, `UTF8_NEW_USER_MESSAGE`, client assertions
+and unknown provider receipt. Ack is not proof of provider receipt, authorship,
+ownership, event truth or complete history.
+
+Historical observation/3 remains a DOM intent/appearance assertion through
+`dom-observation.mjs`; observation/2 and /1 retain their original readers and
+signed meanings. No old artifacts are rewritten. Vault, key custody, recovery,
+blinded anchoring and free export remain shared. Already-durable ON/OFF
+observation/3 records retain their
+existing bounded pending anchor workflow, without new capture authority;
+pre-ON/OFF observation/2 remains read-only without new sponsorship. Diagnostics
+retain bounded content-free codes; prompt/URL/credential telemetry is not added.
+
+## Wire sources and validation limits
+
+The synthetic wire fixtures derive from the pinned Observer source at
+[31ad601](https://github.com/superbasedapp/observer/tree/31ad60124871f80504c1bf9fffe4ee477af78f2d):
+[endpoint reconnaissance](https://github.com/superbasedapp/observer/blob/31ad60124871f80504c1bf9fffe4ee477af78f2d/browser-extension/src/content-main.js),
+[request/stream shapes](https://github.com/superbasedapp/observer/blob/31ad60124871f80504c1bf9fffe4ee477af78f2d/browser-extension/src/parsers.js)
+and [synthetic examples](https://github.com/superbasedapp/observer/blob/31ad60124871f80504c1bf9fffe4ee477af78f2d/browser-extension/src/parsers.test.js).
+The implementation is original and intentionally narrower: it preserves text,
+requires explicit Send, saves before ack and never follows the answer stream.
+These author-reported shapes are assumptions for this adapter, not our own live
+ChatGPT verification. Unknown future shapes produce gaps/unknown ack.
+
+Run `npm run test:chatgpt`, `npm run test:product` and
+`npm run test:capture-browser` using the isolated
+[testing guide](../../development/PRODUCT-TESTING.md). The browser fixture runs
+the shipped observer and relay with genuine Chrome input, synthetic intercepted
+network, a disposable profile, temporary vault and memory keys. External DNS is
+blocked. Native ancestry is synthetic. Installed provider Sends, app-bound
+custody, additional browsers/providers and owner acceptance remain unverified.
+The earlier [DOM fixture result](../../../test/evidence/new-chat-chrome-153/capture.json)
+is historical evidence for its own hashes, not validation of transport capture.
+
+The [Chrome 153 transport result](../../../test/evidence/transport-chrome-153/capture.json)
+records genuine-input synthetic-network coverage and exact script hashes for
+the observer, isolated relay and worker. It does not establish live-provider or
+installed native identity acceptance.

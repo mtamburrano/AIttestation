@@ -4,11 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { buildRecipient, assertPortableExecutable } from '../../recipient/build-macos.mjs';
 import { applicationResourceDirectories, copyApplicationResource, managedResourceFiles } from '../../distribution/package-resources.mjs';
+import { assertObserverBundle } from './build-observer.mjs';
 
 if (process.platform !== 'darwin' || process.argv.length !== 3) {
   throw Error('Usage on macOS: node spikes/browser/chatgpt/build-macos.mjs NEW_OUTPUT_DIRECTORY');
 }
 const started = performance.now(), output = resolve(process.argv[2]);
+await assertObserverBundle();
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 assertPortableExecutable(process.execPath);
 await Promise.all(['verify', 'fast-verify', 'fast-observe'].map(name => stat(join(root, 'spikes/anchor/algorand/bin', name))));

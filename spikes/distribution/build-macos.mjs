@@ -9,6 +9,7 @@ import { canonical } from '../vault/format.mjs';
 import { dependencyInventory, fileInventory, sourceInventory, validateDependencyApproval } from './inventory.mjs';
 import { RELEASE_PROFILE, sha256, validateRelease } from './release.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
+import { assertObserverBundle } from '../browser/chatgpt/build-observer.mjs';
 import { codeSignatureCheckArguments } from './local.mjs';
 import { assertCleanSource, helperProfileFromPlist, readReleaseApproval, readReleaseConfig, readReleaseFile,
   readUpdateSigningKey, releaseArtifactContract, validateBuildConfig, validateHelperProfile, validateReleasePermissions } from './release-inputs.mjs';
@@ -49,6 +50,7 @@ async function validateExtensionPackage(manifest, directory) {
 }
 
 export async function createChromeWebStoreUpload(output) {
+  await assertObserverBundle();
   const staging = await mkdtemp(join(output, '.chrome-web-store-upload-'));
   try {
     const packageRoot = join(staging, 'extension');

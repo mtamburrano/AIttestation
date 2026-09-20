@@ -49,7 +49,7 @@ try {
   await publishRuntimeState(root, runtime);
   if (mode === 'runtime-crash') {
     const hello = { extensionId: CHATGPT_EXTENSION_ID, adapterProfile: CHATGPT_ADAPTER_PROFILE,
-      captureProfile: 'pap-chatgpt-capture/2', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser',
+      captureProfile: 'pap-chatgpt-capture/3', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser',
       browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' }, permissions: ['nativeMessaging'],
       hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [{ id: 17, windowId: 1,
@@ -62,8 +62,9 @@ try {
       kind: 'SET_RECORDING', enabled: true }, { surface: 'desktop' });
     const policy = runtime.engine.capturePolicy()[0];
     const { scope, runtimeEpoch, browserSessionId, tabId, windowId, tabEpoch, destination } = policy;
-    await runtime.engine.observe({ profile: 'pap-chatgpt-capture/2', kind: 'send-intent', token: policy.token,
+    await runtime.engine.observe({ profile: 'pap-chatgpt-capture/3', kind: 'request-observed', token: policy.token,
       eventId: crypto.randomUUID(), inputMethod: 'send-button', text: 'CRASH_PROMPT_CANARY',
+      request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'crash-message', conversationId: 'synthetic' },
       source: { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
         scope, runtimeEpoch, browserSessionId, tabId, windowId, tabEpoch, destination, documentId: 'synthetic-document' } });
     await runtime.engine.drain();
