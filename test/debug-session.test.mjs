@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, realpath, rm, readFile, readdir, lstat, chmod, symlink, link, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { OwnerDebugSession, DEBUG_SESSION_LIMITS, DEBUG_STORAGE_LIMITS } from '../spikes/development/debug-session.mjs';
 import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
@@ -11,12 +12,16 @@ import { productFixture, SYNTHETIC_CANARY } from '../spikes/development/product-
 import { restrictFixtureNetwork } from '../spikes/development/fixture-network.mjs';
 import { recordingFixture, until } from './recording-fixture.mjs';
 import { publishRuntimeState, RUNTIME_STATE_PROFILE } from '../spikes/development/runtime-state.mjs';
+import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 
 async function isolated(t) {
   const root = await realpath(await mkdtemp('/private/tmp/pap-debug-test-'));
   t.after(() => rm(root, { recursive: true, force: true })); return root;
 }
 const events = content => JSON.parse(content).segments.flatMap(segment => segment.events);
+const freshRequest = session => {
+  const { sessionId, revision } = session.status(); return { sessionId, revision, acknowledged: true };
+};
 function record(session, code = 'ENGINE_STARTED', data = {}) {
   session.diagnostics.record(code, { epochId: 'synthetic-epoch', ...data });
 }
@@ -54,6 +59,115 @@ test('recording requires explicit opt-in, persists stop/resume and exports an im
   assert.equal(session.status().state, 'RECORDING');
   session.close(); session = new OwnerDebugSession(root);
   assert.equal(session.status().state, 'RECORDING'); assert.equal(events(session.export()).length, 3);
+});
+
+test('fresh sessions require paused current-session acknowledgment and persist empty without changing exports', async t => {
+  const root = await isolated(t), limits = { events: 2, segmentEvents: 1 }; let now = 1000;
+  let session = new OwnerDebugSession(root, { now: () => now, limits });
+  t.after(() => session.close());
+  assert.throws(() => session.startFresh(freshRequest(session)));
+  assert.deepEqual(await readdir(root), []);
+  session.setEnabled(true);
+  for (let i = 0; i < 3; i++) record(session);
+  const id = session.status().sessionId;
+  assert.throws(() => session.startFresh(freshRequest(session)), 'active recording must be paused first');
+  assert.equal(session.status().retainedEvents, 2);
+  session.setEnabled(false);
+  const request = freshRequest(session);
+  const saved = session.export(), before = await bytes(join(root, 'debug-session'));
+  await writeFile(join(root, 'saved-debug-session.json'), saved, { mode: 0o600 });
+  for (const invalid of [undefined, null, [], {}, { sessionId: id }, { ...request, acknowledged: false },
+    { ...request, acknowledged: 'true' }, { ...request, sessionId: '0'.repeat(32) }, { ...request, enabled: true }]) {
+    assert.throws(() => session.startFresh(invalid));
+    assert.equal(session.export(), saved);
+    assert.deepEqual(await bytes(join(root, 'debug-session')), before);
+  }
+  now++;
+  const fresh = session.startFresh(request);
+  assert.notEqual(fresh.sessionId, id); assert.equal(fresh.state, 'STOPPED');
+  assert.equal(fresh.retainedEvents, 0); assert.equal(fresh.segments, 0); assert.equal(fresh.droppedEvents, 0);
+  const empty = session.export();
+  assert.equal(JSON.parse(empty).createdAt, now); assert.equal(JSON.parse(empty).nextSegment, 1);
+  assert.ok(Object.values(await bytes(join(root, 'debug-session'))).every(value => !value.includes(events(saved)[0].epochId)));
+  assert.throws(() => session.startFresh(request), 'retry cannot clear the replacement');
+  assert.equal(session.export(), empty);
+  const beforeReopen = freshRequest(session);
+  session.close(); assert.throws(() => session.startFresh(beforeReopen));
+  session = new OwnerDebugSession(root, { now: () => now, limits });
+  assert.equal(session.export(), empty); assert.equal(session.status().state, 'STOPPED');
+  assert.throws(() => session.startFresh(beforeReopen), 'reopening invalidates outstanding acknowledgments');
+  record(session); assert.equal(session.status().retainedEvents, 0);
+  session.setEnabled(true); record(session);
+  assert.equal(session.status().sessionId, fresh.sessionId); assert.equal(session.status().retainedEvents, 1);
+  assert.equal(await readFile(join(root, 'saved-debug-session.json'), 'utf8'), saved);
+});
+
+test('fresh-session acknowledgment expires across another view resuming and pausing in the same millisecond', async t => {
+  const root = await isolated(t), session = new OwnerDebugSession(root, { now: () => 1000 }); t.after(() => session.close());
+  session.setEnabled(true); record(session); session.setEnabled(false);
+  const stale = freshRequest(session);
+  session.setEnabled(true); record(session, 'BRIDGE_TIMEOUT'); session.setEnabled(false);
+  const current = freshRequest(session), saved = session.export();
+  assert.equal(current.sessionId, stale.sessionId); assert.notEqual(current.revision, stale.revision);
+  assert.throws(() => session.startFresh(stale)); assert.equal(session.export(), saved);
+  assert.equal(session.startFresh(current).retainedEvents, 0);
+});
+
+test('fresh-session crashes recover exactly the prior session or the committed empty replacement', async t => {
+  for (const phase of ['before-commit', 'after-commit', 'incomplete-commit']) await t.test(phase, async t => {
+    const root = await isolated(t);
+    const result = child(root, phase === 'before-commit' ? 'fresh-before-commit' : 'fresh-after-commit');
+    assert.equal(result.signal, 'SIGKILL', result.stderr);
+    const path = join(root, 'saved-debug-session.json'), saved = await readFile(path, 'utf8');
+    if (phase === 'incomplete-commit') {
+      const walPath = join(root, 'debug-session/journal.sqlite-wal'), wal = await readFile(walPath);
+      assert.ok(wal.length > 32); await writeFile(walPath, wal.subarray(0, wal.length - 1));
+    }
+    const session = new OwnerDebugSession(root); t.after(() => session.close());
+    assert.equal(session.status().state, 'STOPPED');
+    if (phase === 'after-commit') {
+      assert.notEqual(session.status().sessionId, JSON.parse(saved).sessionId);
+      assert.equal(session.status().retainedEvents, 0); assert.equal(session.status().segments, 0);
+      assert.equal(session.status().droppedEvents, 0);
+    } else assert.equal(session.export(), saved);
+    const id = session.status().sessionId, retained = session.status().retainedEvents;
+    session.setEnabled(true); record(session);
+    assert.equal(session.status().sessionId, id); assert.equal(session.status().retainedEvents, retained + 1);
+    assert.equal(await readFile(path, 'utf8'), saved);
+  });
+});
+
+test('fresh-session precommit failure retains the prior journal and refuses further actions', async t => {
+  const root = await isolated(t); let armed = false;
+  let session = new OwnerDebugSession(root, { beforeCommit: () => { if (armed) throw Error('SYNTHETIC_WRITE_FAILURE'); } });
+  t.after(() => session.close());
+  session.setEnabled(true); record(session); session.setEnabled(false);
+  const saved = session.export(), before = await bytes(join(root, 'debug-session'));
+  armed = true;
+  const request = freshRequest(session);
+  assert.throws(() => session.startFresh(request));
+  assert.equal(session.status().state, 'UNAVAILABLE');
+  assert.throws(() => session.startFresh(request));
+  // Closing SQLite removes its empty WAL; the database and index bytes must survive.
+  assert.equal(before['journal.sqlite-wal'].length, 0); delete before['journal.sqlite-wal'];
+  assert.deepEqual(await bytes(join(root, 'debug-session')), before);
+  session.close(); session = new OwnerDebugSession(root);
+  assert.equal(session.export(), saved);
+});
+
+test('fresh sessions refuse clock rollback and unsafe journal permissions introduced while paused', async t => {
+  for (const mutation of ['clock', 'permissions']) await t.test(mutation, async t => {
+    const root = await isolated(t); let now = 1000;
+    const session = new OwnerDebugSession(root, { now: () => now }); t.after(() => session.close());
+    session.setEnabled(true); record(session); session.setEnabled(false);
+    const request = freshRequest(session);
+    const directory = join(root, 'debug-session'), before = await bytes(directory);
+    if (mutation === 'clock') now--;
+    else await chmod(join(directory, 'journal.sqlite'), 0o644);
+    assert.throws(() => session.startFresh(request)); assert.equal(session.status().state, 'UNAVAILABLE');
+    assert.equal(before['journal.sqlite-wal'].length, 0); delete before['journal.sqlite-wal'];
+    assert.deepEqual(await bytes(directory), before);
+  });
 });
 
 test('a deterministic SIGKILL after WAL commit retains both events and starts a fresh diagnostic epoch', async t => {
@@ -238,11 +352,13 @@ test('unsafe and malformed existing resources fail closed without adoption or re
   };
   for (const [name, mutate] of Object.entries(mutations)) await t.test(name, async t => {
     const root = await isolated(t), directory = join(root, 'debug-session'), path = join(directory, 'journal.sqlite');
-    let session = new OwnerDebugSession(root); session.setEnabled(true); record(session); session.close();
+    let session = new OwnerDebugSession(root); session.setEnabled(true); record(session); session.setEnabled(false);
+    const request = freshRequest(session); session.close();
     await mutate(root, directory, path);
     const before = await bytes(directory), mode = (await lstat(path)).mode;
     session = new OwnerDebugSession(root);
     assert.equal(session.status().state, 'UNAVAILABLE'); assert.throws(() => session.setEnabled(true));
+    assert.throws(() => session.startFresh(request));
     assert.throws(() => session.export()); record(session); session.close();
     assert.deepEqual(await bytes(directory), before); assert.equal((await lstat(path)).mode, mode);
   });
@@ -251,6 +367,72 @@ test('unsafe and malformed existing resources fail closed without adoption or re
   assert.deepEqual(await readdir(join(root, 'debug-session')), []);
   const alias = join(root, 'alias'); await symlink(root, alias);
   const noncanonical = new OwnerDebugSession(alias); assert.equal(noncanonical.status().state, 'UNAVAILABLE'); noncanonical.close();
+});
+
+test('authenticated fresh-session API changes only diagnostics and rejects stale, active and unpaired requests', async t => {
+  const root = await isolated(t), session = new OwnerDebugSession(root); t.after(() => session.close());
+  const network = restrictFixtureNetwork(root); let f;
+  t.after(async () => { await f?.close(); network.restore(); });
+  const installation = await new InstallationLifecycle({ supportDirectory: join(root, 'installation'),
+    chromeSupportDirectory: join(root, 'chrome'), browserHost: join(root, 'synthetic-host'), sequence: 1 }).init();
+  await installation.enable();
+  f = await recordingFixture(root, { installation, diagnostics: session.diagnostics, debugSession: session, network });
+  const api = async (path, body = {}, headers = {}) => {
+    const url = new URL(f.runtime.dashboardURL);
+    const response = await fetch(new URL(path, url), { method: 'POST', headers: {
+      Origin: url.origin, Authorization: `Bearer ${url.hash.slice(1)}`, ...headers }, body: JSON.stringify(body) });
+    return { status: response.status, value: await response.json() };
+  };
+  session.setEnabled(true); await f.recording(true); f.send(SYNTHETIC_CANARY);
+  await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
+  assert.equal((await api('/debug-session/new', freshRequest(session))).status, 400);
+  session.setEnabled(false);
+  const request = freshRequest(session);
+  const saved = await api('/debug-session/export'); assert.equal(saved.status, 200);
+  await writeFile(join(root, 'saved-debug-session.json'), saved.value.content, { mode: 0o600 });
+  const snapshot = async directory => {
+    const files = await bytes(directory);
+    for (const name of await readdir(directory)) if (name !== 'debug-session' && (await lstat(join(directory, name))).isDirectory()) {
+      files[name] = await snapshot(join(directory, name));
+    }
+    return files;
+  };
+  const baseline = { engine: f.runtime.engine.state(), vault: f.runtime.session.vault.inspect(),
+    receipts: f.runtime.session.receipts.list(), installation: await installation.status(),
+    files: await snapshot(root), anchors: f.anchorCalls, confirmed: f.confirmed };
+  const journal = await bytes(join(root, 'debug-session'));
+  for (const headers of [{ Authorization: 'Bearer invalid' }, { Authorization: '' },
+    { Origin: 'https://hostile.invalid' }, { Origin: '' }]) {
+    assert.equal((await api('/debug-session/new', request, headers)).status, 400);
+  }
+  // Fetch normalizes Host; send an actual mismatched HTTP Host to exercise that boundary.
+  const url = new URL(f.runtime.dashboardURL);
+  const wrongHost = await new Promise((resolve, reject) => {
+    const req = httpRequest(new URL('/debug-session/new', url), { method: 'POST', headers: {
+      Host: 'hostile.invalid', Origin: url.origin, Authorization: `Bearer ${url.hash.slice(1)}` } }, response => {
+      response.resume(); response.on('end', () => resolve(response.statusCode));
+    });
+    req.on('error', reject); req.end(JSON.stringify(request));
+  });
+  assert.equal(wrongHost, 400);
+  for (const invalid of [{}, { ...request, acknowledged: false }, { ...request, acknowledged: 'true' },
+    { ...request, sessionId: '0'.repeat(32) }, { ...request, includeEvidence: true }]) {
+    assert.equal((await api('/debug-session/new', invalid)).status, 400);
+  }
+  assert.deepEqual(await bytes(join(root, 'debug-session')), journal);
+  const fresh = await api('/debug-session/new', request);
+  assert.equal(fresh.status, 200); assert.notEqual(fresh.value.sessionId, request.sessionId);
+  assert.equal(fresh.value.state, 'STOPPED'); assert.equal(fresh.value.retainedEvents, 0);
+  assert.equal((await api('/debug-session/new', request)).status, 400);
+  assert.deepEqual(f.runtime.engine.state(), baseline.engine); assert.deepEqual(f.runtime.session.vault.inspect(), baseline.vault);
+  assert.deepEqual(f.runtime.session.receipts.list(), baseline.receipts); assert.deepEqual(await installation.status(), baseline.installation);
+  assert.deepEqual(await snapshot(root), baseline.files);
+  assert.equal(f.anchorCalls, baseline.anchors); assert.equal(f.confirmed, baseline.confirmed); assert.equal(f.releases.length, 0);
+  assert.equal((await api('/dashboard/state')).value.debugSession.sessionId, fresh.value.sessionId);
+  session.setEnabled(true); f.send('SYNTHETIC_AFTER_FRESH_SESSION');
+  await until(() => f.runtime.session.receipts.list().length === 2); await f.runtime.engine.drain();
+  assert.ok(events(session.export()).some(event => event.code === 'NORMAL_PROMPT_SAVED'));
+  assert.equal(await readFile(join(root, 'saved-debug-session.json'), 'utf8'), saved.value.content);
 });
 
 test('dashboard recording/export obey local authentication and cannot change engine or integration authority', async t => {

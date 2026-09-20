@@ -77,6 +77,15 @@ and scrolled into view when necessary, including private debug export near the
 bottom. If an action hides its controls, its feedback moves outside that hidden
 container. The global message remains available, but is never the sole feedback.
 
+Private builds expose persistent debug controls in Settings. Pause/resume retains
+the same session. Save downloads an immutable snapshot. Start fresh session is
+separate: pause first and acknowledge saving or discarding the current diagnostics.
+The owner-authenticated request binds to that session ID and revision and atomically replaces
+only the debug journal with an empty, paused session. Evidence, prompt recording,
+integration and sponsor state are unchanged. See the
+[private debug guide](../../development/README.md#persistent-private-debug-sessions)
+for retention, storage guards and API details.
+
 ## Isolated checks
 
 `npm test` covers menu framing, API controls, source invalidation, account loss,

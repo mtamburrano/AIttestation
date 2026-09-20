@@ -100,13 +100,15 @@ function validateState(state, limits) {
 // switch, evidence-vault path, send state or credentials are accepted here.
 export class OwnerDebugSession {
   #control; #directory; #path; #db; #identity; #directoryIdentity; #state; #failed = false; #closed = false;
-  #limits; #now; #timer; #afterCommit;
-  constructor(controlDirectory, { limits = {}, now = Date.now, afterCommit = () => {} } = {}) {
+  #limits; #now; #timer; #beforeCommit; #afterCommit;
+  #revision = randomBytes(16).toString('hex');
+  constructor(controlDirectory, { limits = {}, now = Date.now, beforeCommit = () => {}, afterCommit = () => {} } = {}) {
     keys(limits, Object.keys(limits).join(','));
     for (const [key, value] of Object.entries(limits)) if (!Object.hasOwn(DEBUG_SESSION_LIMITS, key)
         || !Number.isSafeInteger(value) || value < (key.endsWith('Bytes') || key === 'bytes' ? 1024 : 1)
         || value > DEBUG_SESSION_LIMITS[key]) throw fail();
-    this.#limits = { ...DEBUG_SESSION_LIMITS, ...limits }; this.#now = now; this.#afterCommit = afterCommit;
+    this.#limits = { ...DEBUG_SESSION_LIMITS, ...limits }; this.#now = now;
+    this.#beforeCommit = beforeCommit; this.#afterCommit = afterCommit;
     this.#control = controlDirectory; this.#directory = join(controlDirectory, 'debug-session');
     this.#path = join(this.#directory, 'journal.sqlite');
     try {
@@ -224,7 +226,9 @@ export class OwnerDebugSession {
   #save() {
     this.#files();
     const content = JSON.stringify(validateState(this.#state, this.#limits));
+    this.#beforeCommit();
     this.#db.prepare('UPDATE journal SET payload=? WHERE id=1').run(content);
+    this.#revision = randomBytes(16).toString('hex');
     // FULL WAL commit precedes return. Checkpointing bounds old on-disk pages;
     // a crash between these steps still retains the committed event.
     this.#afterCommit();
@@ -258,6 +262,7 @@ export class OwnerDebugSession {
     try { this.#prune(); } catch { this.#disable(); }
     if (this.#failed || this.#closed) return { state: 'UNAVAILABLE', retainedEvents: 0, segments: 0, exportAvailable: false };
     return { state: this.#state?.enabled ? 'RECORDING' : 'STOPPED', sessionId: this.#state?.sessionId ?? null,
+      revision: this.#state ? this.#revision : null,
       retainedEvents: this.#state?.segments.reduce((sum, segment) => sum + segment.events.length, 0) ?? 0,
       segments: this.#state?.segments.length ?? 0, droppedEvents: this.#state?.droppedEvents ?? 0,
       exportAvailable: Boolean(this.#state), limits: { ...this.#limits } };
@@ -269,6 +274,23 @@ export class OwnerDebugSession {
       else {
         this.#prune(); this.#state.enabled = enabled; this.#state.updatedAt = this.#time(); this.#save();
       }
+      return this.status();
+    } catch { this.#disable(); throw fail(); }
+  }
+  startFresh(request) {
+    keys(request, 'sessionId,revision,acknowledged');
+    if (request.acknowledged !== true || !this.#state || request.sessionId !== this.#state.sessionId
+        || request.revision !== this.#revision
+        || this.#state.enabled || this.#failed || this.#closed) throw fail();
+    try {
+      this.#files();
+      if (JSON.stringify(this.#read(this.#db)) !== JSON.stringify(this.#state)) throw fail();
+      const now = this.#time();
+      // Replace the single journal row atomically. Pausing and binding consent to
+      // current ID/revision prevents stale consent after replacement or resume/pause.
+      this.#state = { profile: PROFILE, sessionId: randomBytes(16).toString('hex'), enabled: false,
+        createdAt: now, updatedAt: now, droppedEvents: 0, nextSegment: 1, segments: [] };
+      this.#save();
       return this.status();
     } catch { this.#disable(); throw fail(); }
   }

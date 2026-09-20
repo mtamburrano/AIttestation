@@ -7,6 +7,7 @@ if (['history', 'settings', 'integrations'].includes(section)) $(section).scroll
 let state, busy = false, closed = false, acceptedPreview = null, selectionRevision = 0, supportId = null, recovery = null, recoveryTimer, updateAvailable = false;
 const selected = new Set();
 let attentionOnly = false, historyOffset = 0, actionFeedback = null;
+let acknowledgedDebugSession = null;
 const states = {
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
   CONFIGURATION_CONFLICT: ['Connection needs attention', 'An existing Chrome configuration was left untouched. Check your private setup before enabling.'],
@@ -29,6 +30,10 @@ async function api(path, data = {}) {
 function node(tag, text, className) {
   const value = document.createElement(tag); value.textContent = text; if (className) value.className = className; return value;
 }
+function currentDebugAcknowledgment(debug = state?.debugSession) {
+  return debug?.state === 'STOPPED' && acknowledgedDebugSession?.sessionId === debug.sessionId
+    && acknowledgedDebugSession?.revision === debug.revision;
+}
 function controls() {
   for (const button of document.querySelectorAll('button')) button.disabled = busy || closed;
   for (const id of ['enable', 'disable', 'prepare-remove']) $(id).disabled ||= !state?.integration.manageable;
@@ -39,6 +44,9 @@ function controls() {
   $('download-update').disabled ||= !state?.integration.updatesAvailable || !updateAvailable;
   $('debug-session-toggle').disabled ||= !state?.available || !state?.debugSession || state.debugSession.state === 'UNAVAILABLE';
   $('debug-session-save').disabled ||= !state?.available || !state?.debugSession?.exportAvailable;
+  const canStartFresh = state?.available && state?.debugSession?.state === 'STOPPED' && state.debugSession.sessionId;
+  $('debug-session-acknowledge').disabled = busy || closed || !canStartFresh;
+  $('debug-session-new').disabled ||= !canStartFresh || !currentDebugAcknowledgment();
 }
 function action(id, run) {
   $(id).onclick = async () => {
@@ -90,6 +98,9 @@ function choice(id, text) {
   label.append(input, document.createTextNode(text)); return label;
 }
 function render(value) {
+  if (!currentDebugAcknowledgment(value.debugSession)) {
+    acknowledgedDebugSession = null; $('debug-session-acknowledge').checked = false;
+  }
   state = value;
   $('release-channel').textContent = state.integration.releaseClass === 'RELEASE_CANDIDATE'
     ? 'ATTESTAMP RELEASE CANDIDATE — PRE-PUBLICATION REVIEW ONLY. Stable updates are disabled.'
@@ -102,8 +113,9 @@ function render(value) {
     const debug = state.debugSession;
     $('debug-session-status').textContent = debug.state === 'UNAVAILABLE'
       ? 'Debug recording unavailable. Existing journal files need inspection; they will not be repaired automatically.'
-      : `${debug.state === 'RECORDING' ? 'Debug recording active' : 'Debug recording stopped'} · ${debug.retainedEvents} retained events · ${debug.segments} segments · ${debug.droppedEvents} older events removed.`;
-    $('debug-session-toggle').textContent = debug.state === 'RECORDING' ? 'Stop debug recording' : 'Start debug recording';
+      : `${debug.state === 'RECORDING' ? 'Debug recording active' : debug.sessionId ? 'Debug recording paused' : 'Debug recording not started'} · ${debug.retainedEvents} retained events · ${debug.segments} segments · ${debug.droppedEvents} older events removed.`;
+    $('debug-session-toggle').textContent = debug.state === 'RECORDING' ? 'Pause debug recording'
+      : debug.sessionId ? 'Resume debug recording' : 'Start debug recording';
   }
   const [title, help] = states[state.integration.code] ?? states.ENGINE_UNAVAILABLE;
   $('effective-state').textContent = title; $('effective-help').textContent = help;
@@ -228,6 +240,7 @@ action('clear-recovery', async () => clearRecovery());
 action('preview-support', async () => { supportId = null; const preview = await api('/diagnostics/preview', { operationIds: [], components: [] }); supportId = preview.previewId; $('support').textContent = JSON.stringify(preview.report, null, 2); });
 action('save-support', async () => { const result = await api('/diagnostics/export', { previewId: supportId }); download(result.content, 'attestamp-support.json'); });
 action('debug-session-toggle', async () => {
+  acknowledgedDebugSession = null; $('debug-session-acknowledge').checked = false;
   try { await api('/debug-session/recording', { enabled: state.debugSession.state !== 'RECORDING' }); }
   finally { await refresh(); }
 });
@@ -236,6 +249,23 @@ action('debug-session-save', async () => {
     const result = await api('/debug-session/export'); download(result.content, 'attestamp-debug-session.json');
     notify('Private debug session saved. Attach this file after testing when you choose to share it.');
   } finally { await refresh(); }
+});
+$('debug-session-acknowledge').onchange = () => {
+  acknowledgedDebugSession = $('debug-session-acknowledge').checked && state?.debugSession?.state === 'STOPPED'
+    ? { sessionId: state.debugSession.sessionId, revision: state.debugSession.revision } : null;
+  controls();
+};
+action('debug-session-new', async () => {
+  if (!currentDebugAcknowledgment()) {
+    notify('Pause debug recording and acknowledge the current session first.'); return;
+  }
+  const request = { ...acknowledgedDebugSession, acknowledged: true };
+  acknowledgedDebugSession = null; $('debug-session-acknowledge').checked = false;
+  try {
+    await api('/debug-session/new', request);
+    notify('Fresh debug session created with no retained events. Resume debug recording when ready.');
+  } catch (error) { notify(error.message); }
+  finally { await refresh(); }
 });
 action('close', async () => {
   await api('/close'); closed = true; clearInterval(timer); invalidatePreview(); clearRecovery();

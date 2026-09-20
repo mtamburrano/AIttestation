@@ -64,8 +64,13 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
           if (request.url === '/debug-session/export' && !Object.keys(data).length) {
             return reply(response, 200, { content: runtime.debugSession.export() });
           }
+          if (request.url === '/debug-session/new') {
+            return reply(response, 200, runtime.debugSession.startFresh(data));
+          }
           throw Error('Unsupported private debug action');
-        } catch { return reply(response, 400, { error: 'Private debug recording is unavailable. Existing journal files have been left in place.' }); }
+        } catch { return reply(response, 400, { error: request.url === '/debug-session/new'
+          ? 'Fresh session could not be confirmed. Refresh, pause debug recording and acknowledge the current session before trying again. Unsafe journals are not repaired.'
+          : 'Private debug recording is unavailable. Existing journal files have been left in place.' }); }
       }
       if (request.url.startsWith('/diagnostics/')) {
         try {

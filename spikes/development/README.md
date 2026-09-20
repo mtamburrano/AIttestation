@@ -10,11 +10,32 @@ temporary resources and leaves the retained private installation untouched.
 New private builds expose **Settings → Private debug session** in the dashboard.
 Choose **Start debug recording** once before testing. A visible dashboard banner
 confirms recording; events then append automatically, including bridge failures
-and later runtime restarts. **Stop debug recording** persists that choice.
-Starting again resumes the same retained session. **Save debug session** downloads
+and later runtime restarts. **Pause debug recording** persists that choice.
+**Resume debug recording** continues the same retained session. Neither control
+clears diagnostics or changes the session ID. **Save debug session** downloads
 one immutable JSON snapshot of all retained segments; later recording cannot
 change that downloaded snapshot. Share it explicitly after testing if needed.
 There is no upload or per-operation export requirement.
+
+To begin a separate test, pause debug recording and save any diagnostics you
+need. Acknowledge **I have saved the current debug session or accept removing its
+retained diagnostics**, then choose **Start fresh session**. The replacement has
+a new session ID, zero retained events/segments and reset retention counters.
+It remains paused until you choose **Resume debug recording**. The acknowledgment
+is required even after downloading: the app cannot verify that a download was
+kept. Fresh sessions change only the debug journal; evidence, vault, keys, prompt
+recording preference, integration state, sponsor accounting and saved downloads
+remain unchanged.
+
+The owner dashboard exposes authenticated POST controls at
+`/debug-session/recording` (`{ enabled: boolean }`), `/debug-session/export` (`{}`)
+and `/debug-session/new` (`{ sessionId, revision, acknowledged: true }`). A fresh-session
+request requires the current paused session ID and revision from dashboard state.
+Revisions change on journal writes and reopen, so stale acknowledgment cannot
+clear diagnostics after another view resumes/pauses recording or after a restart.
+Retries cannot clear a newer session. The single journal row is replaced in one FULL-synchronous
+WAL commit. An interruption leaves either the prior session or the empty new
+session, never a mixture. Unsafe journal state is refused, not reset or repaired.
 
 This uses the existing content-free diagnostic vocabulary and per-runtime HMAC
 correlation IDs. Each restart gets a fresh engine epoch and correlation key; no
@@ -61,7 +82,9 @@ npm run test:debug-session
 The suite allocates fresh `/private/tmp/pap-debug-test-*` resources, uses synthetic
 provider/anchor dependencies, checks process crashes and authority revocation,
 rotation/expiry, unsafe files and privacy canaries, and compares recording on/off
-against the same product scenarios. It requires local loopback/Unix-socket access.
+against the same product scenarios. It also checks acknowledged fresh sessions,
+stale requests, unchanged product state and crashes before/after replacement.
+It requires local loopback/Unix-socket access.
 The signed, installed workflow below is for explicitly scheduled platform checks.
 
 This route prepares the actual ON/OFF recorder, encrypted durable vault, native

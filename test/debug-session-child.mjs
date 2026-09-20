@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { OwnerDebugSession } from '../spikes/development/debug-session.mjs';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
 import { FileKeyStore } from './file-key-store.mjs';
@@ -15,10 +16,21 @@ assert.match(root, /^\/private\/tmp\/pap-debug-test-[^/]+$/);
 process.umask(0);
 const network = restrictFixtureNetwork(root);
 let armed = false;
-const session = new OwnerDebugSession(root, { afterCommit: () => {
-  if (armed && mode === 'wal-crash') process.kill(process.pid, 'SIGKILL');
+const session = new OwnerDebugSession(root, { beforeCommit: () => {
+  if (armed && mode === 'fresh-before-commit') process.kill(process.pid, 'SIGKILL');
+}, afterCommit: () => {
+  if (armed && ['wal-crash', 'fresh-after-commit'].includes(mode)) process.kill(process.pid, 'SIGKILL');
 } });
 session.setEnabled(true);
+if (mode.startsWith('fresh-')) {
+  session.diagnostics.record('ENGINE_STARTED', { epochId: 'synthetic-before-replacement' });
+  session.setEnabled(false);
+  writeFileSync(join(root, 'saved-debug-session.json'), session.export(), { mode: 0o600 });
+  armed = true;
+  const { sessionId, revision } = session.status();
+  session.startFresh({ sessionId, revision, acknowledged: true });
+  assert.fail('Fresh-session crash hook was not reached');
+}
 if (mode === 'malformed-wal') {
   session.diagnostics.record('ENGINE_STARTED', { epochId: 'synthetic' }); session.close();
   const db = new DatabaseSync(join(root, 'debug-session/journal.sqlite'));
