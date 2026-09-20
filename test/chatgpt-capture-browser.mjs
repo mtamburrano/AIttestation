@@ -57,7 +57,7 @@ try {
   report.observerSHA256 = createHash('sha256').update(await readFile(join(extension, 'fetch-observer.js'))).digest('hex');
   report.contentSHA256 = createHash('sha256').update(await readFile(join(extension, 'content-script.js'))).digest('hex');
   await writeFile(join(extension, 'service-worker.js'), `
-    globalThis.__writes=[];globalThis.__gate=null;globalThis.__captureProbes=[];globalThis.__routes=[];globalThis.__proofs=[];
+    globalThis.__writes=[];globalThis.__gate=null;globalThis.__captureProbes=[];globalThis.__routes=[];globalThis.__proofs=[];globalThis.__policies=[];
     const event=()=>({listeners:[],addListener(f){this.listeners.push(f)},emit(v){this.listeners.forEach(f=>f(v))}});
     chrome.runtime.connectNative=()=>globalThis.__native={onMessage:event(),onDisconnect:event(),postMessage:m=>__writes.push(m),disconnect(){}};
     const add=chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
@@ -78,6 +78,7 @@ try {
     chrome.tabs.sendMessage=async(...args)=>{
       const result=await send(...args);
       if(args[1].kind==='PAP_CONFIRM_NEW_CHAT')__proofs.push({confirmed:result?.confirmed===true});
+      if(args[1].kind==='PAP_CAPTURE_POLICY'&&result===true)__policies.push({url:args[1].policy?.expectedUrl,state:args[1].state});
       return result;
     };
   ` + worker + `
@@ -202,7 +203,25 @@ try {
   await wait(() => runtime.adapter.scopes().some(source => source.destination === 'new-chat'));
   await delay(1100);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
-  await send(); await wait(() => runtime.session.receipts.list().length === 3);
+  // Hold only fixture page-message delivery. The genuine Send, original fetch,
+  // provider response, route and authenticated policy all continue independently.
+  const policyStart = await evaluate(workerSession, '__policies.length');
+  await evaluate(page, `globalThis.heldTransport=[];globalThis.originalPostMessage=window.postMessage;
+    window.postMessage=function(message,...args){
+      if(message?.channel==='pap-chatgpt-transport/1'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
+      else return Reflect.apply(originalPostMessage,this,[message,...args]);
+    }`);
+  await send();
+  await wait(() => evaluate(page, `heldTransport.some(message=>message[0].kind==='request')&&providerResponses===3`));
+  await wait(() => evaluate(workerSession, `__policies.slice(${policyStart}).some(value=>value.state==='READY'&&value.url==='https://chatgpt.com/c/synthetic-conversation')`));
+  assert.equal(runtime.session.receipts.list().length, 2);
+  assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
+  await evaluate(page, `window.postMessage=originalPostMessage;for(const args of heldTransport)Reflect.apply(originalPostMessage,window,args);heldTransport=[]`);
+  await wait(() => runtime.session.receipts.list().length === 3);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Prompt saved'`));
+  assert.equal(runtime.session.status().versions[2].source.destination, 'new-chat');
+  assert.equal(await evaluate(page, 'providerSends'), 3);
+  report.checks.push('FIRST_SEND_ROUTE_POLICY_PRECEDES_MAIN_TO_ISOLATED_REQUEST_DELIVERY');
   report.checks.push('CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD');
   await setRecording(false);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));

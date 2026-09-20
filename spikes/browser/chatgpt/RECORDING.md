@@ -57,6 +57,12 @@ composer emptiness and rendered-message confirmation are removed. The minimal
 qualifier still needs its supported controls when an actual Send occurs.
 The existing sidebar remains ON/OFF, effective status and Dashboard/History.
 
+Page feedback follows human Send order, including refused Sends and requests
+whose bodies cannot be extracted. Late request messages, gaps or durable-save
+results may update their own event, but cannot replace the latest Send's result.
+Policy refresh preserves that result while its source remains current; OFF and
+source revocation still take precedence over pending feedback.
+
 The isolated relay accepts only a bounded request/ack message for its own pending
 trusted qualifier. MAIN never receives an engine token or control API. The worker
 supplies source metadata after authenticating extension sender, active top-level
@@ -107,6 +113,12 @@ The first qualified request at New Chat may finish across the first same-documen
 `/c/<id>` transition. A five-second retained policy is bound to one event and
 document. A fresh challenge targets that Chrome document ID, confirms the
 pending exact request or saved ack, and rechecks live URL, permission and epoch.
+A fresh route policy can arrive before the observer's request message. The
+isolated relay retains bounded pending qualifiers across that transition under
+the same runtime, browser session and tab epoch, without extending their original
+1.5-second deadlines or creating evidence. Once the matching request arrives,
+the worker and ordered engine bind one first event; its five-second continuation bound
+remains and it is pinned to that first route.
 One status-only loading precursor is tolerated without granting new authority;
 repeated loading, replacement documents, unrelated tabs/routes and OFF/ON revoke.
 The evidence retains its original `new-chat` source.

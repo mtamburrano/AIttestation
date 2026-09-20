@@ -18,7 +18,7 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
   url = 'https://chatgpt.com/c/test-conversation', fetchResponse = null,
   clock = { setTimeout, clearTimeout, performance } } = {}) {
   let listener, clicks = 0, injections = 0;
-  const timers = new Set();
+  const timers = new Set(), transportHolds = new Map();
   const observers = [], events = {}, windowEvents = {}, notifications = [], checks = [];
   const changed = () => { for (const observer of observers) observer(); };
   class Textarea {
@@ -101,9 +101,24 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
       } } },
   };
   sandbox.window = sandbox; sandbox.top = sandbox;
-  sandbox.postMessage = (message, origin) => queueMicrotask(() => {
-    for (const callback of windowEvents.message ?? []) callback({ source: runInContext('window', context), origin, data: structuredClone(message) });
+  const deliverTransport = ({ data, origin }) => queueMicrotask(() => {
+    for (const callback of windowEvents.message ?? []) callback({ source: runInContext('window', context), origin, data });
   });
+  page.holdTransport = kind => {
+    if (transportHolds.has(kind)) throw Error('TRANSPORT_ALREADY_HELD');
+    const messages = [];
+    transportHolds.set(kind, messages);
+    return { messages, release() {
+      if (transportHolds.get(kind) !== messages) return;
+      transportHolds.delete(kind);
+      for (const message of messages) deliverTransport(message);
+    } };
+  };
+  sandbox.postMessage = (message, origin) => {
+    const event = { data: structuredClone(message), origin };
+    const held = transportHolds.get(message.kind);
+    if (held) held.push(event); else deliverTransport(event);
+  };
   page.requests = [];
   sandbox.fetch = (...args) => {
     page.requests.push(args);

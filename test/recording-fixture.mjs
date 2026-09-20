@@ -23,7 +23,7 @@ export async function until(check) {
 export async function recordingFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
   collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
   dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false,
-  fetchResponse = null } = {}) {
+  fetchResponse = null, afterCapture = null } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
@@ -67,7 +67,9 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
       capture: async (message, page) => {
         const source = sender(page);
         if (message.kind === 'PAP_CAPTURE') await beforeCapture?.(message, page);
-        return worker ? worker.message(message, source) : { state: 'RECORDING_UNAVAILABLE' };
+        const result = worker ? await worker.message(message, source) : { state: 'RECORDING_UNAVAILABLE' };
+        if (message.kind === 'PAP_CAPTURE') await afterCapture?.(message, result, page);
+        return result;
       },
     });
     page.documentId = `synthetic-${id}`;

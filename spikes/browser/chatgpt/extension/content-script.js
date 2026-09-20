@@ -5,7 +5,7 @@ const MAX_TEXT_BYTES = 256 * 1024;
 const observations = new Map();
 let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0, policyUpdate = 0;
 let composing = false, compositionEnded = -Infinity, keyboardIntent = false, stopped = false, feedback;
-let transportSeen = -Infinity, transportAvailable = false, lastReported = null, latestIntent = null, newChatToken = null;
+let transportSeen = -Infinity, transportAvailable = false, lastReported = null, sendOrder = 0, newChatToken = null;
 
 function destination() {
   if (location.origin !== 'https://chatgpt.com') return null;
@@ -47,13 +47,19 @@ function policyCurrent(policy) {
 }
 function continuationCurrent(pending) {
   return !stopped && pending.firstNewChat && observations.get(pending.eventId) === pending
-    && performance.now() - pending.observedAt < 5000 && policySession === pending.policy.browserSessionId
+    && performance.now() - pending.observedAt < (pending.request ? 5000 : 1500)
+    && policySession === pending.policy.browserSessionId
+    && (!pending.continuationUrl || pending.continuationUrl === location.href)
     && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href);
 }
 function pendingCurrent(pending) { return policyCurrent(pending.policy) || continuationCurrent(pending); }
-function clearObservations(keep = null) {
-  for (const [id, pending] of observations) if (pending !== keep) { clearTimeout(pending.timer); observations.delete(id); }
-  if (!keep) { latestIntent = null; transportControl('clear'); }
+function reportOutcome(pending, state) {
+  pending.feedback = state;
+  if (pending.sendOrder === sendOrder) render(state);
+}
+function clearObservations(keep = []) {
+  for (const [id, pending] of observations) if (!keep.includes(pending)) { clearTimeout(pending.timer); observations.delete(id); }
+  if (!keep.length) transportControl('clear');
 }
 function setCapturePolicy(message) {
   if (message.browserSessionId === policySession && message.revision < policyRevision) return;
@@ -64,10 +70,21 @@ function setCapturePolicy(message) {
     && policy.destination === destination() ? policy : null;
   const state = message.state;
   if (capturePolicy?.token !== next?.token) {
-    const continuing = state === 'READY' && [...observations.values()].find(value => value.request && continuationCurrent(value));
-    const hadRequest = [...observations.values()].some(value => value.request && !value.saved);
+    // A trusted Send can still be waiting in the MAIN-to-isolated message queue.
+    // Until its request arrives, retain bounded candidates with their original
+    // deadlines instead of guessing which qualifier matches. The worker and
+    // ordered engine still authenticate and bind only one first event/document.
+    const candidates = state === 'READY' && policy?.profile === CAPTURE_PROFILE ? [...observations.values()].filter(value =>
+      continuationCurrent(value) && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch']
+        .every(key => policy[key] === value.policy[key])
+      && (policy.token === value.policy.token || next?.destination.startsWith('conversation:'))) : [];
+    const observed = candidates.find(value => value.request);
+    const continuing = observed ? [observed] : candidates;
+    for (const value of continuing) value.continuationUrl ??= location.href;
+    const latest = continuing.find(value => value.sendOrder === sendOrder);
+    const hadRequest = [...observations.values()].some(value => value.sendOrder === sendOrder && value.request && !value.saved);
     clearObservations(continuing); capturePolicy = next; policyState = state;
-    render(state === 'OFF' ? 'OFF' : continuing ? continuing.saved ? 'PROMPT_SAVED' : 'SAVING'
+    render(state === 'OFF' ? 'OFF' : latest ? latest.feedback
       : hadRequest && !next ? 'GAP' : state);
   } else if (state !== policyState) { policyState = state; render(state); }
 }
@@ -133,18 +150,23 @@ function qualifySend(event, inputMethod) {
     const selector = inputMethod === 'enter' ? '#prompt-textarea' : 'button[data-testid="send-button"]';
     if (event.isTrusted && capturePolicy && policyCurrent(capturePolicy)
         && [...document.querySelectorAll(selector)].some(node => event.target === node || node.contains(event.target))) {
-      reportRejection(); render('GAP');
+      sendOrder++; reportRejection(); render('GAP');
     }
     return false;
   }
-  if (observations.size >= 16) { reportRejection(); return false; }
+  // Advance at the human event, including refusals and bodies that never parse.
+  // Request arrival order and native replies cannot redefine the latest Send.
+  const order = ++sendOrder;
+  if (observations.size >= 16) { reportRejection(); render('GAP'); return false; }
   const pending = { policy: capturePolicy, eventId: crypto.randomUUID(), inputMethod, saved: false,
+    sendOrder: order, feedback: 'READY',
     observedAt: performance.now(), firstNewChat: capturePolicy.expectedUrl === 'https://chatgpt.com/' && newChatToken !== capturePolicy.token };
   observations.set(pending.eventId, pending);
   pending.timer = setTimeout(() => {
+    if (!pending.saved && pendingCurrent(pending)) reportOutcome(pending, 'GAP');
     observations.delete(pending.eventId);
-    if (pending.request && !pending.saved && latestIntent === pending.eventId) render('GAP');
   }, 1500);
+  reportOutcome(pending, 'READY');
   // Only an opaque qualifier crosses to MAIN. It is neither prompt text nor an
   // engine token; the isolated pending record is required for every delivery.
   transportControl('qualify', pending.eventId);
@@ -184,7 +206,7 @@ addEventListener('message', event => {
   const pending = observations.get(message.id);
   if (!pending || !pendingCurrent(pending)) return;
   if (message.kind === 'gap' && exactKeys(message, ['channel', 'kind', 'id'])) {
-    if (!pending.saved) { reportRejection(); render('GAP'); } return;
+    if (!pending.saved) { reportRejection(); reportOutcome(pending, 'GAP'); } return;
   }
   if (message.kind === 'request') {
     const request = message.request;
@@ -199,11 +221,11 @@ addEventListener('message', event => {
     pending.request = request; pending.text = message.text;
     if (pending.firstNewChat) newChatToken = pending.policy.token;
     clearTimeout(pending.timer); pending.timer = setTimeout(() => observations.delete(pending.eventId), 6500);
-    latestIntent = pending.eventId; render('SAVING');
+    reportOutcome(pending, 'SAVING');
     deliver(pending, 'request-observed').then(saved => {
       pending.saved = saved;
       if (observations.get(pending.eventId) !== pending || !pendingCurrent(pending)) return;
-      if (latestIntent === pending.eventId) render(saved ? 'PROMPT_SAVED' : 'GAP');
+      reportOutcome(pending, saved ? 'PROMPT_SAVED' : 'GAP');
       if (saved) deliverAck(pending);
     });
   } else if (message.kind === 'ack') {
