@@ -8,8 +8,11 @@ const panelChannels = new Set();
 const PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
 const PANEL_REJECTIONS = new Set(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
   'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
-const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/1';
+const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/2';
 const CAPTURE_REJECTIONS = new Set(['PAGE_SEND_REJECTED', 'CAPTURE_REJECTED']);
+const CAPTURE_DIAGNOSTICS = new Set([...CAPTURE_REJECTIONS, 'TRANSPORT_OBSERVER_READY', 'TRANSPORT_OBSERVER_WRAPPED',
+  'TRANSPORT_OBSERVER_REPLACED', 'TRANSPORT_OBSERVER_UNAVAILABLE', 'TRANSPORT_RELAY_READY', 'TRANSPORT_RELAY_UNAVAILABLE',
+  'TRANSPORT_POLICY_READY', 'TRANSPORT_POLICY_UNAVAILABLE', 'TRANSPORT_POLICY_OFF']);
 let policyRevision = 0;
 const documents = new Map();
 const documentRoutes = new Map();
@@ -71,6 +74,14 @@ async function inspectTabs() {
     let surface;
     try { surface = await bounded(chrome.tabs.sendMessage(tab.id, { kind: 'PAP_INSPECT', pageContract: PAGE_CONTRACT }, { frameId: 0 })); }
     catch { surface = { surfaceSupported: false, destination: '', attachmentsPresent: false }; }
+    if (!tab.incognito) {
+      const relay = exactKeys(surface, ['destination', 'surfaceSupported', 'attachmentsPresent', 'observerState'])
+        && typeof surface.destination === 'string' && typeof surface.surfaceSupported === 'boolean'
+        && surface.attachmentsPresent === false && ['ready', 'wrapped', 'replaced', 'unavailable'].includes(surface.observerState);
+      reportCaptureDiagnostic(relay ? 'TRANSPORT_RELAY_READY' : 'TRANSPORT_RELAY_UNAVAILABLE');
+      if (relay) reportCaptureDiagnostic({ ready: 'TRANSPORT_OBSERVER_READY', wrapped: 'TRANSPORT_OBSERVER_WRAPPED',
+        replaced: 'TRANSPORT_OBSERVER_REPLACED', unavailable: 'TRANSPORT_OBSERVER_UNAVAILABLE' }[surface.observerState]);
+    }
     return {
       id: tab.id, windowId: tab.windowId, tabEpoch: epoch, url: tab.url ?? '', active: tab.active === true,
       destination: typeof surface?.destination === 'string' ? surface.destination : '', surfaceSupported: !tab.incognito && surface?.surfaceSupported === true,
@@ -204,7 +215,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
   if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message?.kind)) {
     const capture = message.kind === 'PAP_CAPTURE';
-    const unavailable = () => { if (capture) reportCaptureRejection('CAPTURE_REJECTED'); };
+    const unavailable = () => { if (capture) reportCaptureDiagnostic('CAPTURE_REJECTED'); };
     captureMessage(message, sender).then(result => { if (result?.state === 'RECORDING_UNAVAILABLE') unavailable(); respond(result); })
       .catch(() => { unavailable(); respond({ state: 'RECORDING_UNAVAILABLE' }); });
     return true;
@@ -216,7 +227,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id)) return;
     try {
       if (new URL(sender.url).origin !== 'https://chatgpt.com') return;
-      reportCaptureRejection(message.code);
+      if (CAPTURE_REJECTIONS.has(message.code)) reportCaptureDiagnostic(message.code);
     } catch {}
     return;
   }
@@ -228,12 +239,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   } catch {}
 });
 
-// Bounded, once-per-code capture rejection vocabulary. It lets an owner debug
-// session tell a page eligibility rejection from a worker rejection, while the
-// engine's own CAPTURE_GAP marks the durable-capture decision.
-function reportCaptureRejection(code) {
+// Once per fixed code per native connection, repeated across reconnects so a
+// saved debug segment can distinguish observer, relay and policy failures.
+// Page reports are advisory; they never grant capture or native authority.
+function reportCaptureDiagnostic(code) {
   const context = connection;
-  if (!CAPTURE_REJECTIONS.has(code) || !current(context) || !context.ready || !context.captureDiagnosticsReady
+  if (!CAPTURE_DIAGNOSTICS.has(code) || !current(context) || !context.ready || !context.captureDiagnosticsReady
       || context.captureDiagnostics.has(code)) return;
   context.captureDiagnostics.add(code);
   post(context, { kind: 'PAP_CAPTURE_DIAGNOSTIC', profile: CAPTURE_DIAGNOSTIC_PROFILE, code });
@@ -431,9 +442,12 @@ chrome.tabs.onUpdated.addListener((id, change) => {
 
 function captureStatus(context, tabId, unavailable = false) {
   const policy = !unavailable && current(context) && context.ready ? context.policies.get(tabId) : null;
-  return { kind: 'PAP_CAPTURE_POLICY', pageContract: PAGE_CONTRACT, browserSessionId, revision: policyRevision,
+  const status = { kind: 'PAP_CAPTURE_POLICY', pageContract: PAGE_CONTRACT, browserSessionId, revision: policyRevision,
     state: unavailable || !current(context) ? 'RECORDING_UNAVAILABLE' : context.states.get(tabId) ?? 'OFF',
     policy: policy && policy.tabEpoch === tabEpochs.get(tabId) ? policy : null };
+  if (current(context)) reportCaptureDiagnostic(status.state === 'OFF' && context.states.has(tabId) ? 'TRANSPORT_POLICY_OFF'
+    : status.state === 'READY' && status.policy ? 'TRANSPORT_POLICY_READY' : 'TRANSPORT_POLICY_UNAVAILABLE');
+  return status;
 }
 
 function broadcastCapturePolicy(context, unavailable = false) {

@@ -23,7 +23,7 @@ export async function until(check) {
 export async function recordingFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
   collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
   dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false,
-  fetchResponse = null, afterCapture = null } = {}) {
+  fetchResponse = null, afterCapture = null, transport = true } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
@@ -61,7 +61,7 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
     inventory.set(id, tab);
     const sender = page => page.sender({ tab: { id, windowId: tab.windowId, url: page.location.href }, documentId: page.documentId,
       ...(fixedSenderURL ? { url: tab.url } : {}) });
-    const page = pageFixture({ textarea, url: tab.url, fetchResponse,
+    const page = pageFixture({ textarea, url: tab.url, fetchResponse, transport,
       authorize: (message, page) => worker.message(message, sender(page)),
       notify: (message, page) => worker?.chrome.runtime.onMessage.emit(message, sender(page)),
       capture: async (message, page) => {

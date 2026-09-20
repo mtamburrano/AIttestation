@@ -5,7 +5,11 @@ const CONTROL_EVENT = 'pap-chatgpt-transport-control';
 const origin = 'https://chatgpt.com';
 if (location.origin === origin && window === window.top) {
   const observer = installFetchObserver(window, { emit: message => window.postMessage({ channel: TRANSPORT_CHANNEL, ...message }, origin) });
-  const ready = () => window.postMessage({ channel: TRANSPORT_CHANNEL, kind: 'ready', available: observer.available() }, origin);
+  const ready = () => {
+    const observerState = observer.state();
+    window.postMessage({ channel: TRANSPORT_CHANNEL, kind: 'ready', observerState,
+      available: observerState === 'ready' || observerState === 'wrapped' }, origin);
+  };
   addEventListener(CONTROL_EVENT, event => {
     if (typeof event.detail !== 'string' || event.detail.length > 400) return;
     try {

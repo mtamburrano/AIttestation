@@ -57,6 +57,28 @@ composer emptiness and rendered-message confirmation are removed. The minimal
 qualifier still needs its supported controls when an actual Send occurs.
 The existing sidebar remains ON/OFF, effective status and Dashboard/History.
 
+Observer health distinguishes a direct observer, a forwarding page wrapper, and
+a replacement that bypasses observation. When fetch has an outer wrapper, the
+existing readiness heartbeat calls it with one private, already-aborted
+`Request('data:,')`. The observer recognizes that object before capture or native
+fetch and returns an empty local response. A bypass reaches only an aborted local
+data URL, without provider network traffic. The check never spends a Send
+qualifier. Checks of an unchanged wrapper are limited to once per second; the
+extension never re-wraps fetch or reinstalls it on SPA navigation. Synchronous
+wrappers forwarding the Request unchanged are supported. Deferred or transforming
+wrappers that do not forward that probe synchronously fail closed. Health is an
+advisory capability check, not proof of all future requests or page honesty.
+
+Saved opt-in debug sessions include fixed `TRANSPORT_OBSERVER_*` codes (`READY`,
+`WRAPPED`, `REPLACED`, `UNAVAILABLE`), `TRANSPORT_RELAY_READY`/`UNAVAILABLE`, and
+`TRANSPORT_POLICY_READY`/`UNAVAILABLE`/`OFF`. These identify a live chain, a reachable
+isolated relay, and an available capture policy separately. Missing or stale MAIN
+heartbeats cannot establish observer readiness from relay injection alone. The
+worker and native bridge each emit at most one event per code per connection;
+these are stage sightings, not per-tab histories. Diagnostics contain no URLs,
+function source/names, prompts, errors or page metadata. The expanded vocabulary
+requires `pap-chatgpt-capture-diagnostic/2` negotiation; older peers receive none.
+
 Page feedback follows human Send order, including refused Sends and requests
 whose bodies cannot be extracted. Late request messages, gaps or durable-save
 results may update their own event, but cannot replace the latest Send's result.
@@ -171,3 +193,8 @@ The [Chrome 153 transport result](../../../test/evidence/transport-chrome-153/ca
 records genuine-input synthetic-network coverage and exact script hashes for
 the observer, isolated relay and worker. It does not establish live-provider or
 installed native identity acceptance.
+
+The [Chrome 153 wrapper-health result](../../../test/evidence/transport-health-chrome-153/capture.json)
+adds full reload with a late forwarding wrapper, genuine bypass/recovery without
+Send, and preservation of the page wrapper through heartbeats and SPA navigation.
+It uses the same isolated synthetic-network boundary, not a live-provider run.

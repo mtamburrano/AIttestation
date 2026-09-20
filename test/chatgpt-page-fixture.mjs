@@ -15,7 +15,7 @@ export const pageCommand = (text = 'SYNTHETIC_EXACT_e\u0301\r\n☕', overrides =
 export function pageFixture({ draft = '', textarea = false, supported = true, sendState = 'enabled',
   attachments = false, onInput = () => {}, authorize = async () => true, notify = () => {},
   capture = async () => ({ kind: 'PAP_CAPTURE_POLICY', browserSessionId: 'synthetic-unpaired', revision: 0, policy: null, state: 'OFF' }),
-  url = 'https://chatgpt.com/c/test-conversation', fetchResponse = null,
+  url = 'https://chatgpt.com/c/test-conversation', fetchResponse = null, transport = true,
   clock = { setTimeout, clearTimeout, performance } } = {}) {
   let listener, clicks = 0, injections = 0;
   const timers = new Set(), transportHolds = new Map();
@@ -121,12 +121,16 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
   };
   page.requests = [];
   sandbox.fetch = (...args) => {
+    if (args[0] instanceof Request && args[0].signal.aborted) return Promise.reject(args[0].signal.reason);
     page.requests.push(args);
     return page.fetchResponse ? page.fetchResponse(...args) : Promise.resolve(new Response('', { status: 200 }));
   };
   page.fetchResponse = fetchResponse;
+  const originalFetch = sandbox.fetch;
+  page.wrapFetch = wrapper => { sandbox.fetch = wrapper(sandbox.fetch); };
+  page.bypassObserver = () => { sandbox.fetch = originalFetch; };
   const context = createContext(sandbox);
-  runInContext(source, context); runInContext(observerSource, context);
+  runInContext(source, context); if (transport) runInContext(observerSource, context);
   page.fetch = (...args) => sandbox.fetch(...args);
   page.request = (text, overrides = {}) => page.fetch('/backend-api/f/conversation', { method: 'POST',
     body: JSON.stringify({ action: 'next', messages: [{ id: webcrypto.randomUUID(), author: { role: 'user' },

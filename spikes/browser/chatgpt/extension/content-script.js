@@ -6,6 +6,7 @@ const observations = new Map();
 let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0, policyUpdate = 0;
 let composing = false, compositionEnded = -Infinity, keyboardIntent = false, stopped = false, feedback;
 let transportSeen = -Infinity, transportAvailable = false, lastReported = null, sendOrder = 0, newChatToken = null;
+let observerState = 'unavailable';
 
 function destination() {
   if (location.origin !== 'https://chatgpt.com') return null;
@@ -18,8 +19,9 @@ function transportControl(kind, id) {
     ...(id ? { id, conversationId: capturePolicy.destination === 'new-chat' ? null : capturePolicy.destination.slice(13) } : {}) }) }));
 }
 function surface() {
+  const fresh = !stopped && performance.now() - transportSeen < 3000;
   return { destination: destination() ?? '', surfaceSupported: !stopped && destination() !== null
-    && transportAvailable && performance.now() - transportSeen < 3000, attachmentsPresent: false };
+    && transportAvailable && fresh, attachmentsPresent: false, observerState: fresh ? observerState : 'unavailable' };
 }
 function surfaceChanged() {
   chrome.runtime.sendMessage({ kind: 'PAP_SURFACE_CHANGED' }).catch(() => {});
@@ -197,10 +199,12 @@ const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.te
 addEventListener('message', event => {
   if (stopped || event.source !== window || event.origin !== 'https://chatgpt.com' || event.data?.channel !== CHANNEL) return;
   const message = event.data;
-  if (message.kind === 'ready' && exactKeys(message, ['channel', 'kind', 'available']) && typeof message.available === 'boolean') {
-    const previous = surface().surfaceSupported;
-    transportSeen = performance.now(); transportAvailable = message.available;
-    if (previous !== surface().surfaceSupported) { surfaceChanged(); render(); }
+  if (message.kind === 'ready' && exactKeys(message, ['channel', 'kind', 'available', 'observerState'])
+      && ['ready', 'wrapped', 'replaced', 'unavailable'].includes(message.observerState)
+      && message.available === ['ready', 'wrapped'].includes(message.observerState)) {
+    const previous = surface();
+    transportSeen = performance.now(); transportAvailable = message.available; observerState = message.observerState;
+    if (previous.surfaceSupported !== surface().surfaceSupported || previous.observerState !== observerState) { surfaceChanged(); render(); }
     return;
   }
   const pending = observations.get(message.id);

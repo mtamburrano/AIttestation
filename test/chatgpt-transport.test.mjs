@@ -22,6 +22,66 @@ function fixture(t, original = () => Promise.resolve(new Response('provider'))) 
   return { target, observer, events, calls };
 }
 
+test('a late instrumentation wrapper stays ready before any Send and preserves the provider invocation', async t => {
+  const providerResponse = new Response('original'), promise = Promise.resolve(providerResponse);
+  const f = fixture(t, () => promise);
+  f.observer.clear();
+  const delegate = f.target.fetch;
+  function instrumentation() { return delegate.apply(this, arguments); }
+  f.target.fetch = instrumentation;
+  assert.equal(f.observer.available(), true);
+  assert.equal(f.target.fetch, instrumentation);
+  assert.equal(f.calls.length, 0, 'health checks must not reach the provider delegate');
+  assert.deepEqual(f.events, []);
+  f.observer.qualify(randomUUID(), 'conversation-1');
+  const receiver = {}, init = { method: 'POST', body: body() };
+  const result = f.target.fetch.call(receiver, url, init);
+  assert.equal(result, promise); assert.equal(await result, providerResponse);
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].self, receiver);
+  assert.equal(f.calls[0].args[0], url); assert.equal(f.calls[0].args[1], init);
+  await tick(); assert.equal(f.events.filter(value => value.kind === 'request').length, 1);
+});
+
+test('a genuine replacement bypassing the observer remains unavailable', async t => {
+  const f = fixture(t);
+  f.target.fetch = globalThis.fetch;
+  assert.equal(f.observer.available(), false);
+  await tick(); assert.deepEqual(f.events, []); assert.equal(f.calls.length, 0);
+});
+
+test('chain checks are local, bounded and detect a mutable delegate without replacing the page wrapper', async t => {
+  let time = 0, checks = 0, delegate;
+  const target = { location: new URL(url), fetch() { throw Error('PROVIDER_MUST_NOT_RUN'); } };
+  const observer = installFetchObserver(target, { now: () => time, emit() { assert.fail('no observation'); } });
+  t.after(() => observer.stop());
+  delegate = target.fetch;
+  const wrapper = target.fetch = function (...args) { checks++; return Reflect.apply(delegate, this, args); };
+  assert.equal(observer.state(), 'wrapped');
+  for (let i = 0; i < 100; i++) assert.equal(observer.available(), true);
+  assert.equal(checks, 1);
+  const observed = delegate;
+  delegate = input => {
+    assert.equal(input.url, 'data:,'); assert.equal(input.signal.aborted, true);
+    return globalThis.fetch(input);
+  };
+  time = 1000; assert.equal(observer.state(), 'replaced'); await tick();
+  assert.equal(target.fetch, wrapper); assert.equal(checks, 2);
+  delegate = observed; time = 2000; assert.equal(observer.state(), 'wrapped');
+  observer.stop(); assert.equal(observer.state(), 'unavailable'); assert.equal(target.fetch, wrapper);
+});
+
+test('unsupported wrappers fail closed without issuing a provider request or leaking probe rejections', async t => {
+  const f = fixture(t); const observed = f.target.fetch;
+  for (const replacement of [null, () => { throw Error('wrapper failure'); },
+    () => Promise.reject(Error('wrapper rejection')), async (...args) => { await tick(); return observed(...args); },
+    input => globalThis.fetch(new Request(input))]) {
+    f.target.fetch = replacement;
+    assert.equal(f.observer.available(), false);
+    await tick(); await tick();
+    assert.equal(f.calls.length, 0); assert.deepEqual(f.events, []);
+  }
+});
+
 test('allowlist selects origin, POST, operation and one new user text; exclusions leave a qualifier usable', async t => {
   const f = fixture(t);
   for (const resource of ['/backend-api/conversation/prepare', '/backend-api/conversation/history', '/backend-anon/conversation',
@@ -74,8 +134,12 @@ test('string, URL, Request and init overrides snapshot without consuming the pro
   }
 });
 
-test('provider receives identical arguments, this, promise, Response, rejections and aborts', async t => {
-  const originalResponse = response(ack), promise = Promise.resolve(originalResponse), f = fixture(t, () => promise);
+for (const wrapped of [false, true]) test(`provider receives identical arguments, this, promise, Response, rejections and aborts (wrapped=${wrapped})`, async t => {
+  const prepare = f => {
+    if (wrapped) { const delegate = f.target.fetch; f.target.fetch = function () { return delegate.apply(this, arguments); }; }
+    assert.equal(f.observer.available(), true); return f;
+  };
+  const originalResponse = response(ack), promise = Promise.resolve(originalResponse), f = prepare(fixture(t, () => promise));
   const options = { method: 'POST', body: body() }, receiver = {};
   const result = f.target.fetch.call(receiver, url, options);
   assert.equal(result, promise); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].self, receiver);
@@ -84,10 +148,10 @@ test('provider receives identical arguments, this, promise, Response, rejections
   assert.equal(await originalResponse.text(), `data: ${JSON.stringify(ack)}\n\n`);
   const error = new DOMException('synthetic abort', 'AbortError');
   const rejected = Promise.reject(error); rejected.catch(() => {});
-  const g = fixture(t, () => rejected);
+  const g = prepare(fixture(t, () => rejected));
   assert.equal(g.target.fetch(url, options), rejected); await assert.rejects(rejected, value => value === error);
   await tick(); assert.equal(g.events.filter(e => e.kind === 'request').length, 1);
-  const h = fixture(t, () => { throw error; }); assert.throws(() => h.target.fetch(url, options), value => value === error);
+  const h = prepare(fixture(t, () => { throw error; })); assert.throws(() => h.target.fetch(url, options), value => value === error);
   assert.equal(h.calls.length, 1);
 });
 

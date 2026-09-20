@@ -1,5 +1,5 @@
 import { emit } from '../../diagnostics/local.mjs';
-import { CHATGPT_CAPTURE_PROFILE, CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE, CAPTURE_REJECTION_CODES } from './capture.mjs';
+import { CHATGPT_CAPTURE_PROFILE, CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE, CAPTURE_DIAGNOSTIC_CODES } from './capture.mjs';
 import { CHATGPT_PANEL_PROFILE, CHATGPT_PANEL_DIAGNOSTIC_PROFILE, PANEL_REJECTION_CODES, panelRequest, panelError } from './panel.mjs';
 
 export class ChromeBridgeController {
@@ -46,7 +46,7 @@ export class ChromeBridgeController {
     if (message.kind === 'PAP_CAPTURE_DIAGNOSTIC') {
       if (!this.#adapter.capabilities.observation || message.profile !== CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE
           || Object.keys(message).sort().join(',') !== 'code,kind,profile'
-          || !CAPTURE_REJECTION_CODES.includes(message.code)) throw Error('Invalid capture diagnostic');
+          || !CAPTURE_DIAGNOSTIC_CODES.includes(message.code)) throw Error('Invalid capture diagnostic');
       if (!this.#captureDiagnostics.has(message.code)) {
         this.#captureDiagnostics.add(message.code); emit(this.#diagnostics, message.code);
       }

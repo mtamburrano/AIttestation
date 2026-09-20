@@ -66,8 +66,34 @@ export async function observeAcknowledgement(response, request, signal, alreadyC
 export function installFetchObserver(target, { emit, now = () => performance.now(), baseURL = () => target.location.href } = {}) {
   const original = target.fetch;
   const active = new Set(), observedIds = new Set(); let intent = null, stopped = false;
+  const probeController = new AbortController(); probeController.abort();
+  const probe = new Request('data:,', { signal: probeController.signal });
+  let checkedFetch, checkedAt = -Infinity, checkedState = 'replaced', probing = false, reached = false;
   const notify = value => { try { emit(value); } catch {} };
+  function state() {
+    if (stopped) return 'unavailable';
+    try {
+      const current = target.fetch;
+      if (current === fetchObserved) return 'ready';
+      // The page can install a forwarding wrapper after document_start. Test
+      // the chain without reaching the original fetch or spending a qualifier.
+      // A bypass sees only an already-aborted, local data URL, never a Send.
+      // Recheck an unchanged wrapper at most once per second, including mutable
+      // delegates. Never re-hook fetch or reinstall it on route changes.
+      if (probing || current === checkedFetch && now() - checkedAt < 1000) return checkedState;
+      checkedFetch = current; checkedAt = now(); checkedState = 'replaced';
+      reached = false; probing = true;
+      try { Promise.resolve(Reflect.apply(current, target, [probe])).catch(() => {}); }
+      catch {} finally { probing = false; }
+      if (reached && !stopped && target.fetch === current) checkedState = 'wrapped';
+    } catch { checkedState = 'replaced'; }
+    return checkedState;
+  }
   function fetchObserved(...args) {
+    if (args[0] === probe) {
+      if (probing) reached = true;
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
     let candidate, snapshot, controller, deadline;
     try {
       candidate = !stopped && intent && intent.expires > now() && !intent.used ? intent : null;
@@ -122,7 +148,8 @@ export function installFetchObserver(target, { emit, now = () => performance.now
   }
   target.fetch = fetchObserved;
   return {
-    available: () => !stopped && target.fetch === fetchObserved,
+    state,
+    available: () => ['ready', 'wrapped'].includes(state()),
     qualify(id, conversationId) { if (!stopped) intent = { id, conversationId, expires: now() + INTENT_MS, used: false }; },
     clear() { intent = null; for (const controller of active) controller.abort(); active.clear(); },
     stop() { stopped = true; this.clear(); if (target.fetch === fetchObserved) target.fetch = original; },

@@ -17,7 +17,7 @@ const reportDirectory = await mkdtemp('/private/tmp/attestamp-capture-browser-re
 let runtime, browser, socket, native, pump, failure;
 const input = new PassThrough(), output = new PassThrough(), decoder = new NativeFrameDecoder(), incoming = [];
 const pending = new Map(), report = { evidence: 'REAL_CHROME_WITH_SYNTHETIC_PAGE_AND_NATIVE_PEER', checks: [] };
-let sequence = 0;
+let sequence = 0, interceptedSends = 0;
 function call(method, params = {}, sessionId) {
   return new Promise((resolve, reject) => {
     const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(Error(`CDP timeout: ${method}`)); }, 10000);
@@ -39,7 +39,12 @@ async function wait(check) {
 }
 const html = `<!doctype html><meta charset="utf-8"><title>Synthetic capture test</title>
 <textarea id="prompt-textarea" style="width:400px;height:120px"></textarea><button data-testid="send-button">Send</button>
-<script>globalThis.providerSends=0;document.querySelector('button').onclick=()=>{
+<script>
+const delegate=window.fetch;
+globalThis.observerInstalled=delegate.name==='fetchObserved';
+window.fetch=function o(){return delegate.apply(this,arguments)};
+globalThis.lateFetch=window.fetch;globalThis.documentToken=crypto.randomUUID();
+globalThis.providerSends=0;document.querySelector('button').onclick=()=>{
 providerSends++;
 const payload={action:'next',parent_message_id:crypto.randomUUID(),
   conversation_id:location.pathname==='/'?null:location.pathname.split('/')[2],
@@ -114,6 +119,7 @@ try {
     if (value.method === 'Fetch.requestPaused') {
       const isPage = value.params.request.url === 'https://chatgpt.com/' && value.params.resourceType === 'Document';
       const isSend = value.params.request.url === 'https://chatgpt.com/backend-api/f/conversation' && value.params.request.method === 'POST';
+      if (isSend) interceptedSends++;
       const responseBody = isPage ? html : isSend ? 'data: ' + JSON.stringify({ type: 'stream_handoff',
         conversation_id: 'synthetic-conversation', turn_exchange_id: 'synthetic-' + randomUUID() }) + '\n\n' : '';
       void call('Fetch.fulfillRequest', { requestId: value.params.requestId, responseCode: isPage || isSend ? 200 : 404,
@@ -163,11 +169,25 @@ try {
   await wait(() => runtime.adapter.scopes().some(source => source.destination === 'new-chat'));
   await setRecording(true);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  assert.equal(await evaluate(page, 'observerInstalled&&fetch===lateFetch&&providerSends===0'), true);
+  const documentToken = await evaluate(page, 'documentToken');
+  await call('Page.reload', {}, page);
+  await wait(() => evaluate(page, `globalThis.documentToken!==${JSON.stringify(documentToken)}&&globalThis.observerInstalled
+    &&document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  assert.equal(interceptedSends, 0);
+  report.checks.push('LATE_FORWARDING_WRAPPER_READY_WITH_EMPTY_COMPOSER_AFTER_FULL_RELOAD_WITHOUT_SEND');
   await evaluate(page, `globalThis.savedSendButton=document.querySelector('button');savedSendButton.remove();document.querySelector('textarea').value='temporary';document.querySelector('textarea').value=''`);
   await delay(1100);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
   await evaluate(page, 'document.body.append(savedSendButton)');
   report.checks.push('EMPTY_TYPE_CLEAR_WITHOUT_SEND_BUTTON_STAYS_ARMED');
+  await evaluate(page, `window.fetch=function bypass(){return Promise.reject(new Error('SYNTHETIC_BYPASS'))}`);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Recording unavailable'`));
+  assert.equal(interceptedSends, 0); assert.equal(runtime.session.receipts.list().length, 0);
+  await evaluate(page, 'window.fetch=lateFetch');
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  assert.equal(await evaluate(page, 'fetch===lateFetch'), true);
+  report.checks.push('GENUINE_OBSERVER_BYPASS_UNAVAILABLE_AND_FORWARDING_WRAPPER_RECOVERS_WITHOUT_SEND');
   const text = 'SYNTHETIC_BROWSER_e\u0301\n☕  ';
   const send = async () => {
     await evaluate(page, 'document.querySelector("textarea").focus()');
@@ -223,10 +243,13 @@ try {
   assert.equal(await evaluate(page, 'providerSends'), 3);
   report.checks.push('FIRST_SEND_ROUTE_POLICY_PRECEDES_MAIN_TO_ISOLATED_REQUEST_DELIVERY');
   report.checks.push('CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD');
+  assert.equal(await evaluate(page, 'fetch===lateFetch'), true);
+  report.checks.push('PAGE_WRAPPER_REFERENCE_UNCHANGED_ACROSS_HEARTBEATS_AND_SPA_NAVIGATION');
   await setRecording(false);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));
   await send(); await delay(250);
   assert.equal(runtime.session.receipts.list().length, 3); assert.equal(await evaluate(page, 'providerSends'), 4);
+  assert.equal(interceptedSends, 4);
   report.checks.push('OFF_CONTINUES_PROVIDER_ACTION_WITHOUT_NEW_CAPTURE');
   report.result = 'PASS';
   await writeFile(join(reportDirectory, 'report.json'), JSON.stringify(report, null, 2));
