@@ -49,24 +49,36 @@ test('a genuine replacement bypassing the observer remains unavailable', async t
   await tick(); assert.deepEqual(f.events, []); assert.equal(f.calls.length, 0);
 });
 
-test('chain checks are local, bounded and detect a mutable delegate without replacing the page wrapper', async t => {
-  let time = 0, checks = 0, delegate;
+test('health checks execute each fetch identity at most once and detect a new bypass', async t => {
+  let time = 0, wrapperEffects = 0, bypassEffects = 0, delegate;
   const target = { location: new URL(url), fetch() { throw Error('PROVIDER_MUST_NOT_RUN'); } };
   const observer = installFetchObserver(target, { now: () => time, emit() { assert.fail('no observation'); } });
   t.after(() => observer.stop());
   delegate = target.fetch;
-  const wrapper = target.fetch = function (...args) { checks++; return Reflect.apply(delegate, this, args); };
-  assert.equal(observer.state(), 'wrapped');
-  for (let i = 0; i < 100; i++) assert.equal(observer.available(), true);
-  assert.equal(checks, 1);
   const observed = delegate;
-  delegate = input => {
+  const wrapper = target.fetch = function (...args) { wrapperEffects++; return Reflect.apply(delegate, this, args); };
+  assert.equal(observer.state(), 'wrapped');
+  for (let i = 0; i < 100; i++) { time += 1000; assert.equal(observer.available(), true); }
+  assert.equal(wrapperEffects, 1, 'elapsed heartbeats must not repeat page-owned side effects');
+  const bypass = input => {
+    bypassEffects++;
     assert.equal(input.url, 'data:,'); assert.equal(input.signal.aborted, true);
     return globalThis.fetch(input);
   };
-  time = 1000; assert.equal(observer.state(), 'replaced'); await tick();
-  assert.equal(target.fetch, wrapper); assert.equal(checks, 2);
-  delegate = observed; time = 2000; assert.equal(observer.state(), 'wrapped');
+  // Opaque delegate changes are not observable without executing page code.
+  delegate = bypass; time += 1000;
+  assert.equal(observer.state(), 'wrapped'); assert.equal(wrapperEffects, 1); assert.equal(bypassEffects, 0);
+  target.fetch = bypass;
+  assert.equal(observer.state(), 'replaced'); await tick();
+  for (let i = 0; i < 100; i++) { time += 1000; assert.equal(observer.available(), false); }
+  assert.equal(bypassEffects, 1); assert.equal(target.fetch, bypass);
+  delegate = observed; target.fetch = wrapper;
+  assert.equal(observer.state(), 'wrapped'); assert.equal(wrapperEffects, 1, 'reinstalling a known identity reuses its health');
+  target.fetch = bypass;
+  assert.equal(observer.state(), 'replaced'); assert.equal(bypassEffects, 1);
+  target.fetch = observed; assert.equal(observer.state(), 'ready');
+  target.fetch = wrapper; observer.clear();
+  assert.equal(observer.state(), 'wrapped'); assert.equal(wrapperEffects, 1);
   observer.stop(); assert.equal(observer.state(), 'unavailable'); assert.equal(target.fetch, wrapper);
 });
 

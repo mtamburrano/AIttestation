@@ -42,7 +42,8 @@ const html = `<!doctype html><meta charset="utf-8"><title>Synthetic capture test
 <script>
 const delegate=window.fetch;
 globalThis.observerInstalled=delegate.name==='fetchObserved';
-window.fetch=function o(){return delegate.apply(this,arguments)};
+globalThis.wrapperEffects=0;
+window.fetch=function o(){wrapperEffects++;return delegate.apply(this,arguments)};
 globalThis.lateFetch=window.fetch;globalThis.documentToken=crypto.randomUUID();
 globalThis.providerSends=0;document.querySelector('button').onclick=()=>{
 providerSends++;
@@ -177,16 +178,25 @@ try {
   assert.equal(interceptedSends, 0);
   report.checks.push('LATE_FORWARDING_WRAPPER_READY_WITH_EMPTY_COMPOSER_AFTER_FULL_RELOAD_WITHOUT_SEND');
   await evaluate(page, `globalThis.savedSendButton=document.querySelector('button');savedSendButton.remove();document.querySelector('textarea').value='temporary';document.querySelector('textarea').value=''`);
-  await delay(1100);
+  await delay(2200);
+  const tabId = runtime.adapter.scopes().find(source => source.destination === 'new-chat').tabId;
+  for (let index = 0; index < 10; index++) await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId},
+    {kind:'PAP_INSPECT',pageContract:'chatgpt-web-text/2026-09-20'},{frameId:0})`);
+  assert.equal(await evaluate(page, 'wrapperEffects'), 1);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
   await evaluate(page, 'document.body.append(savedSendButton)');
   report.checks.push('EMPTY_TYPE_CLEAR_WITHOUT_SEND_BUTTON_STAYS_ARMED');
-  await evaluate(page, `window.fetch=function bypass(){return Promise.reject(new Error('SYNTHETIC_BYPASS'))}`);
+  await evaluate(page, `globalThis.bypassEffects=0;window.fetch=function bypass(){bypassEffects++;return Promise.reject(new Error('SYNTHETIC_BYPASS'))}`);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Recording unavailable'`));
+  await delay(2200);
+  assert.equal(await evaluate(page, 'bypassEffects'), 1);
   assert.equal(interceptedSends, 0); assert.equal(runtime.session.receipts.list().length, 0);
   await evaluate(page, 'window.fetch=lateFetch');
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
   assert.equal(await evaluate(page, 'fetch===lateFetch'), true);
+  assert.equal(await evaluate(page, 'wrapperEffects'), 1);
+  report.healthWrapperEffects = await evaluate(page, '({forwarding:wrapperEffects,bypass:bypassEffects})');
+  report.checks.push('IDLE_HEARTBEATS_AND_INSPECTIONS_VALIDATE_EACH_FETCH_IDENTITY_ONCE');
   report.checks.push('GENUINE_OBSERVER_BYPASS_UNAVAILABLE_AND_FORWARDING_WRAPPER_RECOVERS_WITHOUT_SEND');
   const text = 'SYNTHETIC_BROWSER_e\u0301\n☕  ';
   const send = async () => {
@@ -244,12 +254,16 @@ try {
   report.checks.push('FIRST_SEND_ROUTE_POLICY_PRECEDES_MAIN_TO_ISOLATED_REQUEST_DELIVERY');
   report.checks.push('CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD');
   assert.equal(await evaluate(page, 'fetch===lateFetch'), true);
+  assert.equal(await evaluate(page, 'wrapperEffects'), 4, 'one health validation plus three synthetic Sends');
   report.checks.push('PAGE_WRAPPER_REFERENCE_UNCHANGED_ACROSS_HEARTBEATS_AND_SPA_NAVIGATION');
   await setRecording(false);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));
   await send(); await delay(250);
   assert.equal(runtime.session.receipts.list().length, 3); assert.equal(await evaluate(page, 'providerSends'), 4);
   assert.equal(interceptedSends, 4);
+  assert.equal(await evaluate(page, 'wrapperEffects'), 5, 'OFF adds only the fourth synthetic Send');
+  report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
+  report.syntheticSends = interceptedSends;
   report.checks.push('OFF_CONTINUES_PROVIDER_ACTION_WITHOUT_NEW_CAPTURE');
   report.result = 'PASS';
   await writeFile(join(reportDirectory, 'report.json'), JSON.stringify(report, null, 2));

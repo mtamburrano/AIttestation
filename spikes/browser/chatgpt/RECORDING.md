@@ -58,13 +58,18 @@ qualifier still needs its supported controls when an actual Send occurs.
 The existing sidebar remains ON/OFF, effective status and Dashboard/History.
 
 Observer health distinguishes a direct observer, a forwarding page wrapper, and
-a replacement that bypasses observation. When fetch has an outer wrapper, the
-existing readiness heartbeat calls it with one private, already-aborted
+a replacement that bypasses observation. When fetch has a new outer function
+identity, the readiness check calls it once with a private, already-aborted
 `Request('data:,')`. The observer recognizes that object before capture or native
 fetch and returns an empty local response. A bypass reaches only an aborted local
 data URL, without provider network traffic. The check never spends a Send
-qualifier. Checks of an unchanged wrapper are limited to once per second; the
-extension never re-wraps fetch or reinstalls it on SPA navigation. Synchronous
+qualifier. Health is cached per function identity for that document, including
+identities later reinstalled by the page. Heartbeats and inspections reuse the
+cache without executing a known wrapper: it can have side effects before
+delegating. The extension never re-wraps fetch or reinstalls it on SPA navigation.
+An opaque wrapper changing its captured delegate without changing identity is
+not observable by this check; a missing observation still results in a recording
+gap, never a saved prompt. Synchronous
 wrappers forwarding the Request unchanged are supported. Deferred or transforming
 wrappers that do not forward that probe synchronously fail closed. Health is an
 advisory capability check, not proof of all future requests or page honesty.
@@ -198,3 +203,8 @@ The [Chrome 153 wrapper-health result](../../../test/evidence/transport-health-c
 adds full reload with a late forwarding wrapper, genuine bypass/recovery without
 Send, and preservation of the page wrapper through heartbeats and SPA navigation.
 It uses the same isolated synthetic-network boundary, not a live-provider run.
+
+The [identity-cached health result](../../../test/evidence/transport-health-chrome-153/capture-identity-cache.json)
+also counts page-wrapper side effects across idle heartbeats, repeated inspection,
+replacement and restoration. Each outer function identity is validated once;
+subsequent wrapper calls come only from the fixture's four synthetic Sends.

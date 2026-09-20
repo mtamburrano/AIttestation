@@ -65,6 +65,27 @@ test('a reachable relay with a genuinely replaced observer withdraws policy and 
   assert.doesNotMatch(debugSession.export(), /BYPASS_CANARY/);
 });
 
+test('an opaque delegate mutation keeps cached health but an unobserved Send reports a gap', async t => {
+  const { f } = await fixture(t); await f.recording(true);
+  const page = f.pages.get(17); let delegate, effects = 0;
+  page.wrapFetch(observed => {
+    delegate = observed;
+    return function (...args) { effects++; return Reflect.apply(delegate, this, args); };
+  });
+  await until(async () => (await page.inspect()).observerState === 'wrapped');
+  assert.equal(effects, 1);
+  const response = new Response('UNCHANGED_PROVIDER_RESPONSE'), promise = Promise.resolve(response);
+  delegate = () => promise;
+  f.send('UNOBSERVED_SYNTHETIC_SEND', { request: false });
+  assert.equal(page.request('UNOBSERVED_SYNTHETIC_SEND'), promise);
+  assert.equal(await promise, response); assert.equal(await response.text(), 'UNCHANGED_PROVIDER_RESPONSE');
+  await until(() => page.feedback === 'Attestamp · Recording gap');
+  assert.equal((await page.inspect()).observerState, 'wrapped');
+  assert.equal(effects, 2, 'one health validation and one user Send, with no periodic wrapper invocation');
+  assert.equal(f.deliveries.length, 0); assert.equal(f.runtime.session.receipts.list().length, 0);
+  assert.equal(f.anchorCalls, 0); assert.equal(f.prevention, 0);
+});
+
 test('an injected isolated relay alone does not establish transport readiness', async t => {
   const { f, debugSession } = await fixture(t, { transport: false });
   await f.command('SET_RECORDING', { enabled: true });

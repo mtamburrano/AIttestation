@@ -68,26 +68,31 @@ export function installFetchObserver(target, { emit, now = () => performance.now
   const active = new Set(), observedIds = new Set(); let intent = null, stopped = false;
   const probeController = new AbortController(); probeController.abort();
   const probe = new Request('data:,', { signal: probeController.signal });
-  let checkedFetch, checkedAt = -Infinity, checkedState = 'replaced', probing = false, reached = false;
+  const healthByFetch = new WeakMap();
+  let probing = false, reached = false;
   const notify = value => { try { emit(value); } catch {} };
   function state() {
     if (stopped) return 'unavailable';
     try {
       const current = target.fetch;
       if (current === fetchObserved) return 'ready';
+      if (typeof current !== 'function') return 'replaced';
+      const checkedState = healthByFetch.get(current);
+      if (checkedState) return checkedState;
+      if (probing) return 'replaced';
       // The page can install a forwarding wrapper after document_start. Test
       // the chain without reaching the original fetch or spending a qualifier.
       // A bypass sees only an already-aborted, local data URL, never a Send.
-      // Recheck an unchanged wrapper at most once per second, including mutable
-      // delegates. Never re-hook fetch or reinstall it on route changes.
-      if (probing || current === checkedFetch && now() - checkedAt < 1000) return checkedState;
-      checkedFetch = current; checkedAt = now(); checkedState = 'replaced';
+      // Cache each identity for this document: invoking a known page wrapper
+      // again can repeat its own side effects, even if native fetch is avoided.
+      healthByFetch.set(current, 'replaced');
       reached = false; probing = true;
       try { Promise.resolve(Reflect.apply(current, target, [probe])).catch(() => {}); }
       catch {} finally { probing = false; }
-      if (reached && !stopped && target.fetch === current) checkedState = 'wrapped';
-    } catch { checkedState = 'replaced'; }
-    return checkedState;
+      const health = reached && !stopped && target.fetch === current ? 'wrapped' : 'replaced';
+      healthByFetch.set(current, health);
+      return health;
+    } catch { return 'replaced'; }
   }
   function fetchObserved(...args) {
     if (args[0] === probe) {
