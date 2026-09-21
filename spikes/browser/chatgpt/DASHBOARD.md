@@ -41,8 +41,9 @@ recording preference survive. Conflicting configuration is retained and reported
 
 ## History, export and recovery
 
-History groups genuine normal-Send observations and authenticated historical
-records. Distinct equal-text Sends remain distinct. Legacy cancellations and
+History groups validated prompt-request observations and authenticated historical
+records. Distinct message identities remain distinct even with equal text; retries
+of a saved provider message return its original receipt. Legacy cancellations and
 unknown outcomes stay readable with no action controls. Counts use known
 conversation identities; unresolved/new chats and older records remain unassigned.
 The dashboard displays 200 prompt groups per page and counts all retained groups.

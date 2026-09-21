@@ -3,9 +3,10 @@ import { publicProofDigest, verifyDisclosure } from '../vault/records.mjs';
 import { verifyAnchor } from '../anchor/verifier.mjs';
 import { verifyInclusion } from '../anchor/merkle.mjs';
 import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from './normal-observation.mjs';
+import { QUALIFIED_OBSERVATION_PROFILE, validateQualifiedObservation } from './qualified-observation.mjs';
 import { DOM_OBSERVATION_PROFILE, validateDOMObservation } from './dom-observation.mjs';
 import { LEGACY_NORMAL_OBSERVATION_PROFILE, validateLegacyNormalObservation } from './legacy-observation.mjs';
-const isNormal = value => [NORMAL_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value?.profile);
+const isNormal = value => [NORMAL_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value?.profile);
 
 export const PORTABLE_PROFILE = 'pap-portable-evidence/1';
 export const RECIPIENT_LIMITS = Object.freeze({ wire: 16 * 2 ** 20, total: 12 * 2 ** 20,
@@ -91,13 +92,14 @@ export function signedObservation(record, bytes, checked) {
     const value = parseCanonical(bytes, LIMITS.manifest);
     return value.profile === 'pap-chatgpt-observation/1' ? value
       : value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation(value)
+        : value.profile === QUALIFIED_OBSERVATION_PROFILE ? validateQualifiedObservation(value)
         : value.profile === DOM_OBSERVATION_PROFILE ? validateDOMObservation(value)
         : value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE ? validateLegacyNormalObservation(value) : null;
   } catch { return null; }
 }
 
 export function linksNormalMessage(record, observation, targetRecord, targetObservation) {
-  const transport = observation?.profile === NORMAL_OBSERVATION_PROFILE;
+  const transport = [NORMAL_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE].includes(observation?.profile);
   return isNormal(observation) && observation.kind === (transport ? 'normal-acknowledgement' : 'normal-message-observed')
     && isNormal(targetObservation) && targetObservation.profile === observation.profile
     && targetObservation.kind === (transport ? 'normal-request-observed' : 'normal-send-intent')
@@ -222,7 +224,9 @@ export function verifyPortable(input, trust = null, { algorandVerifierPath } = {
           textAssociation: linked ? 'SIGNED_TEXT_REFERENCE' : 'MISSING_OR_INVALID',
           assurance: 'CLIENT_ASSERTION_ONLY', providerReceipt: 'UNKNOWN',
           claim: observation.kind === 'normal-request-observed'
-            ? 'Client observed a new user text in a fetch request qualified by human Send. No provider receipt, authorship, pre-egress control or complete-history proof.'
+            ? observation.profile === NORMAL_OBSERVATION_PROFILE
+              ? 'Client observed exact new user text in a validated provider request. No human-interaction, provider receipt, authorship, pre-egress control or complete-history proof.'
+              : 'Client observed a new user text in a fetch request qualified by human Send. No provider receipt, authorship, pre-egress control or complete-history proof.'
             : 'Retrospective observation of normal Send intent. No pre-egress control, provider receipt, response, attachment or hidden-context coverage.' });
       } else if (linksNormalMessage(record, observation, sourceRecords.get(observation.recordDigest), observations.get(observation.recordDigest))) {
         target.localAssertions.push({ kind: observation.kind, eventId: observation.eventId,

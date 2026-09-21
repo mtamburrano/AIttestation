@@ -55,7 +55,7 @@ for (const order of ['policy before relay', 'relay before policy']) {
   });
 }
 
-test('policy before relay preserves the matching qualifier after an earlier unextractable Send', async t => {
+test('policy before relay preserves the matching request after an earlier unextractable Send', async t => {
   const f = await fixture(t, { newChat: true, fixedSenderURL: true }), page = f.pages.get(17);
   f.send('UNSUPPORTED_FIRST', { request: false });
   await page.fetch('/backend-api/f/conversation', { method: 'POST', body: new FormData() });
@@ -71,7 +71,7 @@ test('policy before relay preserves the matching qualifier after an earlier unex
 });
 
 for (const change of ['OFF', 'OFF/ON', 'reload', 'full navigation', 'replacement document', 'other tab',
-  'unrelated route', 'unsupported route', 'permission loss', 'disconnect', 'qualifier expiry']) {
+  'unrelated route', 'unsupported route', 'permission loss', 'disconnect', 'request relay expiry']) {
   test(`policy-before-relay continuity rejects ${change}`, async t => {
     const response = new Response('PROVIDER_UNAFFECTED'), provider = Promise.resolve(response);
     const f = await fixture(t, { newChat: true, fixedSenderURL: true, fetchResponse: () => provider });
@@ -92,7 +92,7 @@ for (const change of ['OFF', 'OFF/ON', 'reload', 'full navigation', 'replacement
     if (change === 'unsupported route') { f.navigate(17, 'https://chatgpt.com/settings'); await f.refresh(); }
     if (change === 'permission loss') { f.revokePermission(); await until(() => !f.runtime.adapter.scopes().length); }
     if (change === 'disconnect') f.disconnect();
-    if (change === 'qualifier expiry') await new Promise(resolve => setTimeout(resolve, 1550));
+    if (change === 'request relay expiry') await new Promise(resolve => setTimeout(resolve, 5050));
     relay.release();
     await new Promise(resolve => setTimeout(resolve, 80)); await f.runtime.engine.drain();
     assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0); assert.equal(f.anchorCalls, 0);
@@ -103,7 +103,7 @@ for (const change of ['OFF', 'OFF/ON', 'reload', 'full navigation', 'replacement
   });
 }
 
-test('a qualified first Send alone creates no evidence across a fresh route policy', async t => {
+test('a DOM Send alone creates no evidence across a fresh route policy', async t => {
   const f = await fixture(t, { newChat: true, fixedSenderURL: true });
   f.send('NO_FETCH', { request: false }); await conversationPolicy(f);
   await assertFeedback(f, 'Attestamp · ON');
@@ -121,9 +121,9 @@ for (const state of ['current', 'OFF', 'OFF/ON']) {
     const original = await page.fetch(request);
     assert.ok(original instanceof Response); assert.equal(request.bodyUsed, false);
     f.send('SAVED_B'); await until(() => page.feedback === 'Attestamp · Prompt saved');
+    await until(() => relay.messages.length === 1);
     if (state !== 'current') await f.recording(false);
     if (state === 'OFF/ON') await f.recording(true);
-    await until(() => relay.messages.length === 1);
     relay.release();
     await assertFeedback(f, state === 'OFF' ? '' : state === 'OFF/ON' ? 'Attestamp · ON' : 'Attestamp · Prompt saved');
     assert.equal(saved(f).length, 1); assert.equal(f.deliveries.length, 1);
@@ -169,7 +169,7 @@ test('a refused newer human Send retires older save feedback without disturbing 
   const f = await fixture(t, { afterCapture: async () => { entered = true; await result.promise; } });
   const page = f.pages.get(17);
   f.send('SAVED_A'); await until(() => entered);
-  page.attachments = true; f.send('REFUSED_B');
+  page.attachments = true; f.send('REFUSED_B', { payload: { attachments: ['file'] } });
   await assertFeedback(f, 'Attestamp · Recording gap');
   result.release(); await assertFeedback(f, 'Attestamp · Recording gap');
   assert.equal(saved(f).length, 1); assert.equal(f.deliveries.length, 1);

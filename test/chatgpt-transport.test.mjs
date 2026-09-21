@@ -18,7 +18,7 @@ function fixture(t, original = () => Promise.resolve(new Response('provider'))) 
   const events = [], calls = [];
   const target = { location: new URL('https://chatgpt.com/c/conversation-1'), fetch(...args) { calls.push({ self: this, args }); return original(...args); } };
   const observer = installFetchObserver(target, { emit: value => events.push(value) }); t.after(() => observer.stop());
-  observer.qualify(randomUUID(), 'conversation-1');
+  observer.arm(randomUUID(), 'conversation-1');
   return { target, observer, events, calls };
 }
 
@@ -33,7 +33,7 @@ test('a late instrumentation wrapper stays ready before any Send and preserves t
   assert.equal(f.target.fetch, instrumentation);
   assert.equal(f.calls.length, 0, 'health checks must not reach the provider delegate');
   assert.deepEqual(f.events, []);
-  f.observer.qualify(randomUUID(), 'conversation-1');
+  f.observer.arm(randomUUID(), 'conversation-1');
   const receiver = {}, init = { method: 'POST', body: body() };
   const result = f.target.fetch.call(receiver, url, init);
   assert.equal(result, promise); assert.equal(await result, providerResponse);
@@ -94,7 +94,7 @@ test('unsupported wrappers fail closed without issuing a provider request or lea
   }
 });
 
-test('allowlist selects origin, POST, operation and one new user text; exclusions leave a qualifier usable', async t => {
+test('allowlist selects origin, POST, operation and one new user text; exclusions leave a recording policy usable', async t => {
   const f = fixture(t);
   for (const resource of ['/backend-api/conversation/prepare', '/backend-api/conversation/history', '/backend-anon/conversation',
     'https://example.org/backend-api/conversation', '/backend-api/files', '/backend-api/f/conversation/resume']) {
@@ -111,7 +111,7 @@ test('allowlist selects origin, POST, operation and one new user text; exclusion
   await f.target.fetch(url, { method: 'POST', body: body() }); await tick();
   assert.equal(f.events.filter(e => e.kind === 'request').length, 1);
   await f.target.fetch(url, { method: 'POST', body: body() }); await tick();
-  assert.equal(f.events.filter(e => e.kind === 'request').length, 1);
+  assert.equal(f.events.filter(e => e.kind === 'request').length, 2, 'durable deduplication is owned by the engine');
   for (const endpoint of ['/backend-api/conversation', '/backend-api/f/conversation']) assert.ok(matchChatGPT(new URL(endpoint, url), 'POST'));
   assert.equal(matchChatGPT(new URL(url + '?unknown=true'), 'POST'), false);
 });
@@ -165,6 +165,7 @@ for (const wrapped of [false, true]) test(`provider receives identical arguments
   await tick(); assert.equal(g.events.filter(e => e.kind === 'request').length, 1);
   const h = prepare(fixture(t, () => { throw error; })); assert.throws(() => h.target.fetch(url, options), value => value === error);
   assert.equal(h.calls.length, 1);
+  await tick(); assert.equal(h.events.filter(e => e.kind === 'request').length, 1, 'local capture does not wait for a provider result');
 });
 
 test('unsupported bodies and capture exceptions cannot change fetch; getters run only in original fetch', async t => {
@@ -177,7 +178,7 @@ test('unsupported bodies and capture exceptions cannot change fetch; getters run
   await tick(); assert.equal(f.events.filter(e => e.kind === 'request').length, 0); assert.equal(f.calls.length, 4);
   const target = { fetch: () => Promise.resolve(new Response('unchanged')), location: new URL(url) };
   const observer = installFetchObserver(target, { emit() { throw Error('capture failure'); } }); t.after(() => observer.stop());
-  observer.qualify(randomUUID()); assert.equal(await (await target.fetch(url, { method: 'POST', body: body() })).text(), 'unchanged');
+  observer.arm(randomUUID(), 'conversation-1'); assert.equal(await (await target.fetch(url, { method: 'POST', body: body() })).text(), 'unchanged');
 });
 
 test('early handoff and inline initial messages bind to their fetch; unknown, foreign, completion and HTTP status are not ack', async () => {
@@ -211,11 +212,11 @@ test('response observation stops at ack, timeout, failure or byte limit and canc
   assert.equal(original.bodyUsed, false); assert.equal(await original.text(), full);
 });
 
-test('cleanup cannot cancel provider input/output or turn stale qualifiers into observations', async t => {
+test('cleanup cannot cancel provider input/output or turn stale recording policies into observations', async t => {
   const f = fixture(t); f.observer.clear();
   const promise = f.target.fetch(url, { method: 'POST', body: body() });
   assert.equal(await (await promise).text(), 'provider'); await tick(); assert.deepEqual(f.events, []);
-  f.observer.qualify(randomUUID()); const originalFetch = f.target.fetch;
+  f.observer.arm(randomUUID(), 'conversation-1'); const originalFetch = f.target.fetch;
   f.observer.stop(); assert.notEqual(f.target.fetch, originalFetch);
   await f.target.fetch(url, { method: 'POST', body: body() }); assert.equal(f.calls.length, 2);
 });
@@ -239,30 +240,30 @@ test('a page consuming the original body in its first promise handler still perm
   await tick(); assert.equal(f.events.filter(value => value.kind === 'ack').length, 1);
 });
 
-test('slow Request bodies keep request order and expiration/cleanup never records a late body', async t => {
+test('slow bodies retain invocation sequence without holding later requests; stale recording policies stop capture', async t => {
   const f = fixture(t); let controller;
   const request = new Request(url, { method: 'POST', duplex: 'half', body: new ReadableStream({ start(c) { controller = c; } }) });
   await f.target.fetch(request);
   await f.target.fetch(url, { method: 'POST', body: body('second') });
   controller.enqueue(new TextEncoder().encode(body('first'))); controller.close();
   await request.text(); await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(f.events.find(value => value.kind === 'request').text, 'first');
-  assert.equal(f.events.filter(value => value.kind === 'request').length, 1);
+  assert.deepEqual(f.events.filter(value => value.kind === 'request').map(value => value.text), ['second', 'first']);
+  assert.deepEqual(f.events.filter(value => value.kind === 'matched').map(value => value.sequence), [1, 2]);
   let time = 0;
   const events = [], target = { location: new URL(url), fetch: () => Promise.resolve(new Response('provider')) };
   const observer = installFetchObserver(target, { emit: value => events.push(value), now: () => time }); t.after(() => observer.stop());
-  observer.qualify(randomUUID()); time = 1501;
+  observer.arm(randomUUID(), 'conversation-1'); time = 3001;
   await target.fetch(url, { method: 'POST', body: body() }); await tick(); assert.equal(events.length, 0);
 });
 
-test('a retry/resubmit of an observed message cannot consume the next qualified human Send', async t => {
+test('retries and subsequent distinct identities reach durable validation without consuming recording policy', async t => {
   const f = fixture(t);
   await f.target.fetch(url, { method: 'POST', body: body('first') }); await tick();
-  f.observer.qualify(randomUUID(), 'conversation-1');
+  f.observer.arm(randomUUID(), 'conversation-1');
   await f.target.fetch(url, { method: 'POST', body: body('resubmitted or edited') }); await tick();
-  assert.equal(f.events.filter(value => value.kind === 'request').length, 1);
+  assert.equal(f.events.filter(value => value.kind === 'request').length, 2);
   const next = JSON.parse(body('new prompt')); next.messages[0].id = 'user-2';
   await f.target.fetch(url, { method: 'POST', body: JSON.stringify(next) }); await tick();
-  assert.equal(f.events.filter(value => value.kind === 'request').length, 2);
-  assert.equal(f.events.filter(value => value.kind === 'request')[1].text, 'new prompt');
+  assert.equal(f.events.filter(value => value.kind === 'request').length, 3);
+  assert.equal(f.events.filter(value => value.kind === 'request')[2].text, 'new prompt');
 });

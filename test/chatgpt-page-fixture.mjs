@@ -69,7 +69,7 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     clicks: () => clicks, injections: () => injections,
     get text() { return textarea ? editor.value : editor.textContent; },
     set text(value) { if (textarea) editor.value = value; else editor.textContent = value; changed(); },
-    event(name, event = {}) { for (const callback of events[name] ?? windowEvents[name] ?? []) callback({ target: editor, ...event }); },
+    event(name, event = {}) { for (const callback of events[name] ?? windowEvents[name] ?? []) callback({ type: name, target: editor, ...event }); },
     get feedback() { return document.documentElement.childNodes.find(node => node.id === 'attestamp-recording-status')?.textContent ?? ''; },
     close() { page.event('pagehide'); for (const timer of timers) clock.clearTimeout(timer); timers.clear(); },
     sender(overrides = {}) { return { id: CHATGPT_EXTENSION_ID, frameId: 0, tab: { id: 17, windowId: 1, url: page.location.href },
@@ -136,6 +136,6 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     body: JSON.stringify({ action: 'next', messages: [{ id: webcrypto.randomUUID(), author: { role: 'user' },
       content: { content_type: 'text', parts: [text] } }], parent_message_id: webcrypto.randomUUID(),
     conversation_id: page.location.pathname === '/' ? null : page.location.pathname.split('/')[2], ...overrides }) });
-  page.transportMessage = data => sandbox.postMessage({ channel: 'pap-chatgpt-transport/1', ...data }, 'https://chatgpt.com');
+  page.transportMessage = data => sandbox.postMessage({ channel: 'pap-chatgpt-transport/2', ...data }, 'https://chatgpt.com');
   return page;
 }

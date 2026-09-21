@@ -1,0 +1,40 @@
+{
+  "evidence": "REAL_CHROME_WITH_SYNTHETIC_PAGE_AND_NATIVE_PEER",
+  "checks": [
+    "LATE_FORWARDING_WRAPPER_READY_WITH_EMPTY_COMPOSER_AFTER_FULL_RELOAD_WITHOUT_SEND",
+    "EMPTY_TYPE_CLEAR_WITHOUT_SEND_BUTTON_STAYS_ARMED",
+    "IDLE_HEARTBEATS_AND_INSPECTIONS_VALIDATE_EACH_FETCH_IDENTITY_ONCE",
+    "GENUINE_OBSERVER_BYPASS_UNAVAILABLE_AND_FORWARDING_WRAPPER_RECOVERS_WITHOUT_SEND",
+    "FIRST_GENUINE_SEND_DURABLE_ONCE_AFTER_REAL_SAME_DOCUMENT_NAVIGATION_WITH_HELD_BROWSER_CHECK",
+    "LATER_EQUAL_TEXT_SEND_HAS_DISTINCT_RECEIPT_ON_CURRENT_CONVERSATION",
+    "EARLY_HANDOFF_BINDS_TO_BOTH_DURABLE_EVENTS",
+    "FIRST_SEND_ROUTE_POLICY_PRECEDES_MAIN_TO_ISOLATED_REQUEST_DELIVERY",
+    "CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD",
+    "PAGE_WRAPPER_REFERENCE_UNCHANGED_ACROSS_HEARTBEATS_AND_SPA_NAVIGATION",
+    "OFF_CONTINUES_PROVIDER_ACTION_WITHOUT_NEW_CAPTURE",
+    "REQUEST_WITHOUT_DOM_CONTROLS_SAVES_AND_STABLE_ID_RETRY_DEDUPLICATES",
+    "OFF_CUTOFF_ALSO_APPLIES_WITHOUT_DOM_CONTROLS"
+  ],
+  "workerSHA256": "83c29d03e7ecbf9f763ece09fdf8007290c1f3d8f836411298d25b58d7668b07",
+  "observerSHA256": "0eeb124a9e2ca66096e8e961c83e1a6508f5189db58137c85a5a8c267e3cfbe8",
+  "contentSHA256": "be1acdd8e9d568ecc491b015bbb5b97932db3965e2b79e53a26349be704f9248",
+  "browser": "Chrome/153.0.8010.48",
+  "healthWrapperEffects": {
+    "forwarding": 1,
+    "bypass": 1
+  },
+  "totalWrapperEffects": 9,
+  "syntheticSends": 8,
+  "result": "PASS",
+  "liveProviderCoverage": "UNVERIFIED",
+  "nativeIdentityCoverage": "SYNTHETIC_PEER",
+  "resourceIsolation": "Fresh temporary Chrome profile, encrypted vault, memory keys, intercepted page traffic and blocked external DNS",
+  "node": "22.23.1",
+  "additionalSourceSHA256": {
+    "test/chatgpt-capture-browser.mjs": "429759c21486258bc215b267d31bfce3f58ffee76b8f708ef369048143d0860c",
+    "spikes/browser/chatgpt/engine.mjs": "ae2c2067e1d6c1c41a5f3b1de3c2ee41a6a3775ec35b99339b8b2e6363e5784a",
+    "spikes/browser/chatgpt/session.mjs": "fcf5b9d87419b03ae344686aa1e586d503421fd9bc8ee13d0cc06e571708db69",
+    "spikes/recipient/normal-observation.mjs": "7eef5c93c665c8f8ffd456f70d2f447900e26b3d9e8d663ed74c462cec662b9b",
+    "spikes/recipient/qualified-observation.mjs": "8e0a256c384e3c05aede36da005df20d3eba30b756d76949b10d141184f79ab5"
+  }
+}

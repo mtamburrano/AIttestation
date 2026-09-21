@@ -1,6 +1,6 @@
 import { MAX_REQUEST_BYTES, MAX_PROMPT_BYTES, parseWireJSON } from './bounded.mjs';
 
-export const EXTRACTION_PROFILE = 'chatgpt-new-user-text/1';
+export const EXTRACTION_PROFILE = 'chatgpt-new-user-text/2';
 export const ACK_PROFILE = 'chatgpt-early-ack/1';
 export const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 export const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value);
@@ -25,10 +25,21 @@ export function extractChatGPT(text, path) {
   if (typeof text !== 'string' || text.length > MAX_REQUEST_BYTES || !text.isWellFormed()
       || new TextEncoder().encode(text).length > MAX_REQUEST_BYTES) throw Error('REQUEST_LIMIT');
   const body = parseWireJSON(text);
-  if (!body || body.action !== 'next' || !Array.isArray(body.messages) || body.messages.length !== 1
+  if (!requestPath(path) || !body || body.action !== 'next' || !Array.isArray(body.messages)
+      || body.messages.length < 1 || body.messages.length > 128
       || !wireId(body.parent_message_id) || body.conversation_id != null && !wireId(body.conversation_id)
       || excluded(body)) return null;
-  const message = body.messages[0], content = message?.content;
+  const message = body.messages.at(-1), content = message?.content;
+  // History is accepted only when the parent explicitly identifies the message
+  // immediately before the new user turn. Never guess the last user in an
+  // arbitrary batch, or concatenate history/multimodal parts into evidence.
+  const ids = new Set();
+  for (const entry of body.messages) {
+    if (!wireId(entry?.id) || ids.has(entry.id) || !['user', 'assistant'].includes(entry.author?.role)) return null;
+    ids.add(entry.id);
+  }
+  if (message.id === body.parent_message_id || body.messages.length > 1
+      && (body.messages.at(-2).id !== body.parent_message_id || body.messages.at(-2).author.role !== 'assistant')) return null;
   if (!wireId(message?.id) || message.author?.role !== 'user' || content?.content_type !== 'text'
       || !Array.isArray(content.parts) || content.parts.length !== 1 || typeof content.parts[0] !== 'string'
       || message.recipient != null && message.recipient !== 'all'

@@ -15,7 +15,7 @@ only `pap-resident-command/2` with these exact fields:
 | --- | --- |
 | profile | pap-resident-command/2 |
 | runtimeEpoch | Current engine UUID |
-| adapterProfile | pap-chatgpt-chrome/7 |
+| adapterProfile | pap-chatgpt-chrome/8 |
 | commandId | Fresh UUID, retained for identical transport retry |
 | expectedRevision | Displayed nonnegative integer revision |
 | kind | SET_RECORDING |
@@ -49,20 +49,23 @@ snapshots once they receive OFF; stale in-flight buffers cannot become new evide
 after the engine cutoff. A failed preference write also disables capture until
 restart. No provider action waits on storage, IPC, account or anchoring.
 
-The engine keeps at most 512 queued/active anchor jobs and runs at most two at a
+The engine keeps at most 512 queued/active/scheduled anchor jobs and runs at most two at a
 time. A full anchor queue leaves new durable evidence saved with PENDING anchoring;
 it does not reject capture. An insertion-order cursor fills freed slots from
 durable history, considering each observation once per runtime. Metadata still
-being saved is excluded. Restart resumes eligible pending history without a retry
-loop or a backlog of unobserved text.
+being saved is excluded. Temporary service/quota/credit or confirmation timeout failures schedule at most
+two retries, after five and thirty seconds. The saved anchor identity and durable
+attempt budget apply to every retry. Restart resumes eligible pending history;
+invalid proof results, missing configuration and missing credentials do not
+automatically retry. No job can replay a provider request.
 
 Each observation has at most three persisted external submission/confirmation
 attempts across restarts. Missing local configuration or account credentials
 consumes no attempt. The attempt is committed immediately before an external
 request; remote rejection and ambiguous outcomes still count. A saved transaction
 is reused. OFF permits that bounded work to finish, but account disconnect
-separately removes service access. Old observation profiles are read-only and
-never enter this queue.
+separately removes service access. Pre-ON/OFF observation/2 is read-only and never enters this queue; historical
+ON/OFF observation/3 and /4 retain their bounded pending anchor workflow.
 
 ## Persistence and migration
 
@@ -88,7 +91,8 @@ Migration preserves signed historical objects without rewriting their bytes.
 Recent state lists the last 512 observation versions; the vault retains history.
 Source policies, command acknowledgements and undelivered captures are not
 restored. New signed records use `pap-local-record/2` and normal observations use
-`pap-chatgpt-observation/4`. Legacy schemas remain isolated read compatibility.
+`pap-chatgpt-observation/5`. Stable provider message identities are indexed from
+signed transport history so retries return the original receipt across restarts. Legacy schemas remain isolated read compatibility.
 Native framing, bundle identities, cryptographic domains and portable export
 formats retain their established identities.
 

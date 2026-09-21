@@ -18,6 +18,7 @@ import { testTab } from './chrome-worker-fixture.mjs';
 import { ManagedAnchoringClient } from '../spikes/managed/client.mjs';
 import { MANAGED_PROFILE, MANAGED_NETWORK } from '../spikes/managed/protocol.mjs';
 import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
+import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 
 async function root(t) {
   const directory = await mkdtemp('/private/tmp/attestamp-onoff-test-');
@@ -31,6 +32,88 @@ const command = (engine, enabled, changes = {}) => ({ profile: ENGINE_COMMAND_PR
   commandId: randomUUID(), expectedRevision: engine.state().revision, kind: 'SET_RECORDING', enabled, ...changes });
 const legacy = preferences => ({ profile: 'pap-resident-state/1', state: { revision: 4, operations: [], preferences } });
 const global = { paused: false, defaultMode: 'Continuous', conversations: {} };
+
+for (const [failure, recover] of [
+  ...['SERVICE_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'UNPAID', 'RATE_LIMITED', 'PENDING_FAST_CONFIRMATION'].map(code => [code, true]),
+  ['SERVICE_UNAVAILABLE', false], ['PENDING_FAST_CONFIRMATION', false],
+]) {
+  test(`asynchronous ${failure} retry uses only the durable anchor while OFF (recover=${recover})`, async t => {
+    const directory = await root(t), diagnostics = new LocalDiagnostics();
+    const vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true });
+    t.after(() => vault.close());
+    const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
+    let submissions = 0, confirmations = 0;
+    const payloads = [], session = await new ChatGPTRecordingSession(directory, adapter, {
+      vault, diagnostics, fastTrust: { profile: FAST_CONFIRM_PROFILE },
+      managed: { submit: async (payload, { beforeSubmit }) => {
+        // Text and the signed descriptor already exist before any anchor I/O.
+        assert.equal(session.receipts.list().length, 1);
+        payloads.push(payload); beforeSubmit(); submissions++;
+        if (failure !== 'PENDING_FAST_CONFIRMATION' && (!recover || submissions === 1)) throw Object.assign(Error('synthetic'), { code: failure });
+        return { transactionId: 'A'.repeat(52) };
+      } },
+      collectFast: async () => {
+        confirmations++;
+        if (failure === 'PENDING_FAST_CONFIRMATION' && (!recover || confirmations === 1)) throw Object.assign(Error('synthetic'), { code: failure });
+        return {};
+      },
+      verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED', assurance: FAST_CONFIRM_PROFILE, round: 42 }),
+    }).init();
+    t.after(() => session.close());
+    const source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT, scope: randomUUID(),
+      runtimeEpoch: 'synthetic-runtime', browserSessionId: 'synthetic-browser', tabId: 17, windowId: 1,
+      tabEpoch: 'synthetic-tab', documentId: 'synthetic-document', destination: 'conversation:retry' };
+    const saved = session.observeNormal({ kind: 'request-observed', eventId: randomUUID(), source,
+      inputMethod: 'provider-request', text: 'SYNTHETIC_ANCHOR_RETRY',
+      request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'retry-message', conversationId: 'retry' } });
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const engine = await new ResidentEngine(directory, session, adapter, randomUUID(), diagnostics).init();
+    t.after(() => engine.stop());
+    await engine.drain();
+    assert.equal(engine.state().recording, false); assert.equal(session.status().versions[0].anchor, 'PENDING');
+    t.mock.timers.tick(4999); await engine.drain(); assert.equal(submissions, 1);
+    t.mock.timers.tick(1); await engine.drain();
+    const version = session.status().versions[0];
+    assert.equal(version.anchor, recover ? 'SOURCE_CORROBORATED' : 'PENDING'); assert.equal(version.recordDigest, saved.recordDigest);
+    assert.equal(version.anchorAttempts, 2); assert.equal(session.receipts.list().length, 1);
+    assert.equal(submissions, failure === 'PENDING_FAST_CONFIRMATION' ? 1 : 2);
+    assert.equal(new Set(payloads).size, 1);
+    const codes = diagnostics.preview().report.events.map(value => value.code);
+    assert.ok(codes.includes('ANCHOR_RETRY_SCHEDULED')); assert.ok(codes.includes('ANCHOR_RETRY_STARTED'));
+    t.mock.timers.tick(30000); await engine.drain();
+    assert.equal(session.status().versions[0].anchorAttempts, recover ? 2 : 3);
+    t.mock.timers.tick(100000); await engine.drain();
+    assert.equal(session.status().versions[0].anchorAttempts, recover ? 2 : 3);
+    engine.stop();
+  });
+}
+
+test('historical qualified transport evidence keeps its signed meaning and dedup identity after reopen', async t => {
+  const directory = await root(t), vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true });
+  t.after(() => vault.close());
+  const text = vault.capture(Buffer.from('HISTORICAL_QUALIFIED_PROMPT'));
+  const value = { profile: 'pap-chatgpt-observation/4', kind: 'normal-request-observed', eventId: randomUUID(),
+    source: { adapterProfile: 'pap-chatgpt-chrome/7', pageContract: 'chatgpt-web-text/2026-09-20', runtimeEpoch: 'old-epoch',
+      browserSessionId: 'old-browser', scope: randomUUID(), tabId: 17, windowId: 1, tabEpoch: 'old-tab', documentId: 'old-document', destination: 'new-chat' },
+    inputMethod: 'enter', request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'old-message', conversationId: null },
+    textRecord: text.manifest.eventId, textObject: text.manifest.evidence[0].objectDigest,
+    mode: 'ON', boundary: 'provider_fetch', coverage: 'UTF8_NEW_USER_MESSAGE', releaseClass: 'RETROSPECTIVE_OBSERVATION',
+    attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
+  const record = vault.capture(Buffer.from(canonical(value)), { type: 'observation' });
+  vault.capture(Buffer.from(canonical({ profile: value.profile, kind: 'normal-acknowledgement', eventId: value.eventId,
+    source: value.source, recordDigest: record.recordDigest, acknowledgement: { profile: 'chatgpt-early-ack/1',
+      kind: 'stream-handoff', conversationId: 'created', correlationId: 'old-turn' }, correlation: 'SAME_FETCH_CALL', providerReceipt: 'UNKNOWN' })), { type: 'observation' });
+  const before = canonical(vault.inspect().records);
+  const session = await new ChatGPTRecordingSession(directory, {}, { vault, fastTrust: { profile: FAST_CONFIRM_PROFILE } }).init();
+  t.after(() => session.close());
+  const preview = session.receipts.prepare({ ids: [record.manifest.eventId] });
+  const assertions = verifyPortable(session.receipts.export(preview.previewId)).records.flatMap(v => v.localAssertions);
+  assert.ok(assertions.some(v => /qualified by human Send/.test(v.claim)));
+  assert.ok(assertions.some(v => v.kind === 'normal-acknowledgement'));
+  assert.throws(() => session.observeNormal({ eventId: value.eventId }), /read-only/);
+  const retried = session.observeNormal({ ...value, kind: 'request-observed', eventId: randomUUID(), text: 'HISTORICAL_QUALIFIED_PROMPT' });
+  assert.equal(retried.id, value.eventId); assert.equal(canonical(vault.inspect().records), before);
+});
 
 test('only known unambiguous global Continuous consent migrates ON; repeated migrations are stable', () => {
   const cases = [null, { profile: 'future', state: {} }, legacy({ ...global, defaultMode: 'Off' }),
@@ -165,12 +248,13 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
     runtimeEpoch: epoch, browserSessionId: policy.browserSessionId, scope: policy.scope, tabId: policy.tabId,
     windowId: policy.windowId, tabEpoch: policy.tabEpoch, documentId: 'queue-document', destination: policy.destination };
   const observation = { profile: CHATGPT_CAPTURE_PROFILE, kind: 'request-observed', token: policy.token,
-    eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'send-button',
-    request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'queued-message', conversationId: source.destination.slice(13) } };
+    eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'provider-request',
+    request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'queued-message', conversationId: source.destination.slice(13) } };
   const ack = await engine.observe(observation);
   assert.equal(ack.state, 'PROMPT_SAVED');
   assert.deepEqual(await engine.observe(observation), ack);
-  await engine.observe({ ...observation, eventId: randomUUID(), text: 'SECOND_DURABLE_CAPTURE' });
+  await engine.observe({ ...observation, eventId: randomUUID(), text: 'SECOND_DURABLE_CAPTURE',
+    request: { ...observation.request, messageId: 'second-queued-message' } });
   assert.equal(session.receipts.list().length, 2); assert.equal(jobs.length, 2);
   assert.ok(status().versions.every(version => version.anchor === 'PENDING' && version.anchorAttempts === 0));
   const preview = session.receipts.prepare({ ids: [ack.receiptId] });
@@ -322,8 +406,8 @@ test('an unconfigured client consumes no attempts across restart and can later a
     runtimeEpoch: randomUUID(), browserSessionId: 'synthetic-unconfigured', scope: randomUUID(), tabId: 17,
     windowId: 1, tabEpoch: 'synthetic-epoch', documentId: 'synthetic-document', destination: 'conversation:synthetic' };
   const original = session.observeNormal({ kind: 'request-observed', eventId: id, source,
-    text: 'UNCONFIGURED_SYNTHETIC', inputMethod: 'send-button',
-    request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'unconfigured-message', conversationId: 'synthetic' } });
+    text: 'UNCONFIGURED_SYNTHETIC', inputMethod: 'provider-request',
+    request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'unconfigured-message', conversationId: 'synthetic' } });
   await assert.rejects(session.confirmFast({ id, transactionId: 'invalid' }), /Algorand transaction ID required/);
   assert.equal(session.status().versions[0].anchorAttempts, 0);
   for (let index = 0; index < 4; index++) {

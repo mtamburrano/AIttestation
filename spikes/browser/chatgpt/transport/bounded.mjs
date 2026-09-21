@@ -3,7 +3,7 @@ export const MAX_PROMPT_BYTES = 256 * 1024;
 export const REQUEST_TIMEOUT_MS = 750;
 export const ACK_BYTES = 64 * 1024;
 export const ACK_TIMEOUT_MS = 2000;
-export const INTENT_MS = 1500;
+export const POLICY_MS = 3000;
 
 // Duplicate JSON keys and deeply nested extensions have no unambiguous profile.
 export function parseWireJSON(text) {

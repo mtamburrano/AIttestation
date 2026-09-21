@@ -37,15 +37,15 @@ test('durable exact request text is independent of composer markup and rendered 
   assert.equal(f.prevention, 0); assert.equal(page.injections(), 0); assert.equal(page.clicks(), 0); assert.equal(f.releases.length, 0);
 });
 
-test('a qualifier alone, typing, hydration, synthetic input, IME and excluded Enter chords never create evidence', async t => {
+test('DOM events alone, typing, hydration, synthetic input and IME never create evidence', async t => {
   const f = await fixture(t); await f.recording(true); const page = f.pages.get(17);
   page.text = exact; page.event('input', { isTrusted: true }); f.appear(exact);
-  f.send(exact, { trusted: false });
+  f.send(exact, { trusted: false, request: false });
   for (const event of [{ isComposing: true }, { keyCode: 229 }, { repeat: true }, { shiftKey: true }, { ctrlKey: true }, { altKey: true }, { metaKey: true }]) {
-    f.send(exact, { method: 'enter', ...event });
+    f.send(exact, { method: 'enter', request: false, ...event });
   }
-  page.event('compositionstart'); f.send(exact, { method: 'enter' }); page.event('compositionend');
-  f.send(exact, { method: 'enter' });
+  page.event('compositionstart'); f.send(exact, { method: 'enter', request: false }); page.event('compositionend');
+  f.send(exact, { method: 'enter', request: false });
   f.send(exact, { request: false }); await tick(); await tick();
   assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0);
   page.transportMessage({ kind: 'request', id: crypto.randomUUID(), text: exact, request: {} });
@@ -264,7 +264,7 @@ test('same-document navigation alone cannot authenticate an unobserved first Sen
   f.navigate(17, 'https://chatgpt.com/c/unrelated');
   const page = f.pages.get(17);
   const result = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT,
-    token: policy.token, eventId: crypto.randomUUID(), observationKind: 'request-observed', inputMethod: 'send-button', text: exact, request: { profile: 'chatgpt-new-user-text/1', path: '/backend-api/conversation', messageId: 'unobserved', conversationId: null } }, page.captureSender());
+    token: policy.token, eventId: crypto.randomUUID(), observationKind: 'request-observed', inputMethod: 'provider-request', text: exact, request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'unobserved', conversationId: null } }, page.captureSender());
   assert.equal(result.state, 'RECORDING_UNAVAILABLE');
   assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0);
 });

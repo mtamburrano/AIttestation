@@ -24,7 +24,7 @@ const origin = `chrome-extension://${CHATGPT_EXTENSION_ID}/`;
 const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } };
 const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
-  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/3',
+  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/4',
   pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'test-browser-session', ...identity,
   permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [testTab()] });
 const fastTrust = { profile: FAST_CONFIRM_PROFILE };

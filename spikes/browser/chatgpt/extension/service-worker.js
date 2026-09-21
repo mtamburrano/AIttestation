@@ -1,18 +1,22 @@
-const ADAPTER_PROFILE = 'pap-chatgpt-chrome/7';
-const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-20';
+const ADAPTER_PROFILE = 'pap-chatgpt-chrome/8';
+const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21';
 const NATIVE_HOST = 'ai.provenance.consumer';
-const CAPTURE_PROFILE = 'pap-chatgpt-capture/3';
+const CAPTURE_PROFILE = 'pap-chatgpt-capture/4';
 const PANEL_PROFILE = 'pap-chatgpt-panel/2';
 const PANEL_CHANNEL = 'pap-chatgpt-panel-channel/1';
 const panelChannels = new Set();
 const PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
 const PANEL_REJECTIONS = new Set(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
   'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
-const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/2';
+const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/3';
 const CAPTURE_REJECTIONS = new Set(['PAGE_SEND_REJECTED', 'CAPTURE_REJECTED']);
+const PAGE_DIAGNOSTICS = new Set([...CAPTURE_REJECTIONS, 'REQUEST_NOT_OBSERVED', 'REQUEST_MATCHED',
+  'REQUEST_EXTRACTOR_REJECTED', 'REQUEST_MESSAGE_REJECTED', 'REQUEST_MESSAGE_MISSING', 'REQUEST_DEDUPLICATED', 'DURABLE_SAVE_DISPATCHED']);
 const CAPTURE_DIAGNOSTICS = new Set([...CAPTURE_REJECTIONS, 'TRANSPORT_OBSERVER_READY', 'TRANSPORT_OBSERVER_WRAPPED',
   'TRANSPORT_OBSERVER_REPLACED', 'TRANSPORT_OBSERVER_UNAVAILABLE', 'TRANSPORT_RELAY_READY', 'TRANSPORT_RELAY_UNAVAILABLE',
-  'TRANSPORT_POLICY_READY', 'TRANSPORT_POLICY_UNAVAILABLE', 'TRANSPORT_POLICY_OFF']);
+  'TRANSPORT_POLICY_READY', 'TRANSPORT_POLICY_UNAVAILABLE', 'TRANSPORT_POLICY_OFF',
+  'REQUEST_NOT_OBSERVED', 'REQUEST_MATCHED', 'REQUEST_EXTRACTOR_REJECTED', 'REQUEST_MESSAGE_REJECTED',
+  'REQUEST_MESSAGE_MISSING', 'REQUEST_DEDUPLICATED', 'DURABLE_SAVE_DISPATCHED']);
 let policyRevision = 0;
 const documents = new Map();
 const documentRoutes = new Map();
@@ -23,7 +27,7 @@ const supportedURL = url => url === 'https://chatgpt.com/' || conversationURL(ur
 const exactKeys = (value, keys) => value && Object.keys(value).sort().join(',') === keys.sort().join(',');
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 function validRequest(value) {
-  return exactKeys(value, ['profile', 'path', 'messageId', 'conversationId']) && value.profile === 'chatgpt-new-user-text/1'
+  return exactKeys(value, ['profile', 'path', 'messageId', 'conversationId']) && value.profile === 'chatgpt-new-user-text/2'
     && ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value.path)
     && wireId(value.messageId) && (value.conversationId === null || wireId(value.conversationId));
 }
@@ -221,13 +225,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return true;
   }
   if (message?.kind === 'PAP_PAGE_DIAGNOSTIC') {
-    // Fixed capability bits only: the page reports that it declined to observe a
-    // Send, never why in DOM terms and never any page content.
+    // Fixed stage sightings only; no payload, URL or arbitrary error details.
     if (Object.keys(message).sort().join(',') !== 'code,kind,pageContract' || message.pageContract !== PAGE_CONTRACT
         || sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isSafeInteger(sender.tab?.id)) return;
     try {
       if (new URL(sender.url).origin !== 'https://chatgpt.com') return;
-      if (CAPTURE_REJECTIONS.has(message.code)) reportCaptureDiagnostic(message.code);
+      if (PAGE_DIAGNOSTICS.has(message.code)) reportCaptureDiagnostic(message.code);
     } catch {}
     return;
   }
@@ -394,7 +397,7 @@ chrome.tabs.onUpdated.addListener((id, change) => {
     // still a pending first-New-chat candidate. Tolerate exactly one such
     // precursor: it grants no capture authority, keeps the original document
     // binding, and expires on its own. The later exact route, the same-document
-    // challenge and the pending genuine-event proof are all still required, and
+    // challenge and the pending validated-request proof are all still required, and
     // a second precursor, a later loading or any real navigation revokes below.
     if (pending && !pending.navigated && !pending.navigating && pending.expires > performance.now()
         && documents.get(id) === pending.documentId) {
@@ -520,7 +523,7 @@ async function captureMessage(message, sender) {
       || !/^[a-f0-9-]{36}$/.test(message.eventId ?? '')
       || kind === 'request-observed' && (typeof message.text !== 'string' || message.text.length > 256 * 1024
         || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > 256 * 1024
-        || !['enter', 'send-button'].includes(message.inputMethod) || !validRequest(message.request))
+        || message.inputMethod !== 'provider-request' || !validRequest(message.request))
       || kind === 'acknowledgement' && !validAcknowledgement(message.acknowledgement)) return { state: 'RECORDING_UNAVAILABLE' };
   if (kind === 'acknowledgement' && conversationURL(tab.url)
       && message.acknowledgement.conversationId !== new URL(tab.url).pathname.split('/')[2]) return { state: 'RECORDING_UNAVAILABLE' };

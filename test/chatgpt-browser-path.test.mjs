@@ -28,7 +28,7 @@ const fastTrust = {
 const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } };
 const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
-  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/3',
+  adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/4',
   pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser-session', ...identity,
   permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [testTab()] });
 async function fixture(t, options) {
@@ -151,7 +151,7 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
   assert.equal(manifest.name, 'Attestamp for ChatGPT');
   assert.equal(manifest.short_name, 'Attestamp');
-  assert.equal(manifest.version, '2.1.0');
+  assert.equal(manifest.version, '2.2.0');
   assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
   assert.match(manifest.description, /Attestamp desktop app/);
   assert.match(manifest.description, /supported ChatGPT tabs/);

@@ -1,19 +1,20 @@
 # Attestamp
 
-Attestamp records supported human prompt Sends in ChatGPT Web on Apple-silicon
+Attestamp records supported outgoing prompt requests in ChatGPT Web on Apple-silicon
 macOS with Chrome. One resident app owns the encrypted evidence vault, app-bound
 keys, recording preference and asynchronous anchoring.
 
 - **ON** automatically follows supported existing and new ChatGPT tabs/windows.
-  It snapshots the declared exact text projection at a genuine Send, saves signed
-  encrypted evidence, then attempts blinded anchoring.
+  It extracts exact new user text from validated provider requests, saves signed
+  encrypted evidence, then attempts blinded anchoring. DOM interaction and provider
+  acknowledgement are not prerequisites for local saving.
 - **OFF** stops new capture. Saved history and bounded pending anchor work remain.
 - Use ChatGPT's own composer and Send. Capture and anchor failures never control,
   inject, block or replay that Send.
 
 New and recovered installations start OFF. Recording is prospective and best
 effort: it does not establish complete history, authorship, ownership, event truth,
-provider receipt, non-retention or pre-egress protection. Unsupported input and
+human interaction, provider receipt, non-retention or pre-egress protection. Unsupported input and
 connection/storage failures can leave gaps.
 
 ## Product and trust boundaries
@@ -25,7 +26,7 @@ Closing a view leaves the resident engine running.
 
 The first supported contract is macOS 15.7+ arm64, Chrome Stable major 153 and
 `https://chatgpt.com` text up to 256 KiB. Attachments, responses, voice, edits,
-regeneration and hidden network requests are outside capture. Native peer
+regeneration and unrelated/background requests are outside capture. Native peer
 authentication, exact source/document checks and versioned contracts fail closed.
 Synthetic tests do not establish installed sidebar trust or live provider behavior.
 

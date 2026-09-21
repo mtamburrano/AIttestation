@@ -18,6 +18,7 @@ export class ResidentEngine {
   #listeners = new Set(); #unsubscribe; #closed = false; #failed = false;
   #captureTokens = new Map(); #anchorQueue = []; #anchoring = new Set();
   #newChatTokens = new Map();
+  #anchorRetries = new Map();
   #anchorCursor = 0; #durableVersions = 0;
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
@@ -101,7 +102,7 @@ export class ResidentEngine {
       if (!entry || entry.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
       if (newChatContinuation) {
         // The authenticated worker confirms the original document's pending
-        // snapshot. Retired authority is usable for this one intent only.
+        // snapshot. Retired authority is usable for this one request only.
         if (entry.source.url !== 'https://chatgpt.com/'
             || source.destination !== 'new-chat'
             || entry.eventId && entry.eventId !== eventId
@@ -120,41 +121,63 @@ export class ResidentEngine {
       let version;
       try {
         version = this.#session.observeNormal(observation);
-        if (!prior) await this.#commit();
+        if (!prior && version.id === eventId) await this.#commit();
       } catch (error) {
         if (observation.kind === 'request-observed' && !['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
           this.#failed = true; this.#captureTokens.clear(); this.#publish();
         }
         emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;
       }
-      if (!prior) {
+      if (!prior && version.id === eventId) {
         this.#durableVersions = this.#session.status().versions.length;
         this.#pumpAnchors();
       }
       this.#publish();
       return { profile: CHATGPT_CAPTURE_PROFILE, eventId, kind: observation.kind,
-        state: 'PROMPT_SAVED', receiptId: version.descriptorId };
+        state: 'PROMPT_SAVED', receiptId: version.descriptorId, ...(version.id !== eventId ? { deduplicated: true } : {}) };
     });
   }
   #pumpAnchors() {
     if (this.#closed) return;
     const versions = this.#session.status().versions;
     // Walk insertion-ordered durable history once per runtime. Overflow waits
-    // in the vault, without a growing job queue or automatic retry loop. The
+    // in the vault. Retries share the same bounded queue and workers. The
     // committed boundary excludes a capture whose metadata is still saving.
-    while (this.#anchorCursor < this.#durableVersions && this.#anchorQueue.length + this.#anchoring.size < 512) {
+    while (this.#anchorCursor < this.#durableVersions && this.#anchorQueue.length + this.#anchoring.size + this.#anchorRetries.size < 512) {
       const version = versions[this.#anchorCursor++];
-      if (!version.legacy && version.anchor === 'PENDING' && version.anchorAttempts < 3) this.#anchorQueue.push(version.id);
+      if (!version.legacy && version.anchor === 'PENDING' && version.anchorAttempts < 3) this.#anchorQueue.push({ id: version.id, retry: 0 });
     }
     while (!this.#closed && this.#anchoring.size < 2 && this.#anchorQueue.length) {
-      const id = this.#anchorQueue.shift(); this.#anchoring.add(id);
-      const work = this.#session.anchorManaged({ id }).catch(() => {
+      const { id, retry } = this.#anchorQueue.shift();
+      const version = this.#session.status().versions.find(value => value.id === id);
+      if (!version || version.anchor !== 'PENDING' || version.anchorAttempts >= 3) continue;
+      this.#anchoring.add(id);
+      if (retry) emit(this.#diagnostics, 'ANCHOR_RETRY_STARTED', { operationId: id });
+      const work = this.#session.anchorManaged({ id }).then(result => {
+        if (['SERVICE_UNAVAILABLE', 'SUBMISSION_INTERRUPTED', 'RATE_LIMITED', 'QUOTA_EXHAUSTED', 'UNPAID'].includes(result?.managed?.state)) {
+          this.#retryAnchor(id, retry);
+        }
+      }).catch(error => {
         emit(this.#diagnostics, 'CONFIRMATION_PENDING', { operationId: id });
+        if (error?.code === 'PENDING_FAST_CONFIRMATION') this.#retryAnchor(id, retry);
       }).finally(() => {
         this.#anchoring.delete(id); this.#work.delete(work); this.#publish(); this.#pumpAnchors();
       });
       this.#work.add(work);
     }
+  }
+  #retryAnchor(id, retry) {
+    const version = this.#session.status().versions.find(value => value.id === id);
+    if (this.#closed || retry >= 2 || !version || version.anchor !== 'PENDING' || version.anchorAttempts >= 3) return;
+    // This job can only invoke Algorand sponsorship/confirmation. The saved
+    // transaction and durable submission budget remain owned by the session.
+    const timer = setTimeout(() => {
+      this.#anchorRetries.delete(id);
+      if (this.#closed) return;
+      this.#anchorQueue.push({ id, retry: retry + 1 }); this.#pumpAnchors();
+    }, [5000, 30000][retry]);
+    timer.unref?.(); this.#anchorRetries.set(id, timer);
+    emit(this.#diagnostics, 'ANCHOR_RETRY_SCHEDULED', { operationId: id });
   }
   command(input, { surface } = {}) {
     let command;
@@ -191,5 +214,9 @@ export class ResidentEngine {
     });
   }
   async drain() { await this.#control; while (this.#work.size) await Promise.all(this.#work); }
-  stop() { this.#closed = true; this.#captureTokens.clear(); this.#anchorQueue = []; this.#unsubscribe?.(); this.#publish(); }
+  stop() {
+    this.#closed = true; this.#captureTokens.clear(); this.#anchorQueue = [];
+    for (const timer of this.#anchorRetries.values()) clearTimeout(timer);
+    this.#anchorRetries.clear(); this.#unsubscribe?.(); this.#publish();
+  }
 }

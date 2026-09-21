@@ -1,4 +1,4 @@
-import { MAX_REQUEST_BYTES, ACK_BYTES, ACK_TIMEOUT_MS, INTENT_MS, readRequest, readPrefix, cancelReader } from './bounded.mjs';
+import { MAX_REQUEST_BYTES, ACK_BYTES, ACK_TIMEOUT_MS, POLICY_MS, readRequest, readPrefix, cancelReader } from './bounded.mjs';
 import { matchChatGPT, extractChatGPT, chatGPTAcknowledgement } from './chatgpt.mjs';
 
 // Only standard data-valued init options are inspected. Accessors/custom input
@@ -12,7 +12,7 @@ function option(init, key) {
   return property?.value;
 }
 
-export function snapshotRequest(args, baseURL, signal) {
+export function snapshotRequest(args, baseURL, signal, matched = () => {}) {
   const [input, init] = args;
   const request = input instanceof Request ? input : null;
   if (!request && typeof input !== 'string' && !(input instanceof URL)) return null;
@@ -20,6 +20,7 @@ export function snapshotRequest(args, baseURL, signal) {
   const method = option(init, 'method') ?? request?.method ?? 'GET';
   if (typeof method !== 'string' || !matchChatGPT(url, method.toUpperCase())) return null;
   if ((option(init, 'credentials') ?? request?.credentials) === 'omit') return null;
+  matched();
   const override = option(init, 'body');
   let body;
   if (override == null && request) {
@@ -65,7 +66,7 @@ export async function observeAcknowledgement(response, request, signal, alreadyC
 
 export function installFetchObserver(target, { emit, now = () => performance.now(), baseURL = () => target.location.href } = {}) {
   const original = target.fetch;
-  const active = new Set(), observedIds = new Set(); let intent = null, stopped = false;
+  const active = new Set(); let policy = null, sequence = 0, stopped = false;
   const probeController = new AbortController(); probeController.abort();
   const probe = new Request('data:,', { signal: probeController.signal });
   const healthByFetch = new WeakMap();
@@ -81,7 +82,7 @@ export function installFetchObserver(target, { emit, now = () => performance.now
       if (checkedState) return checkedState;
       if (probing) return 'replaced';
       // The page can install a forwarding wrapper after document_start. Test
-      // the chain without reaching the original fetch or spending a qualifier.
+      // the chain without reaching the original fetch or observing a request.
       // A bypass sees only an already-aborted, local data URL, never a Send.
       // Cache each identity for this document: invoking a known page wrapper
       // again can repeat its own side effects, even if native fetch is avoided.
@@ -101,39 +102,40 @@ export function installFetchObserver(target, { emit, now = () => performance.now
     }
     let candidate, snapshot, controller, deadline;
     try {
-      candidate = !stopped && intent && intent.expires > now() && !intent.used ? intent : null;
-      if (candidate && active.size < 8) {
+      const binding = !stopped && policy && policy.expires > now() && policy.url === baseURL() ? policy : null;
+      if (binding) {
         controller = new AbortController(); active.add(controller);
         deadline = setTimeout(() => { controller.abort(); active.delete(controller); }, 4000);
-        snapshot = snapshotRequest(args, baseURL(), controller.signal);
-      } else if (candidate) notify({ kind: 'gap', id: candidate.id });
-    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id }); }
-    let result;
+        snapshot = snapshotRequest(args, baseURL(), controller.signal, () => {
+          candidate = { id: crypto.randomUUID(), binding: binding.id, sequence: ++sequence, conversationId: binding.conversationId };
+          notify({ kind: 'matched', id: candidate.id, binding: candidate.binding, sequence: candidate.sequence });
+          if (active.size > 8) throw Error('OBSERVATION_LIMIT');
+        });
+      }
+    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); }
+    let result, failure, threw = false;
     try { result = Reflect.apply(original, this, args); }
-    catch (error) { clearTimeout(deadline); controller?.abort(); active.delete(controller); throw error; }
-    if (!snapshot) { clearTimeout(deadline); controller?.abort(); active.delete(controller); return result; }
+    catch (error) { threw = true; failure = error; }
+    if (!snapshot) {
+      clearTimeout(deadline); controller?.abort(); active.delete(controller);
+      if (threw) throw failure;
+      return result;
+    }
     const path = snapshot.path, bodyReady = Promise.resolve(snapshot.body);
     bodyReady.catch(() => {});
-    // Preserve invocation order even when a Request clone takes longer than a
-    // later string body. An excluded request never spends the qualifier.
-    const extraction = (candidate.queue ?? Promise.resolve()).then(() => bodyReady).then(body => {
-      if (stopped || controller.signal.aborted || candidate.used || candidate.expires <= now()) return null;
+    const extraction = bodyReady.then(body => {
+      if (stopped || controller.signal.aborted) return null;
       const value = extractChatGPT(body, path);
-      if (!value || candidate.conversationId !== undefined && candidate.conversationId !== value.request.conversationId) return null;
-      // A provider retry of an earlier message must not spend a later human
-      // Send's qualifier. Bound identity retention without reading history.
-      if (observedIds.has(value.request.messageId)) return null;
-      if (observedIds.size >= 1024) { notify({ kind: 'gap', id: candidate.id }); return null; }
-      observedIds.add(value.request.messageId);
-      candidate.used = true;
+      if (!value || candidate.conversationId !== value.request.conversationId) throw Error('UNSUPPORTED_REQUEST');
+      // Only the durable engine deduplicates provider message identity. Dropping
+      // retries here could discard the sole retry after a failed local delivery.
       notify({ kind: 'request', id: candidate.id, ...value });
       return value.request;
-    }).catch(() => { if (!stopped) notify({ kind: 'gap', id: candidate.id }); return null; });
-    candidate.queue = extraction;
+    }).catch(() => { if (!stopped && !controller.signal.aborted) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); return null; });
     snapshot = null;
     // Observation is a detached branch; the page receives exactly fetch's
     // promise and original Response, including its original rejection/abort.
-    const acknowledgementWork = Promise.resolve(result).then(response => {
+    const acknowledgementWork = Promise.resolve(threw ? null : result).then(response => {
       if (stopped || controller.signal.aborted || !response?.ok || response.bodyUsed
           || !/^text\/event-stream(?:;|$)/i.test(response.headers.get('content-type') ?? '')) return;
       // This handler is registered before returning fetch's promise. Clone
@@ -149,14 +151,15 @@ export function installFetchObserver(target, { emit, now = () => performance.now
     Promise.allSettled([extraction, acknowledgementWork]).then(() => {
       clearTimeout(deadline); controller.abort(); active.delete(controller);
     });
+    if (threw) throw failure;
     return result;
   }
   target.fetch = fetchObserved;
   return {
     state,
     available: () => ['ready', 'wrapped'].includes(state()),
-    qualify(id, conversationId) { if (!stopped) intent = { id, conversationId, expires: now() + INTENT_MS, used: false }; },
-    clear() { intent = null; for (const controller of active) controller.abort(); active.clear(); },
+    arm(id, conversationId) { if (!stopped) policy = { id, conversationId, url: baseURL(), expires: now() + POLICY_MS }; },
+    clear() { policy = null; for (const controller of active) controller.abort(); active.clear(); },
     stop() { stopped = true; this.clear(); if (target.fetch === fetchObserved) target.fetch = original; },
   };
 }

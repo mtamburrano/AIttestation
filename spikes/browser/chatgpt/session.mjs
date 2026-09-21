@@ -9,6 +9,7 @@ import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verify
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
 import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from '../../recipient/normal-observation.mjs';
+import { QUALIFIED_OBSERVATION_PROFILE, validateQualifiedObservation } from '../../recipient/qualified-observation.mjs';
 import { DOM_OBSERVATION_PROFILE, validateDOMObservation } from '../../recipient/dom-observation.mjs';
 
 import { LEGACY_NORMAL_OBSERVATION_PROFILE, validateLegacyNormalObservation } from '../../recipient/legacy-observation.mjs';
@@ -16,7 +17,7 @@ import { LEGACY_NORMAL_OBSERVATION_PROFILE, validateLegacyNormalObservation } fr
 const wire = value => Buffer.from(canonical(value));
 
 export class ChatGPTRecordingSession {
-  #tails = new Map(); #versions = new Map();
+  #tails = new Map(); #versions = new Map(); #providerMessages = new Map();
   #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault;
   #managed; #diagnostics; #closed = false;
 
@@ -71,8 +72,9 @@ export class ChatGPTRecordingSession {
     for (const record of records.filter(value => value.manifest.type === 'observation')) {
       const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
       observations.push({ record, value });
-      if (![NORMAL_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
+      if (![NORMAL_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
       (value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation
+        : value.profile === QUALIFIED_OBSERVATION_PROFILE ? validateQualifiedObservation
         : value.profile === DOM_OBSERVATION_PROFILE ? validateDOMObservation : validateLegacyNormalObservation)(value);
       if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) {
         const text = records.find(entry => entry.manifest.eventId === value.textRecord
@@ -80,7 +82,9 @@ export class ChatGPTRecordingSession {
           && entry.manifest.signingPublicKey === record.manifest.signingPublicKey);
         if (!text || this.#versions.has(value.eventId)) throw Error('INVALID_CAPTURE_HISTORY');
         const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(this.vault.read(value.textObject));
-        this.#versions.set(value.eventId, this.#observedVersion(record, value, content));
+        const version = this.#observedVersion(record, value, content);
+        this.#versions.set(value.eventId, version);
+        if (value.request && !this.#providerMessages.has(value.request.messageId)) this.#providerMessages.set(value.request.messageId, version);
       } else {
         const version = this.#versions.get(value.eventId);
         if (!version || value.recordDigest !== version.recordDigest || canonical(value.source) !== canonical(version.source)
@@ -134,6 +138,17 @@ export class ChatGPTRecordingSession {
       return this.#public(prior);
     }
     if (prior) return this.#public(prior);
+    const repeated = this.#providerMessages.get(input.request.messageId);
+    if (repeated) {
+      // Provider message IDs survive fetch retries, route changes, tabs and
+      // engine restarts. A retry cannot rewrite the original source or text.
+      if (repeated.payload.text !== text || repeated.request.conversationId !== null
+          && input.request.conversationId !== null && repeated.request.conversationId !== input.request.conversationId) {
+        throw Error('CAPTURE_REPLAY_CONFLICT');
+      }
+      emit(this.#diagnostics, 'REQUEST_DEDUPLICATED', { operationId: eventId });
+      return this.#public(repeated);
+    }
     const captured = this.vault.capture(Buffer.from(text, 'utf8'));
     const value = { profile: NORMAL_OBSERVATION_PROFILE, kind: 'normal-request-observed', eventId, source,
       inputMethod: input.inputMethod, request: input.request,
@@ -141,7 +156,7 @@ export class ChatGPTRecordingSession {
       mode: 'ON', boundary: 'provider_fetch', coverage: 'UTF8_NEW_USER_MESSAGE',
       releaseClass: 'RETROSPECTIVE_OBSERVATION', attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
     const record = this.#normalEvent(value), version = this.#observedVersion(record, value, text);
-    this.#versions.set(eventId, version);
+    this.#versions.set(eventId, version); this.#providerMessages.set(input.request.messageId, version);
     emit(this.#diagnostics, 'VAULT_CAPTURED', { operationId: eventId, captureId: captured.manifest.eventId });
     emit(this.#diagnostics, 'NORMAL_PROMPT_SAVED', { operationId: eventId, captureId: captured.manifest.eventId });
     return this.#public(version);

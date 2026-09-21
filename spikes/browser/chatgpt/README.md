@@ -28,8 +28,8 @@ See [ENGINE.md](ENGINE.md) for control, migration and OFF ordering,
 
 ## Authenticated Chrome transport
 
-Extension 2.1.0 negotiates adapter `pap-chatgpt-chrome/7`, page contract
-`chatgpt-web-text/2026-09-20`, capture `pap-chatgpt-capture/3` and sidebar
+Extension 2.2.0 negotiates adapter `pap-chatgpt-chrome/8`, page contract
+`chatgpt-web-text/2026-09-21`, capture `pap-chatgpt-capture/4` and sidebar
 `pap-chatgpt-panel/2`. Old active contracts reject. Native bridge profile 3,
 bundle identities and cryptographic domains are unchanged.
 
@@ -59,10 +59,10 @@ and epoch. Reconnection never replays provider actions.
 
 Up to 32 tabs have independent window/document/source identities, including
 duplicate conversation tabs. URL/document changes, removal, permission or
-transport loss revoke affected capture policies. Temporary unsupported markup
-retains source identity but provides no capture eligibility. Restored capability
-only allows future genuine Sends. Provider content cannot choose selectors,
-control recording or supply signed extension updates.
+transport loss revoke affected capture policies. Composer markup does not control
+capture eligibility. Restored capability allows future validated prompt requests;
+it cannot revive stale deliveries. Provider content cannot control recording or
+supply signed extension updates.
 
 ## Anchoring, packaging and validation
 

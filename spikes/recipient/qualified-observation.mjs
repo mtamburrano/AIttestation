@@ -1,7 +1,6 @@
 import { keys, unb64 } from '../vault/format.mjs';
 
-export const CHATGPT_CAPTURE_PROFILE = 'pap-chatgpt-capture/4';
-export const NORMAL_OBSERVATION_PROFILE = 'pap-chatgpt-observation/5';
+export const QUALIFIED_OBSERVATION_PROFILE = 'pap-chatgpt-observation/4';
 export const isUUID = value => typeof value === 'string'
   && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const bounded = (value, maximum) => typeof value === 'string' && value.length > 0 && value.length <= maximum;
@@ -11,7 +10,7 @@ const invalid = () => { throw Error('INVALID_CAPTURE_OBSERVATION'); };
 export function validateCaptureSource(source) {
   keys(source, ['adapterProfile', 'pageContract', 'runtimeEpoch', 'browserSessionId', 'scope',
     'tabId', 'windowId', 'tabEpoch', 'documentId', 'destination']);
-  if (source.adapterProfile !== 'pap-chatgpt-chrome/8' || source.pageContract !== 'chatgpt-web-text/2026-09-21'
+  if (source.adapterProfile !== 'pap-chatgpt-chrome/7' || source.pageContract !== 'chatgpt-web-text/2026-09-20'
       || !isUUID(source.scope) || !bounded(source.runtimeEpoch, 128) || !bounded(source.browserSessionId, 128)
       || !Number.isSafeInteger(source.tabId) || source.tabId < 0
       || !Number.isSafeInteger(source.windowId) || source.windowId < 0
@@ -21,7 +20,7 @@ export function validateCaptureSource(source) {
 
 export function validateRequest(request) {
   keys(request, ['profile', 'path', 'messageId', 'conversationId']);
-  if (request.profile !== 'chatgpt-new-user-text/2'
+  if (request.profile !== 'chatgpt-new-user-text/1'
       || !['/backend-api/conversation', '/backend-api/f/conversation'].includes(request.path)
       || !id(request.messageId) || request.conversationId !== null && !id(request.conversationId)) invalid();
 }
@@ -32,16 +31,16 @@ export function validateAcknowledgement(acknowledgement) {
       || !id(acknowledgement.conversationId) || !id(acknowledgement.correlationId)) invalid();
 }
 
-export function validateNormalObservation(value) {
+export function validateQualifiedObservation(value) {
   const base = ['profile', 'kind', 'eventId', 'source'];
-  if (value?.profile !== NORMAL_OBSERVATION_PROFILE || !isUUID(value.eventId)) invalid();
+  if (value?.profile !== QUALIFIED_OBSERVATION_PROFILE || !isUUID(value.eventId)) invalid();
   validateCaptureSource(value.source);
   if (value.kind === 'normal-request-observed') {
     keys(value, [...base, 'inputMethod', 'request', 'textRecord', 'textObject', 'mode', 'boundary', 'coverage',
       'releaseClass', 'attachments', 'providerReceipt']);
     validateRequest(value.request);
     if (value.request.conversationId !== (value.source.destination === 'new-chat' ? null : value.source.destination.slice(13))) invalid();
-    if (value.inputMethod !== 'provider-request' || !bounded(value.textRecord, 128)
+    if (!['send-button', 'enter'].includes(value.inputMethod) || !bounded(value.textRecord, 128)
         || !bounded(value.textObject, 128) || value.mode !== 'ON' || value.boundary !== 'provider_fetch'
         || value.coverage !== 'UTF8_NEW_USER_MESSAGE' || value.releaseClass !== 'RETROSPECTIVE_OBSERVATION'
         || value.attachments !== 'UNSUPPORTED' || value.providerReceipt !== 'UNKNOWN') invalid();

@@ -7,7 +7,7 @@ const MAX_PROMPT_BYTES = 256 * 1024;
 const REQUEST_TIMEOUT_MS = 750;
 const ACK_BYTES = 64 * 1024;
 const ACK_TIMEOUT_MS = 2000;
-const INTENT_MS = 1500;
+const POLICY_MS = 3000;
 
 // Duplicate JSON keys and deeply nested extensions have no unambiguous profile.
 function parseWireJSON(text) {
@@ -84,7 +84,7 @@ async function readRequest(stream, signal) {
 
 // transport/chatgpt.mjs
 
-const EXTRACTION_PROFILE = 'chatgpt-new-user-text/1';
+const EXTRACTION_PROFILE = 'chatgpt-new-user-text/2';
 const ACK_PROFILE = 'chatgpt-early-ack/1';
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value);
@@ -109,10 +109,21 @@ function extractChatGPT(text, path) {
   if (typeof text !== 'string' || text.length > MAX_REQUEST_BYTES || !text.isWellFormed()
       || new TextEncoder().encode(text).length > MAX_REQUEST_BYTES) throw Error('REQUEST_LIMIT');
   const body = parseWireJSON(text);
-  if (!body || body.action !== 'next' || !Array.isArray(body.messages) || body.messages.length !== 1
+  if (!requestPath(path) || !body || body.action !== 'next' || !Array.isArray(body.messages)
+      || body.messages.length < 1 || body.messages.length > 128
       || !wireId(body.parent_message_id) || body.conversation_id != null && !wireId(body.conversation_id)
       || excluded(body)) return null;
-  const message = body.messages[0], content = message?.content;
+  const message = body.messages.at(-1), content = message?.content;
+  // History is accepted only when the parent explicitly identifies the message
+  // immediately before the new user turn. Never guess the last user in an
+  // arbitrary batch, or concatenate history/multimodal parts into evidence.
+  const ids = new Set();
+  for (const entry of body.messages) {
+    if (!wireId(entry?.id) || ids.has(entry.id) || !['user', 'assistant'].includes(entry.author?.role)) return null;
+    ids.add(entry.id);
+  }
+  if (message.id === body.parent_message_id || body.messages.length > 1
+      && (body.messages.at(-2).id !== body.parent_message_id || body.messages.at(-2).author.role !== 'assistant')) return null;
   if (!wireId(message?.id) || message.author?.role !== 'user' || content?.content_type !== 'text'
       || !Array.isArray(content.parts) || content.parts.length !== 1 || typeof content.parts[0] !== 'string'
       || message.recipient != null && message.recipient !== 'all'
@@ -162,7 +173,7 @@ function option(init, key) {
   return property?.value;
 }
 
-function snapshotRequest(args, baseURL, signal) {
+function snapshotRequest(args, baseURL, signal, matched = () => {}) {
   const [input, init] = args;
   const request = input instanceof Request ? input : null;
   if (!request && typeof input !== 'string' && !(input instanceof URL)) return null;
@@ -170,6 +181,7 @@ function snapshotRequest(args, baseURL, signal) {
   const method = option(init, 'method') ?? request?.method ?? 'GET';
   if (typeof method !== 'string' || !matchChatGPT(url, method.toUpperCase())) return null;
   if ((option(init, 'credentials') ?? request?.credentials) === 'omit') return null;
+  matched();
   const override = option(init, 'body');
   let body;
   if (override == null && request) {
@@ -215,7 +227,7 @@ async function observeAcknowledgement(response, request, signal, alreadyCloned =
 
 function installFetchObserver(target, { emit, now = () => performance.now(), baseURL = () => target.location.href } = {}) {
   const original = target.fetch;
-  const active = new Set(), observedIds = new Set(); let intent = null, stopped = false;
+  const active = new Set(); let policy = null, sequence = 0, stopped = false;
   const probeController = new AbortController(); probeController.abort();
   const probe = new Request('data:,', { signal: probeController.signal });
   const healthByFetch = new WeakMap();
@@ -231,7 +243,7 @@ function installFetchObserver(target, { emit, now = () => performance.now(), bas
       if (checkedState) return checkedState;
       if (probing) return 'replaced';
       // The page can install a forwarding wrapper after document_start. Test
-      // the chain without reaching the original fetch or spending a qualifier.
+      // the chain without reaching the original fetch or observing a request.
       // A bypass sees only an already-aborted, local data URL, never a Send.
       // Cache each identity for this document: invoking a known page wrapper
       // again can repeat its own side effects, even if native fetch is avoided.
@@ -251,39 +263,40 @@ function installFetchObserver(target, { emit, now = () => performance.now(), bas
     }
     let candidate, snapshot, controller, deadline;
     try {
-      candidate = !stopped && intent && intent.expires > now() && !intent.used ? intent : null;
-      if (candidate && active.size < 8) {
+      const binding = !stopped && policy && policy.expires > now() && policy.url === baseURL() ? policy : null;
+      if (binding) {
         controller = new AbortController(); active.add(controller);
         deadline = setTimeout(() => { controller.abort(); active.delete(controller); }, 4000);
-        snapshot = snapshotRequest(args, baseURL(), controller.signal);
-      } else if (candidate) notify({ kind: 'gap', id: candidate.id });
-    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id }); }
-    let result;
+        snapshot = snapshotRequest(args, baseURL(), controller.signal, () => {
+          candidate = { id: crypto.randomUUID(), binding: binding.id, sequence: ++sequence, conversationId: binding.conversationId };
+          notify({ kind: 'matched', id: candidate.id, binding: candidate.binding, sequence: candidate.sequence });
+          if (active.size > 8) throw Error('OBSERVATION_LIMIT');
+        });
+      }
+    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); }
+    let result, failure, threw = false;
     try { result = Reflect.apply(original, this, args); }
-    catch (error) { clearTimeout(deadline); controller?.abort(); active.delete(controller); throw error; }
-    if (!snapshot) { clearTimeout(deadline); controller?.abort(); active.delete(controller); return result; }
+    catch (error) { threw = true; failure = error; }
+    if (!snapshot) {
+      clearTimeout(deadline); controller?.abort(); active.delete(controller);
+      if (threw) throw failure;
+      return result;
+    }
     const path = snapshot.path, bodyReady = Promise.resolve(snapshot.body);
     bodyReady.catch(() => {});
-    // Preserve invocation order even when a Request clone takes longer than a
-    // later string body. An excluded request never spends the qualifier.
-    const extraction = (candidate.queue ?? Promise.resolve()).then(() => bodyReady).then(body => {
-      if (stopped || controller.signal.aborted || candidate.used || candidate.expires <= now()) return null;
+    const extraction = bodyReady.then(body => {
+      if (stopped || controller.signal.aborted) return null;
       const value = extractChatGPT(body, path);
-      if (!value || candidate.conversationId !== undefined && candidate.conversationId !== value.request.conversationId) return null;
-      // A provider retry of an earlier message must not spend a later human
-      // Send's qualifier. Bound identity retention without reading history.
-      if (observedIds.has(value.request.messageId)) return null;
-      if (observedIds.size >= 1024) { notify({ kind: 'gap', id: candidate.id }); return null; }
-      observedIds.add(value.request.messageId);
-      candidate.used = true;
+      if (!value || candidate.conversationId !== value.request.conversationId) throw Error('UNSUPPORTED_REQUEST');
+      // Only the durable engine deduplicates provider message identity. Dropping
+      // retries here could discard the sole retry after a failed local delivery.
       notify({ kind: 'request', id: candidate.id, ...value });
       return value.request;
-    }).catch(() => { if (!stopped) notify({ kind: 'gap', id: candidate.id }); return null; });
-    candidate.queue = extraction;
+    }).catch(() => { if (!stopped && !controller.signal.aborted) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); return null; });
     snapshot = null;
     // Observation is a detached branch; the page receives exactly fetch's
     // promise and original Response, including its original rejection/abort.
-    const acknowledgementWork = Promise.resolve(result).then(response => {
+    const acknowledgementWork = Promise.resolve(threw ? null : result).then(response => {
       if (stopped || controller.signal.aborted || !response?.ok || response.bodyUsed
           || !/^text\/event-stream(?:;|$)/i.test(response.headers.get('content-type') ?? '')) return;
       // This handler is registered before returning fetch's promise. Clone
@@ -299,21 +312,22 @@ function installFetchObserver(target, { emit, now = () => performance.now(), bas
     Promise.allSettled([extraction, acknowledgementWork]).then(() => {
       clearTimeout(deadline); controller.abort(); active.delete(controller);
     });
+    if (threw) throw failure;
     return result;
   }
   target.fetch = fetchObserved;
   return {
     state,
     available: () => ['ready', 'wrapped'].includes(state()),
-    qualify(id, conversationId) { if (!stopped) intent = { id, conversationId, expires: now() + INTENT_MS, used: false }; },
-    clear() { intent = null; for (const controller of active) controller.abort(); active.clear(); },
+    arm(id, conversationId) { if (!stopped) policy = { id, conversationId, url: baseURL(), expires: now() + POLICY_MS }; },
+    clear() { policy = null; for (const controller of active) controller.abort(); active.clear(); },
     stop() { stopped = true; this.clear(); if (target.fetch === fetchObserved) target.fetch = original; },
   };
 }
 
 // transport/main.mjs
 
-const TRANSPORT_CHANNEL = 'pap-chatgpt-transport/1';
+const TRANSPORT_CHANNEL = 'pap-chatgpt-transport/2';
 const CONTROL_EVENT = 'pap-chatgpt-transport-control';
 const origin = 'https://chatgpt.com';
 if (location.origin === origin && window === window.top) {
@@ -327,8 +341,8 @@ if (location.origin === origin && window === window.top) {
     if (typeof event.detail !== 'string' || event.detail.length > 400) return;
     try {
       const message = JSON.parse(event.detail);
-      if (message.kind === 'qualify' && /^[a-f0-9-]{36}$/.test(message.id)
-          && (message.conversationId === null || /^[A-Za-z0-9_-]{1,128}$/.test(message.conversationId))) observer.qualify(message.id, message.conversationId);
+      if (message.kind === 'arm' && /^[a-f0-9-]{36}$/.test(message.id)
+          && (message.conversationId === null || /^[A-Za-z0-9_-]{1,128}$/.test(message.conversationId))) observer.arm(message.id, message.conversationId);
       else if (message.kind === 'clear') observer.clear();
       else if (message.kind === 'probe') ready();
     } catch {}

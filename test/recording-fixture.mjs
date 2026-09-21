@@ -130,6 +130,14 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
         const source = runtime.adapter.scopes().find(source => source.tabId === id);
         scopes.set(id, source.scope); await refresh(id); return source;
       },
+      async reload(id = 17) {
+        const old = pages.get(id), url = old.location.href;
+        old.close(); addPage(id, { url, destination: new URL(url).pathname === '/' ? 'new-chat' : `conversation:${new URL(url).pathname.split('/')[2]}` });
+        pages.get(id).documentId = `synthetic-reload-${id}-${randomUUID()}`;
+        worker.chrome.tabs.onUpdated.emit(id, { status: 'loading' });
+        await until(async () => Boolean((await refresh(id)).policy));
+        return pages.get(id);
+      },
       async recording(enabled) {
         await command('SET_RECORDING', { enabled });
         for (const id of pages.keys()) await until(async () => {

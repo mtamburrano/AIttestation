@@ -17,8 +17,8 @@ export async function recordingProductFixture(directory, scenario, diagnostics, 
     if (scenario === 'recording-normal-send') {
       const page = f.pages.get(17);
       page.text = prompt; f.appear(prompt, 17, 'hydrated');
-      f.send(prompt, { method: 'enter', isComposing: true });
-      f.send(prompt, { method: 'enter', shiftKey: true });
+      f.send(prompt, { method: 'enter', isComposing: true, request: false });
+      f.send(prompt, { method: 'enter', shiftKey: true, request: false });
       check(f.deliveries.length === 0);
       f.send(prompt, { method: 'enter' });
       await until(() => page.feedback === 'Attestamp · Prompt saved');

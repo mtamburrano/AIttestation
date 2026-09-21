@@ -181,7 +181,7 @@ try {
   await delay(2200);
   const tabId = runtime.adapter.scopes().find(source => source.destination === 'new-chat').tabId;
   for (let index = 0; index < 10; index++) await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId},
-    {kind:'PAP_INSPECT',pageContract:'chatgpt-web-text/2026-09-20'},{frameId:0})`);
+    {kind:'PAP_INSPECT',pageContract:'chatgpt-web-text/2026-09-21'},{frameId:0})`);
   assert.equal(await evaluate(page, 'wrapperEffects'), 1);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
   await evaluate(page, 'document.body.append(savedSendButton)');
@@ -238,7 +238,7 @@ try {
   const policyStart = await evaluate(workerSession, '__policies.length');
   await evaluate(page, `globalThis.heldTransport=[];globalThis.originalPostMessage=window.postMessage;
     window.postMessage=function(message,...args){
-      if(message?.channel==='pap-chatgpt-transport/1'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
+      if(message?.channel==='pap-chatgpt-transport/2'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
       else return Reflect.apply(originalPostMessage,this,[message,...args]);
     }`);
   await send();
@@ -263,8 +263,32 @@ try {
   assert.equal(interceptedSends, 4);
   assert.equal(await evaluate(page, 'wrapperEffects'), 5, 'OFF adds only the fourth synthetic Send');
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
-  report.syntheticSends = interceptedSends;
   report.checks.push('OFF_CONTINUES_PROVIDER_ACTION_WITHOUT_NEW_CAPTURE');
+  await setRecording(true);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  await evaluate(page, `document.querySelector('textarea').remove();document.querySelector('button').remove();
+    globalThis.requestOnlyPayload={action:'next',parent_message_id:'synthetic-parent',conversation_id:'synthetic-conversation',
+      messages:[{id:crypto.randomUUID(),author:{role:'user'},content:{content_type:'text',parts:['  REQUEST_ONLY_e\\u0301\\r\\n☕  ']}}]};
+    globalThis.requestOnly=()=>fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify(requestOnlyPayload)}).then(response=>response.text());
+    requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 4);
+  assert.equal(runtime.session.status().versions[3].inputMethod, 'provider-request');
+  const probesBeforeRetry = await evaluate(workerSession, '__captureProbes.length');
+  await evaluate(page, 'requestOnly()');
+  await wait(() => evaluate(workerSession, `__captureProbes.slice(${probesBeforeRetry}).some(value=>value.state==='PROMPT_SAVED')`));
+  assert.equal(runtime.session.receipts.list().length, 4);
+  await evaluate(page, 'requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()');
+  await wait(() => runtime.session.receipts.list().length === 5);
+  assert.equal(await evaluate(page, 'providerSends'), 4, 'request-only captures have no button or Enter event');
+  report.checks.push('REQUEST_WITHOUT_DOM_CONTROLS_SAVES_AND_STABLE_ID_RETRY_DEDUPLICATES');
+  await setRecording(false);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));
+  await evaluate(page, 'requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()');
+  await delay(250);
+  assert.equal(runtime.session.receipts.list().length, 5); assert.equal(interceptedSends, 8);
+  report.checks.push('OFF_CUTOFF_ALSO_APPLIES_WITHOUT_DOM_CONTROLS');
+  report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
+  report.syntheticSends = interceptedSends;
   report.result = 'PASS';
   await writeFile(join(reportDirectory, 'report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify({ ...report, reportDirectory }));

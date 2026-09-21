@@ -1,10 +1,11 @@
-const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-20';
-const CAPTURE_PROFILE = 'pap-chatgpt-capture/3';
-const CHANNEL = 'pap-chatgpt-transport/1';
+const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21';
+const CAPTURE_PROFILE = 'pap-chatgpt-capture/4';
+const CHANNEL = 'pap-chatgpt-transport/2';
 const MAX_TEXT_BYTES = 256 * 1024;
-const observations = new Map();
+const observations = new Map(), bindings = new Map();
+let activeBinding = null, advisoryTimer = null;
 let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0, policyUpdate = 0;
-let composing = false, compositionEnded = -Infinity, keyboardIntent = false, stopped = false, feedback;
+let stopped = false, feedback;
 let transportSeen = -Infinity, transportAvailable = false, lastReported = null, sendOrder = 0, newChatToken = null;
 let observerState = 'unavailable';
 
@@ -49,7 +50,7 @@ function policyCurrent(policy) {
 }
 function continuationCurrent(pending) {
   return !stopped && pending.firstNewChat && observations.get(pending.eventId) === pending
-    && performance.now() - pending.observedAt < (pending.request ? 5000 : 1500)
+    && performance.now() - pending.observedAt < 5000
     && policySession === pending.policy.browserSessionId
     && (!pending.continuationUrl || pending.continuationUrl === location.href)
     && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href);
@@ -61,7 +62,6 @@ function reportOutcome(pending, state) {
 }
 function clearObservations(keep = []) {
   for (const [id, pending] of observations) if (!keep.includes(pending)) { clearTimeout(pending.timer); observations.delete(id); }
-  if (!keep.length) transportControl('clear');
 }
 function setCapturePolicy(message) {
   if (message.browserSessionId === policySession && message.revision < policyRevision) return;
@@ -71,24 +71,35 @@ function setCapturePolicy(message) {
   const next = policy?.profile === CAPTURE_PROFILE && policy.expectedUrl === location.href
     && policy.destination === destination() ? policy : null;
   const state = message.state;
-  if (capturePolicy?.token !== next?.token) {
-    // A trusted Send can still be waiting in the MAIN-to-isolated message queue.
-    // Until its request arrives, retain bounded candidates with their original
-    // deadlines instead of guessing which qualifier matches. The worker and
-    // ordered engine still authenticate and bind only one first event/document.
-    const candidates = state === 'READY' && policy?.profile === CAPTURE_PROFILE ? [...observations.values()].filter(value =>
-      continuationCurrent(value) && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch']
-        .every(key => policy[key] === value.policy[key])
-      && (policy.token === value.policy.token || next?.destination.startsWith('conversation:'))) : [];
-    const observed = candidates.find(value => value.request);
-    const continuing = observed ? [observed] : candidates;
-    for (const value of continuing) value.continuationUrl ??= location.href;
+  if (capturePolicy?.token !== next?.token || state !== 'READY' && bindings.size) {
+    const continuing = [];
+    for (const [id, binding] of bindings) {
+      const sameSource = state === 'READY' && policy?.profile === CAPTURE_PROFILE
+        && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch']
+          .every(key => policy[key] === binding.policy[key]);
+      const firstRoute = binding.policy.destination === 'new-chat' && sameSource
+        && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href)
+        && (!binding.continuationUrl || binding.continuationUrl === location.href)
+        && (!binding.expires || performance.now() < binding.expires);
+      if (!firstRoute) { bindings.delete(id); continue; }
+      binding.continuationUrl ??= location.href;
+      binding.expires ??= performance.now() + 5000;
+      for (const pending of observations.values()) if (pending.binding === id && continuationCurrent(pending)) {
+        pending.continuationUrl = binding.continuationUrl; continuing.push(pending);
+      }
+    }
     const latest = continuing.find(value => value.sendOrder === sendOrder);
     const hadRequest = [...observations.values()].some(value => value.sendOrder === sendOrder && value.request && !value.saved);
-    clearObservations(continuing); capturePolicy = next; policyState = state;
-    render(state === 'OFF' ? 'OFF' : latest ? latest.feedback
-      : hadRequest && !next ? 'GAP' : state);
+    clearObservations(continuing);
+    capturePolicy = next; activeBinding = null; policyState = state;
+    if (next) {
+      activeBinding = crypto.randomUUID(); bindings.set(activeBinding, { policy: next });
+    }
+    if (!continuing.length) clearTimeout(advisoryTimer);
+    if (!next && !bindings.size) transportControl('clear');
+    render(state === 'OFF' ? 'OFF' : latest ? latest.feedback : hadRequest && !next ? 'GAP' : state);
   } else if (state !== policyState) { policyState = state; render(state); }
+  if (capturePolicy && policyCurrent(capturePolicy)) transportControl('arm', activeBinding);
 }
 async function refreshCapturePolicy() {
   if (stopped) return;
@@ -102,7 +113,8 @@ async function refreshCapturePolicy() {
     setCapturePolicy(status); render();
   } catch {
     if (update !== policyUpdate || stopped) return;
-    capturePolicy = null; policyState = 'RECORDING_UNAVAILABLE'; clearObservations(); render(policyState);
+    capturePolicy = null; activeBinding = null; bindings.clear(); transportControl('clear');
+    policyState = 'RECORDING_UNAVAILABLE'; clearObservations(); render(policyState);
   } finally { clearTimeout(timer); if (!stopped) setTimeout(refreshCapturePolicy, 1000); }
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -123,56 +135,25 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   }
   respond({ error: 'UNSUPPORTED_PAGE_COMMAND' });
 });
-function reportRejection() {
-  chrome.runtime.sendMessage({ kind: 'PAP_PAGE_DIAGNOSTIC', pageContract: PAGE_CONTRACT, code: 'PAGE_SEND_REJECTED' }).catch(() => {});
+const diagnosticCodes = new Set();
+function reportDiagnostic(code) {
+  if (diagnosticCodes.has(code)) return;
+  diagnosticCodes.add(code);
+  chrome.runtime.sendMessage({ kind: 'PAP_PAGE_DIAGNOSTIC', pageContract: PAGE_CONTRACT, code }).catch(() => {});
 }
-function sendControl() {
-  const buttons = [...document.querySelectorAll('button[data-testid="send-button"]')];
-  if (buttons.length !== 1) return null;
-  const button = buttons[0];
-  return button.isConnected && !button.matches(':disabled') && button.getAttribute('aria-disabled') !== 'true'
-    && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' ? button : null;
-}
-function qualifies(event, inputMethod) {
-  if (!event.isTrusted || !capturePolicy || !policyCurrent(capturePolicy) || !surface().surfaceSupported
-      || document.visibilityState !== 'visible') return false;
-  const editors = [...document.querySelectorAll('#prompt-textarea')];
-  const editor = editors.length === 1 ? editors[0] : null;
-  if (!editor || !(editor instanceof HTMLTextAreaElement || editor.getAttribute('contenteditable') === 'true')
-      || !editor.isConnected || editor.disabled || editor.readOnly || editor.hidden
-      || getComputedStyle(editor).display === 'none' || getComputedStyle(editor).visibility === 'hidden'
-      || [...document.querySelectorAll('input[type=file]')].some(input => input.files?.length)
-      || document.querySelector('[data-testid="composer-file-chip"], [data-testid="attachment-preview"]')) return false;
-  if (inputMethod === 'enter') return event.target === editor || editor.contains(event.target);
-  const button = sendControl();
-  return Boolean(button && (event.target === button || button.contains(event.target)));
-}
-function qualifySend(event, inputMethod) {
-  if (!qualifies(event, inputMethod)) {
-    const selector = inputMethod === 'enter' ? '#prompt-textarea' : 'button[data-testid="send-button"]';
-    if (event.isTrusted && capturePolicy && policyCurrent(capturePolicy)
-        && [...document.querySelectorAll(selector)].some(node => event.target === node || node.contains(event.target))) {
-      sendOrder++; reportRejection(); render('GAP');
-    }
-    return false;
-  }
-  // Advance at the human event, including refusals and bodies that never parse.
-  // Request arrival order and native replies cannot redefine the latest Send.
+// Optional UI evidence only: a missed transport observation is diagnosable even
+// when an opaque page wrapper bypasses fetch. This timer grants/revokes nothing.
+function noteSend(event) {
+  if (!event.isTrusted || !capturePolicy || !policyCurrent(capturePolicy)) return;
+  const selector = event.type === 'keydown' ? '#prompt-textarea' : 'button[data-testid="send-button"]';
+  if (![...document.querySelectorAll(selector)].some(node => event.target === node || node.contains?.(event.target))) return;
   const order = ++sendOrder;
-  if (observations.size >= 16) { reportRejection(); render('GAP'); return false; }
-  const pending = { policy: capturePolicy, eventId: crypto.randomUUID(), inputMethod, saved: false,
-    sendOrder: order, feedback: 'READY',
-    observedAt: performance.now(), firstNewChat: capturePolicy.expectedUrl === 'https://chatgpt.com/' && newChatToken !== capturePolicy.token };
-  observations.set(pending.eventId, pending);
-  pending.timer = setTimeout(() => {
-    if (!pending.saved && pendingCurrent(pending)) reportOutcome(pending, 'GAP');
-    observations.delete(pending.eventId);
+  clearTimeout(advisoryTimer);
+  advisoryTimer = setTimeout(() => {
+    if (order === sendOrder && capturePolicy && policyCurrent(capturePolicy)) {
+      reportDiagnostic('REQUEST_NOT_OBSERVED'); render('GAP');
+    }
   }, 1500);
-  reportOutcome(pending, 'READY');
-  // Only an opaque qualifier crosses to MAIN. It is neither prompt text nor an
-  // engine token; the isolated pending record is required for every delivery.
-  transportControl('qualify', pending.eventId);
-  return true;
 }
 async function deliver(pending, kind) {
   const message = { kind: 'PAP_CAPTURE', pageContract: PAGE_CONTRACT, token: pending.policy.token,
@@ -185,16 +166,20 @@ async function deliver(pending, kind) {
       const result = await Promise.race([chrome.runtime.sendMessage(message),
         new Promise((_, reject) => { timer = setTimeout(() => reject(Error('timeout')), 2500); })]);
       if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind
-          && result.state === 'PROMPT_SAVED') return true;
+          && result.state === 'PROMPT_SAVED') {
+        if (result.deduplicated) pending.deduplicated = true;
+        return true;
+      }
     } catch {} finally { clearTimeout(timer); }
   }
   return false;
 }
 function deliverAck(pending) {
-  if (!pending.saved || !pending.acknowledgement || pending.ackSent || !pendingCurrent(pending)) return;
+  if (!pending.saved || pending.deduplicated || !pending.acknowledgement || pending.ackSent || !pendingCurrent(pending)) return;
   pending.ackSent = true; void deliver(pending, 'acknowledgement');
 }
 const exactKeys = (value, names) => value && Object.keys(value).sort().join(',') === names.sort().join(',');
+const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 addEventListener('message', event => {
   if (stopped || event.source !== window || event.origin !== 'https://chatgpt.com' || event.data?.channel !== CHANNEL) return;
@@ -205,31 +190,72 @@ addEventListener('message', event => {
     const previous = surface();
     transportSeen = performance.now(); transportAvailable = message.available; observerState = message.observerState;
     if (previous.surfaceSupported !== surface().surfaceSupported || previous.observerState !== observerState) { surfaceChanged(); render(); }
+    if (capturePolicy && policyCurrent(capturePolicy)) transportControl('arm', activeBinding);
+    return;
+  }
+  if (message.kind === 'matched') {
+    if (!exactKeys(message, ['channel', 'kind', 'id', 'binding', 'sequence']) || !uuid(message.id)
+        || !uuid(message.binding) || !Number.isSafeInteger(message.sequence) || message.sequence < 1) {
+      reportDiagnostic('REQUEST_MESSAGE_REJECTED'); return;
+    }
+    const binding = bindings.get(message.binding);
+    if (!binding || binding.expires && performance.now() >= binding.expires
+        || binding.sequence >= message.sequence || observations.has(message.id)) return;
+    const pending = { policy: binding.policy, binding: message.binding, eventId: message.id, inputMethod: 'provider-request',
+      saved: false, sendOrder: ++sendOrder, feedback: 'READY', observedAt: performance.now(),
+      firstNewChat: binding.policy.destination === 'new-chat' && newChatToken !== binding.policy.token,
+      continuationUrl: binding.continuationUrl };
+    observations.set(message.id, pending);
+    if (!pendingCurrent(pending) || observations.size > 16) {
+      observations.delete(message.id); reportDiagnostic('REQUEST_MESSAGE_REJECTED'); render('GAP'); return;
+    }
+    binding.sequence = message.sequence; clearTimeout(advisoryTimer);
+    reportDiagnostic('REQUEST_MATCHED'); reportOutcome(pending, 'READY');
+    pending.timer = setTimeout(() => {
+      if (!pending.saved && pendingCurrent(pending)) { reportDiagnostic('REQUEST_MESSAGE_MISSING'); reportOutcome(pending, 'GAP'); }
+      observations.delete(pending.eventId);
+    }, 5000);
     return;
   }
   const pending = observations.get(message.id);
-  if (!pending || !pendingCurrent(pending)) return;
-  if (message.kind === 'gap' && exactKeys(message, ['channel', 'kind', 'id'])) {
-    if (!pending.saved) { reportRejection(); reportOutcome(pending, 'GAP'); } return;
+  if (!pending || !pendingCurrent(pending)) {
+    if (message.kind === 'request') reportDiagnostic('REQUEST_MESSAGE_REJECTED');
+    return;
+  }
+  if (message.kind === 'gap' && exactKeys(message, ['channel', 'kind', 'id', 'code'])
+      && message.code === 'REQUEST_EXTRACTOR_REJECTED') {
+    if (!pending.saved) {
+      clearTimeout(pending.timer); reportDiagnostic(message.code); reportOutcome(pending, 'GAP'); observations.delete(pending.eventId);
+    } return;
   }
   if (message.kind === 'request') {
     const request = message.request;
-    if (pending.request || performance.now() - pending.observedAt >= 1500
+    if (pending.request) {
+      if (!exactKeys(message, ['channel', 'kind', 'id', 'text', 'request'])
+          || pending.text !== message.text || JSON.stringify(pending.request) !== JSON.stringify(request)) {
+        reportDiagnostic('REQUEST_MESSAGE_REJECTED');
+      }
+      return;
+    }
+    if (performance.now() - pending.observedAt >= 5000
         || !exactKeys(message, ['channel', 'kind', 'id', 'text', 'request'])
         || !exactKeys(request, ['profile', 'path', 'messageId', 'conversationId'])
-        || request.profile !== 'chatgpt-new-user-text/1' || !wireId(request.messageId)
+        || request.profile !== 'chatgpt-new-user-text/2' || !wireId(request.messageId)
         || !['/backend-api/conversation', '/backend-api/f/conversation'].includes(request.path)
         || request.conversationId !== (pending.policy.destination === 'new-chat' ? null : pending.policy.destination.slice(13))
         || typeof message.text !== 'string' || !message.text.length || message.text.length > MAX_TEXT_BYTES
-        || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > MAX_TEXT_BYTES) return;
+        || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > MAX_TEXT_BYTES) {
+      reportDiagnostic('REQUEST_MESSAGE_REJECTED'); reportOutcome(pending, 'GAP'); return;
+    }
     pending.request = request; pending.text = message.text;
     if (pending.firstNewChat) newChatToken = pending.policy.token;
     clearTimeout(pending.timer); pending.timer = setTimeout(() => observations.delete(pending.eventId), 6500);
-    reportOutcome(pending, 'SAVING');
+    reportDiagnostic('DURABLE_SAVE_DISPATCHED'); reportOutcome(pending, 'SAVING');
     deliver(pending, 'request-observed').then(saved => {
       pending.saved = saved;
       if (observations.get(pending.eventId) !== pending || !pendingCurrent(pending)) return;
       reportOutcome(pending, saved ? 'PROMPT_SAVED' : 'GAP');
+      if (pending.deduplicated) reportDiagnostic('REQUEST_DEDUPLICATED');
       if (saved) deliverAck(pending);
     });
   } else if (message.kind === 'ack') {
@@ -241,18 +267,13 @@ addEventListener('message', event => {
     pending.acknowledgement = ack; deliverAck(pending);
   }
 });
-document.addEventListener('compositionstart', () => { composing = true; }, true);
-document.addEventListener('compositionend', () => { composing = false; compositionEnded = performance.now(); }, true);
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.repeat
-      || composing || event.isComposing || event.keyCode === 229 || performance.now() - compositionEnded < 50) return;
-  if (qualifySend(event, 'enter')) { keyboardIntent = true; setTimeout(() => { keyboardIntent = false; }, 0); }
+  if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
+      && !event.repeat && !event.isComposing && event.keyCode !== 229) noteSend(event);
 }, true);
-document.addEventListener('click', event => {
-  if (event.button !== 0 || keyboardIntent && event.detail === 0) return;
-  qualifySend(event, 'send-button');
-}, true);
-addEventListener('pagehide', () => { stopped = true; capturePolicy = null; clearObservations(); });
+document.addEventListener('click', event => { if (event.button === 0) noteSend(event); }, true);
+addEventListener('pagehide', () => { stopped = true; capturePolicy = null; activeBinding = null; bindings.clear();
+  clearTimeout(advisoryTimer); transportControl('clear'); clearObservations(); });
 addEventListener('pageshow', () => { if (stopped) { stopped = false; refreshCapturePolicy(); } });
 document.addEventListener('DOMContentLoaded', () => { render(); surfaceChanged(); });
 refreshCapturePolicy();

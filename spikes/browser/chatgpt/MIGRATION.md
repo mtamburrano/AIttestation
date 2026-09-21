@@ -13,20 +13,20 @@ signed evidence keeps its bytes and meaning.
 | `spikes/demonstrator/` | Remove executable application | Server, session, store, UI, builder, live validation and CLI removed. Fixed testdata/results stay read-only; helper moved to `recipient/legacy-demo.mjs` |
 | `browser/chatgpt/session.mjs` | Refactor | Only durable normal observations, history, free export/recovery and bounded async anchoring; no freeze/cancel/release methods or journal execution |
 | `engine.mjs`, `engine-store.mjs` | Refactor/version | SET_RECORDING only; conservative state/2 migration, serial OFF cutoff, new policy tokens, bounded anchor workers/retries |
-| Adapter, bridge and page/worker scripts | Refactor | Automatic sources across tabs/windows; genuine normal-Send observation only. No page insertion, click executor, release message handler or manual enrollment |
+| Adapter, bridge and page/worker scripts | Refactor | Automatic sources across tabs/windows; validated normal prompt-request observation. No page insertion, click executor, release message handler or manual enrollment |
 | Existing Chrome sidebar | Retain/refactor | Same sidePanel UI/permission and trusted-context checks; ON/OFF, effective status and Dashboard/History only |
 | Product server/dashboard, Mac menu/host | Refactor | Remove technical composer and old endpoints/modes; retain authenticated controls, integration lifecycle, history/export/recovery/account/diagnostics and fixed launchers |
 | Private CLI/runtime locator/preparation | Refactor/version | Dashboard URL and runtime locator/2; obsolete locator can be validated/replaced under lock without contacting old endpoint |
 | Vault/crypto/key/recovery | Retain with record versioning | New local-record/2 labels; previous records remain authenticatable without mutation. Keys, hash domains, vault format and public proof identities unchanged |
-| Recipient | Retain/refactor | New transport observation/4 plus isolated DOM observation/3, observation/2 and historical observation/1 interpretation; no legacy Send; existing ON/OFF pending anchors retained |
+| Recipient | Retain/refactor | New request-authoritative observation/5 plus historical qualified transport/4 and DOM observation/3, observation/2 and historical observation/1 interpretation; no legacy Send; existing ON/OFF pending anchors retained |
 | Managed account/ledger, Algorand proof | Retain | Durable reservations, same transaction retry, blinded payload, exact proof checks and free independent verification; asynchronous client attempts bounded across restart |
 | Distribution/install/update trust | Retain/refactor resource selection | Remove release/demonstrator resource roots; include relocated diagnostics and legacy reader dependency. Preserve identities, signatures, dependency review, leak gates, release channels, update/rollback/schema policy and notices |
 | Test/example/package entrypoints | Replace retired workflows | Recording/removal fixtures replace Sealed execution; actual dashboard/recipient UI and immutable legacy archive checks remain. No demo or consumer-composer build script |
 | Active guides and historical reports | Rewrite/isolate | Root/browser/development/distribution/managed/vault/recipient guides describe ON/OFF. Historical readiness is explicitly separated from current installed acceptance |
 
-Current wire versions: adapter/7, page `2026-09-20`, capture/3, sidebar/2,
+Current wire versions: adapter/8, page `2026-09-21`, capture/4, sidebar/2,
 resident command/event/state/2, desktop command/event/2, dashboard/2,
-private runtime/2, local-record/2, normal observation/4. Extension version 2.1.0.
+private runtime/2, local-record/2, normal observation/5. Extension version 2.2.0.
 Native bridge/3, portable export formats, signing domains and frozen platform IDs
 are unchanged. Earlier active extension/control contracts reject.
 
@@ -35,9 +35,9 @@ are unchanged. Earlier active extension/control contracts reject.
 | Requirement | Evidence |
 | --- | --- |
 | Existing/new/multiple-window and duplicate-conversation tabs follow automatically | `chatgpt-recording` actual page/worker/relay fixture; `chatgpt-browser-path` adapter lifecycle |
-| Genuine Send only, no draft modification/Send interception | `chatgpt-recording`, `chatgpt-removal`: trusted click/Enter, typing/hydration/IME exclusion, injection/click/prevention counters |
-| Exact Unicode/BOM/line projection, text bounds, unsupported structures | `chatgpt-recording`, `chatgpt-browser-path`: textarea/contenteditable, 256 KiB, invalid Unicode, rich/ambiguous markup, attachments |
-| Separate equal-text Sends versus identical delivery retry | `chatgpt-recording`: UUID/digest distinction, byte dedup, replay conflict and lost acknowledgement |
+| Validated request authority, no draft modification/Send interference | `chatgpt-request-authority`, `chatgpt-recording`, `chatgpt-removal`: no-DOM and delayed request capture, DOM-only exclusion, original fetch/injection/click/prevention counters |
+| Exact Unicode/BOM/line bytes, text bounds, unsupported operations | `chatgpt-transport`, `chatgpt-request-authority`, `chatgpt-recording`: 256 KiB, invalid Unicode, parent-linked history and attachments/multimodal exclusions |
+| Separate distinct message IDs from duplicate provider requests | `chatgpt-request-authority`, `chatgpt-recording`: retry/reload/multitab/reopen deduplication, conflicting bytes and lost IPC acknowledgement |
 | Durable save before acknowledgement; ordered OFF and stale rejection | `resident-engine` holds unfinished metadata save while queuing OFF and capture; `chatgpt-recording` storage/key/partial-write faults and OFF buffers |
 | Conservative idempotent/crash-safe migration; recovered OFF | `resident-engine`: legacy table, orphan snapshot, pointer publication/restart, recovery with fresh keys; `debug-session` actual killed child/restart |
 | Navigation, unsupported surface, permission, disconnect/reconnect gaps | `chatgpt-recording`, `native-bridge-lifecycle`: real framing/relay child, new epochs, unavailable/OFF/ON indicator recovery, stale refresh/ack rejection, bounded backoff |
@@ -58,7 +58,7 @@ actual local components with explicitly synthetic external dependencies.
 
 - `recipient/legacy-observation.mjs`: frozen observation/2 schema, old
   Continuous mode, adapter/5 and page identity. Reading cannot create new capture
-  or anchor jobs. New observations use the separate closed observation/4 schema.
+  or anchor jobs. New observations use the separate closed observation/5 schema.
 - `recipient/portable.mjs`, `local.mjs` and dashboard historical labels:
   original Sealed/Always Protect/Continuous, cancellation and uncertain-outcome
   assertions are needed to interpret/export old signed receipts truthfully.

@@ -3,8 +3,8 @@ import { emit } from '../../diagnostics/local.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
 import { CHATGPT_PANEL_PROFILE } from './panel.mjs';
 
-export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/7';
-export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-20';
+export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/8';
+export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21';
 export const CHATGPT_ADAPTER_ID = 'chrome-chatgpt';
 export const CHATGPT_ORIGIN = 'https://chatgpt.com';
 export const CHATGPT_EXTENSION_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
