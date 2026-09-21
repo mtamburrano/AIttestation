@@ -9,6 +9,7 @@ import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verify
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
 import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from '../../recipient/normal-observation.mjs';
+import { STRICT_OBSERVATION_PROFILE, validateStrictObservation } from '../../recipient/strict-observation.mjs';
 import { QUALIFIED_OBSERVATION_PROFILE, validateQualifiedObservation } from '../../recipient/qualified-observation.mjs';
 import { DOM_OBSERVATION_PROFILE, validateDOMObservation } from '../../recipient/dom-observation.mjs';
 
@@ -72,8 +73,9 @@ export class ChatGPTRecordingSession {
     for (const record of records.filter(value => value.manifest.type === 'observation')) {
       const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
       observations.push({ record, value });
-      if (![NORMAL_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
+      if (![NORMAL_OBSERVATION_PROFILE, STRICT_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
       (value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation
+        : value.profile === STRICT_OBSERVATION_PROFILE ? validateStrictObservation
         : value.profile === QUALIFIED_OBSERVATION_PROFILE ? validateQualifiedObservation
         : value.profile === DOM_OBSERVATION_PROFILE ? validateDOMObservation : validateLegacyNormalObservation)(value);
       if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) {

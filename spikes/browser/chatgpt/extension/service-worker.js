@@ -1,21 +1,25 @@
-const ADAPTER_PROFILE = 'pap-chatgpt-chrome/8';
-const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21';
+const ADAPTER_PROFILE = 'pap-chatgpt-chrome/9';
+const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21.1';
 const NATIVE_HOST = 'ai.provenance.consumer';
-const CAPTURE_PROFILE = 'pap-chatgpt-capture/4';
+const CAPTURE_PROFILE = 'pap-chatgpt-capture/5';
 const PANEL_PROFILE = 'pap-chatgpt-panel/2';
 const PANEL_CHANNEL = 'pap-chatgpt-panel-channel/1';
 const panelChannels = new Set();
 const PANEL_DIAGNOSTIC_PROFILE = 'pap-chatgpt-panel-diagnostic/1';
 const PANEL_REJECTIONS = new Set(['PANEL_SENDER_REJECTED', 'PANEL_URL_REJECTED', 'PANEL_MESSAGE_REJECTED',
   'PANEL_CONTEXT_REJECTED', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_PERMISSION_REJECTED', 'PANEL_CONNECTION_UNAVAILABLE']);
-const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/3';
+const CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/4';
 const CAPTURE_REJECTIONS = new Set(['PAGE_SEND_REJECTED', 'CAPTURE_REJECTED']);
 const PAGE_DIAGNOSTICS = new Set([...CAPTURE_REJECTIONS, 'REQUEST_NOT_OBSERVED', 'REQUEST_MATCHED',
-  'REQUEST_EXTRACTOR_REJECTED', 'REQUEST_MESSAGE_REJECTED', 'REQUEST_MESSAGE_MISSING', 'REQUEST_DEDUPLICATED', 'DURABLE_SAVE_DISPATCHED']);
+  'REQUEST_BODY_READ_FAILED', 'REQUEST_BODY_LIMIT', 'REQUEST_JSON_INVALID',
+  'REQUEST_OPERATION_UNSUPPORTED', 'REQUEST_MEDIA_ONLY', 'REQUEST_PROMPT_MISSING', 'REQUEST_IDENTITY_MISSING',
+  'REQUEST_PROMPT_INVALID', 'REQUEST_MEDIA_IGNORED', 'REQUEST_CONVERSATION_UNAVAILABLE', 'REQUEST_CONVERSATION_DIFFERENT', 'REQUEST_MESSAGE_REJECTED', 'REQUEST_MESSAGE_MISSING', 'REQUEST_DEDUPLICATED', 'DURABLE_SAVE_DISPATCHED']);
 const CAPTURE_DIAGNOSTICS = new Set([...CAPTURE_REJECTIONS, 'TRANSPORT_OBSERVER_READY', 'TRANSPORT_OBSERVER_WRAPPED',
   'TRANSPORT_OBSERVER_REPLACED', 'TRANSPORT_OBSERVER_UNAVAILABLE', 'TRANSPORT_RELAY_READY', 'TRANSPORT_RELAY_UNAVAILABLE',
   'TRANSPORT_POLICY_READY', 'TRANSPORT_POLICY_UNAVAILABLE', 'TRANSPORT_POLICY_OFF',
-  'REQUEST_NOT_OBSERVED', 'REQUEST_MATCHED', 'REQUEST_EXTRACTOR_REJECTED', 'REQUEST_MESSAGE_REJECTED',
+  'REQUEST_NOT_OBSERVED', 'REQUEST_MATCHED', 'REQUEST_BODY_READ_FAILED', 'REQUEST_BODY_LIMIT', 'REQUEST_JSON_INVALID',
+  'REQUEST_OPERATION_UNSUPPORTED', 'REQUEST_MEDIA_ONLY', 'REQUEST_PROMPT_MISSING', 'REQUEST_IDENTITY_MISSING',
+  'REQUEST_PROMPT_INVALID', 'REQUEST_MEDIA_IGNORED', 'REQUEST_CONVERSATION_UNAVAILABLE', 'REQUEST_CONVERSATION_DIFFERENT', 'REQUEST_MESSAGE_REJECTED',
   'REQUEST_MESSAGE_MISSING', 'REQUEST_DEDUPLICATED', 'DURABLE_SAVE_DISPATCHED']);
 let policyRevision = 0;
 const documents = new Map();
@@ -30,7 +34,7 @@ const supportedURL = url => url === 'https://chatgpt.com/' || conversationURL(ur
 const exactKeys = (value, keys) => value && Object.keys(value).sort().join(',') === keys.sort().join(',');
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 function validRequest(value) {
-  return exactKeys(value, ['profile', 'path', 'messageId', 'conversationId']) && value.profile === 'chatgpt-new-user-text/2'
+  return exactKeys(value, ['profile', 'path', 'messageId', 'conversationId']) && value.profile === 'chatgpt-new-user-text/3'
     && ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value.path)
     && wireId(value.messageId) && (value.conversationId === null || wireId(value.conversationId));
 }

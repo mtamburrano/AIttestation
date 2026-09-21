@@ -264,7 +264,7 @@ test('same-document navigation alone cannot authenticate an unobserved first Sen
   f.navigate(17, 'https://chatgpt.com/c/unrelated');
   const page = f.pages.get(17);
   const result = await f.worker.message({ kind: 'PAP_CAPTURE', pageContract: CHATGPT_PAGE_CONTRACT,
-    token: policy.token, eventId: crypto.randomUUID(), observationKind: 'request-observed', inputMethod: 'provider-request', text: exact, request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'unobserved', conversationId: null } }, page.captureSender());
+    token: policy.token, eventId: crypto.randomUUID(), observationKind: 'request-observed', inputMethod: 'provider-request', text: exact, request: { profile: 'chatgpt-new-user-text/3', path: '/backend-api/conversation', messageId: 'unobserved', conversationId: null } }, page.captureSender());
   assert.equal(result.state, 'RECORDING_UNAVAILABLE');
   assert.equal(saved(f).length, 0); assert.equal(f.deliveries.length, 0);
 });

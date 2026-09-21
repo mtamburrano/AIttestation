@@ -18,15 +18,15 @@ signed evidence keeps its bytes and meaning.
 | Product server/dashboard, Mac menu/host | Refactor | Remove technical composer and old endpoints/modes; retain authenticated controls, integration lifecycle, history/export/recovery/account/diagnostics and fixed launchers |
 | Private CLI/runtime locator/preparation | Refactor/version | Dashboard URL and runtime locator/2; obsolete locator can be validated/replaced under lock without contacting old endpoint |
 | Vault/crypto/key/recovery | Retain with record versioning | New local-record/2 labels; previous records remain authenticatable without mutation. Keys, hash domains, vault format and public proof identities unchanged |
-| Recipient | Retain/refactor | New request-authoritative observation/5 plus historical qualified transport/4 and DOM observation/3, observation/2 and historical observation/1 interpretation; no legacy Send; existing ON/OFF pending anchors retained |
+| Recipient | Retain/refactor | New request-authoritative observation/6 plus historical strict transport/5, qualified transport/4 and DOM observation/3, observation/2 and historical observation/1 interpretation; no legacy Send; existing ON/OFF pending anchors retained |
 | Managed account/ledger, Algorand proof | Retain | Durable reservations, same transaction retry, blinded payload, exact proof checks and free independent verification; asynchronous client attempts bounded across restart |
 | Distribution/install/update trust | Retain/refactor resource selection | Remove release/demonstrator resource roots; include relocated diagnostics and legacy reader dependency. Preserve identities, signatures, dependency review, leak gates, release channels, update/rollback/schema policy and notices |
 | Test/example/package entrypoints | Replace retired workflows | Recording/removal fixtures replace Sealed execution; actual dashboard/recipient UI and immutable legacy archive checks remain. No demo or consumer-composer build script |
 | Active guides and historical reports | Rewrite/isolate | Root/browser/development/distribution/managed/vault/recipient guides describe ON/OFF. Historical readiness is explicitly separated from current installed acceptance |
 
-Current wire versions: adapter/8, page `2026-09-21`, capture/4, sidebar/2,
+Current wire versions: adapter/9, page `2026-09-21.1`, capture/5, sidebar/2,
 resident command/event/state/2, desktop command/event/2, dashboard/2,
-private runtime/2, local-record/2, normal observation/5. Extension version 2.2.0.
+private runtime/2, local-record/2, normal observation/6. Extension version 2.3.0.
 Native bridge/3, portable export formats, signing domains and frozen platform IDs
 are unchanged. Earlier active extension/control contracts reject.
 
@@ -58,7 +58,7 @@ actual local components with explicitly synthetic external dependencies.
 
 - `recipient/legacy-observation.mjs`: frozen observation/2 schema, old
   Continuous mode, adapter/5 and page identity. Reading cannot create new capture
-  or anchor jobs. New observations use the separate closed observation/5 schema.
+  or anchor jobs. New observations use the separate closed observation/6 schema.
 - `recipient/portable.mjs`, `local.mjs` and dashboard historical labels:
   original Sealed/Always Protect/Continuous, cancellation and uncertain-outcome
   assertions are needed to interpret/export old signed receipts truthfully.

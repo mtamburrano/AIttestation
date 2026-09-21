@@ -18,31 +18,50 @@ spikes/browser/chatgpt/build-observer.mjs --check` verifies the shipped bundle.
 There is no XHR, WebSocket, webRequest, debugger, proxy, iframe or prototype hook,
 remote executable adapter, CSP change, secondary recorder or provider refetch.
 
-Supported requests are POSTs to exactly `/backend-api/conversation` or
-`/backend-api/f/conversation` on the provider origin, without URL query/fragment
-or credentials in the URL. The JSON must have `action: "next"`, a stable new user
-message ID, a parent ID, and `content_type: "text"` with one string part.
-A single new message is supported. A bounded history prefix is also accepted when
-its final assistant message ID exactly equals `parent_message_id`, all message IDs
-are unique, and the sole terminal new user message has a different ID. The parser
-never scans backwards for an arbitrary user message or saves the history prefix.
-The conversation ID must match the authenticated source (null for New Chat).
-Anonymous endpoints/omitted credentials, prepare/history/resume, other operations,
-attachments/voice/multimodal parts, explicit edits/resubmits and regeneration are
-excluded. Reusing a saved message ID with changed text is a conflict. Unknown or
-ambiguous shapes are rejected; a request indistinguishable from this supported
-operation cannot independently establish what interaction caused it.
+Supported requests are authenticated POSTs to exactly `/backend-api/conversation`
+or `/backend-api/f/conversation` on the provider origin, without URL query/fragment
+or credentials in the URL. Extraction selects the latest entry whose
+`author.role` is explicitly `user`, requires its stable message ID, and reads its
+`content.parts`. It does not require a parent-linked history, validate other
+history entries, or require a particular recipient, channel, content type,
+conversation mode, model, feature configuration or known action value.
 
-Only that string becomes evidence. Its validated UTF-8 retains BOM, whitespace,
-CR/LF, combining characters and trailing newlines without trimming or Unicode
-normalization. Prompt limit: 256 KiB. Serialized request limit: 2 MiB, allowing
-JSON escapes at the prompt limit. Duplicate JSON keys, excessive nesting, invalid
-UTF-8/lone surrogates and oversized bodies fail without truncation. Strings, URL
-inputs, standard Requests and data-valued init overrides are supported; bodies
-may be strings, ArrayBuffers/views or Blobs. Request bodies use a clone with a
-750 ms read deadline. Direct stream/FormData/URLSearchParams bodies and accessor
-init options report a gap, without reading/mutating the provider's body.
-No request headers, credentials, history, model context or answer text are saved.
+String parts and objects with a string `text` field contribute their text in
+order, concatenated without added separators. Non-text parts are ignored for base
+text evidence. A mixed image/document/text prompt still saves its exact text;
+attachment bytes, names, pointers and metadata are never saved. The signed
+observation explicitly declares attachments `UNSUPPORTED`. A media-only turn
+reports a capability gap and cannot fall back to an earlier user's text.
+
+Only explicit `edit`, `regenerate`, `resubmit`, `continue` and `variant` actions,
+boolean `is_edit`/`is_regenerate`/`is_resubmit` flags on the operation or selected
+turn/turn metadata, or reuse of the parent as the selected message identify
+unsupported operations. Unknown actions and nested feature metadata do not veto
+capture. An absent/invalid selected message ID or a repeated selected ID within
+the batch is ambiguous. Reusing an already-saved ID with changed text or
+conflicting known provider conversation identity is a durable dedup conflict.
+The request alone cannot independently establish what human interaction caused it.
+
+The authenticated source destination remains the route at request admission.
+Provider `conversation_id` is separately preserved in `request.conversationId`;
+it never supplies source authority. A missing or unusable provider ID becomes
+null and emits a fixed notice. A valid non-empty ID differing from the route is
+saved unchanged with a separate notice, without retargeting the source. Both
+identities survive encrypted storage and portable export. A retry never rewrites
+the original source or fills in its missing provider metadata.
+
+Validated UTF-8 retains BOM, whitespace, CR/LF, combining characters and trailing
+newlines without trimming or Unicode normalization. Prompt limit: 256 KiB.
+Serialized request limit: 2 MiB, allowing JSON escapes at the prompt limit.
+Invalid JSON, ambiguous duplicate evidence/operation keys, invalid UTF-8/lone
+surrogates and oversized bodies fail without truncation. Unknown nested metadata
+and duplicate irrelevant keys have no schema or depth veto; the body byte bound
+still applies. Strings, URL inputs, standard Requests and data-valued init
+overrides are supported; bodies may be strings, ArrayBuffers/views or Blobs.
+Request bodies use a clone with a 750 ms read deadline. Direct stream/FormData/
+URLSearchParams bodies and accessor init options report a gap without reading or
+mutating the provider's body. No request headers, credentials, history, model
+context or answer text are saved.
 
 ## Request authority and page state
 
@@ -93,12 +112,25 @@ heartbeats cannot establish observer readiness from relay injection alone. The
 worker and native bridge each emit at most one event per code per connection;
 these are stage sightings, not per-tab histories. Diagnostics contain no URLs,
 function source/names, prompts, errors or page metadata. The expanded vocabulary
-requires `pap-chatgpt-capture-diagnostic/3` negotiation; older peers receive none.
-Request stages add `REQUEST_NOT_OBSERVED`, `REQUEST_MATCHED`,
-`REQUEST_EXTRACTOR_REJECTED`, `REQUEST_MESSAGE_REJECTED`,
-`REQUEST_MESSAGE_MISSING`, `DURABLE_SAVE_DISPATCHED` and `REQUEST_DEDUPLICATED`.
-These distinguish an unseen request, a rejected body, an invalid/missing relay
-message and a durable-save dispatch. Anchor retry scheduling and execution have
+requires `pap-chatgpt-capture-diagnostic/4` negotiation; older peers receive none.
+Request diagnostics distinguish the following stages:
+
+| Fixed code | Meaning |
+| --- | --- |
+| `REQUEST_NOT_OBSERVED`, `REQUEST_MATCHED` | No matching invocation, or endpoint/source match |
+| `REQUEST_BODY_READ_FAILED`, `REQUEST_BODY_LIMIT` | Unsupported/unreadable body, or request byte limit |
+| `REQUEST_JSON_INVALID` | JSON decode failure or ambiguous evidence keys |
+| `REQUEST_OPERATION_UNSUPPORTED`, `REQUEST_MEDIA_ONLY` | Explicit non-new-turn operation, or no supported text in a media turn |
+| `REQUEST_PROMPT_MISSING`, `REQUEST_IDENTITY_MISSING`, `REQUEST_PROMPT_INVALID` | No identifiable text, no stable unambiguous message ID, or invalid/oversized text |
+| `REQUEST_MEDIA_IGNORED` | Text remains capturable; non-text evidence is unsupported |
+| `REQUEST_CONVERSATION_UNAVAILABLE`, `REQUEST_CONVERSATION_DIFFERENT` | Provider metadata absent/unusable, or differs from the authenticated route; capture continues |
+| `REQUEST_MESSAGE_REJECTED`, `REQUEST_MESSAGE_MISSING` | Invalid or absent relay message |
+| `DURABLE_SAVE_DISPATCHED`, `REQUEST_DEDUPLICATED` | Durable delivery started, or saved identity reused |
+
+Notices do not produce a recording gap or cancel a pending save. No diagnostic
+contains either conversation ID. Historical `REQUEST_EXTRACTOR_REJECTED` reports
+remain readable but new observations no longer conflate these stages.
+Anchor retry scheduling and execution have
 separate `ANCHOR_RETRY_SCHEDULED`/`ANCHOR_RETRY_STARTED` codes.
 
 Page feedback follows matched request invocation order, with optional DOM Send
@@ -211,8 +243,8 @@ source policy after a document-targeted route challenge. Chrome's stale creation
 URL is accepted only for that authenticated document and current route. No old
 conversation capture authority transfers to the new conversation.
 
-Current contracts: adapter/8, page `2026-09-21`, capture/4, observation/5,
-extraction `chatgpt-new-user-text/2`, acknowledgement `chatgpt-early-ack/1`.
+Current contracts: adapter/9, page `2026-09-21.1`, capture/5, observation/6,
+extraction `chatgpt-new-user-text/3`, acknowledgement `chatgpt-early-ack/1`.
 `normal-request-observed` binds the exact new text, request metadata and source,
 with `inputMethod: "provider-request"` and no human-interaction claim;
 `normal-acknowledgement` binds the existing descriptor digest/event/source/key.
@@ -220,29 +252,41 @@ The verifier reports `OBSERVED_ONLY`, `UTF8_NEW_USER_MESSAGE`, client assertions
 and unknown provider receipt. Ack is not proof of provider receipt, authorship,
 ownership, event truth or complete history.
 
-Historical observation/4 keeps its human-qualified transport meaning through
+Historical observation/5 keeps its strict extraction and route/provider equality
+contract through `strict-observation.mjs`. Historical observation/4 keeps its human-qualified transport meaning through
 `qualified-observation.mjs`. Historical observation/3 remains a DOM intent/appearance assertion through
 `dom-observation.mjs`; observation/2 and /1 retain their original readers and
 signed meanings. No old artifacts are rewritten. Vault, key custody, recovery,
 blinded anchoring and free export remain shared. Already-durable ON/OFF
-observation/3 and /4 records retain their
+observation/3, /4 and /5 records retain their
 existing bounded pending anchor workflow, without new capture authority;
 pre-ON/OFF observation/2 remains read-only without new sponsorship. Diagnostics
 retain bounded content-free codes; prompt/URL/credential telemetry is not added.
 
 ## Wire sources and validation limits
 
-The synthetic wire fixtures derive from the pinned Observer source at
-[31ad601](https://github.com/superbasedapp/observer/tree/31ad60124871f80504c1bf9fffe4ee477af78f2d):
-[endpoint reconnaissance](https://github.com/superbasedapp/observer/blob/31ad60124871f80504c1bf9fffe4ee477af78f2d/browser-extension/src/content-main.js),
-[request/stream shapes](https://github.com/superbasedapp/observer/blob/31ad60124871f80504c1bf9fffe4ee477af78f2d/browser-extension/src/parsers.js)
-and [synthetic examples](https://github.com/superbasedapp/observer/blob/31ad60124871f80504c1bf9fffe4ee477af78f2d/browser-extension/src/parsers.test.js).
-The implementation is original and intentionally narrower: it preserves text,
-requires a positively identified new-user operation and stable identity, saves
-before ack and never follows the answer stream.
-The parent-linked history variant is an explicit synthetic schema boundary, not
-a captured current live payload. These author-reported shapes are assumptions for this adapter, not our own live
-ChatGPT verification. Unknown future shapes produce gaps/unknown ack.
+The parser behavior was cross-checked against pinned public sources:
+
+| Source | Relevant behavior | Deliberate Attestamp difference |
+| --- | --- | --- |
+| [Observer 0456d679](https://github.com/superbasedapp/observer/blob/0456d679b0afd6a0f8b582bd5ba414a6c2cdf902/browser-extension/src/parsers.js) | `parseChatGPTRequest` walks backwards for a user and joins string parts without validating the envelope | Never trim or truncate evidence; accept direct text-bearing parts too |
+| [Agent Beacon d6a62a4a](https://github.com/Asymptote-Labs/agent-beacon/blob/d6a62a4aefdc8b675f691bf927a99323bfb1aefd/browser-extension/src/adapters/chatgpt.ts) | `extractPrompt` keeps the latest user text; `coerceParts` joins strings and objects with string `text` | Require an explicit user role and stable provider message ID; never coerce an unknown role to user or retain history |
+| [ccproxy f2c47695](https://github.com/starbaser/ccproxy/blob/f2c47695b0835da023257aee0ac2a3dffd9fe570/src/ccproxy/lightllm/adapters/openai_conversations.py) | `MessageContent.parts` permits heterogeneous text and image-pointer elements; new conversation bodies omit `conversation_id` | Observe the original fetch only, preserving text while declining attachment evidence |
+
+Four [sanitized owner-captured request fixtures](../../../test/fixtures/chatgpt-wire/README.md)
+preserve the real 2026-09-21 text, image and document wire structures. The
+[baseline comparison](../../../test/evidence/request-wire-baseline.json) shows
+text accepted by the prior parser but vetoed by route/provider equality, plus
+image/document extractor failures. All four now capture under both new-chat and
+conversation source bindings, without changing the provider fetch.
+
+These comparisons informed an original implementation. Endpoint, source/document,
+consent, exact-byte, resource and stable-identity checks protect attribution and
+evidence integrity; they do not impose a schema on irrelevant metadata. Known
+unsupported operation checks are narrow. Tests cover arbitrary nested feature
+keys, history variations, future actions/types, mixed content, missing/conflicting
+route metadata, diagnostic privacy, deduplication and historical readers.
+Public sources and synthetic tests alone do not establish current live coverage.
 
 Run `npm run test:chatgpt`, `npm run test:product` and
 `npm run test:capture-browser` using the isolated
@@ -283,3 +327,10 @@ and ten intercepted requests retain the same synthetic traffic and native-peer
 limitations. Deterministic tests separately cover late and failed policy renewal,
 consent revocation during a document challenge, and anchor recovery after a full
 automatic retry batch and restart with unchanged sponsor accounting.
+
+The [request robustness Chrome result](../../../test/evidence/request-wire-chrome-153/capture.json)
+adds text capture with missing provider conversation metadata, independent route
+and provider IDs, unknown feature fields, mixed ordered text parts, and a
+media-only capability gap. It also replays all four sanitized owner-captured request shapes. It records 19
+checks and 17 intercepted requests;
+provider traffic, native peer identity and keys remain synthetic and isolated.

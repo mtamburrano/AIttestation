@@ -99,15 +99,19 @@ conflicting anchor results remain visible and aggregate to indeterminate.
 Selection never proves global completeness or latest state. Release-control
 results describe signed client assertions, not independent evidence of egress.
 
-New ChatGPT transport observations use `pap-chatgpt-observation/5`:
+New ChatGPT transport observations use `pap-chatgpt-observation/6`:
 `normal-request-observed` binds the decoded new user text and authenticated source
-under `chatgpt-new-user-text/2`, with `inputMethod: "provider-request"`. It makes
+under `chatgpt-new-user-text/3`, with `inputMethod: "provider-request"`. It makes
 no claim that a trusted click or Enter occurred. `normal-acknowledgement` separately binds an early
 client-observed handoff or inline start to the same descriptor digest, event,
 source and signing key. The verifier reports `OBSERVED_ONLY`, explicit transport
 coverage and unknown provider receipt. Neither HTTP status nor acknowledgement
 proves provider receipt or authorship. Missing ack never erases saved evidence.
-Historical observation/4 retains its human-qualified request meaning through
+Observation/6 preserves authenticated route and provider conversation identity separately,
+including missing or different provider IDs. Its text is the ordered concatenation
+of string/text-bearing parts of the latest identifiable user turn; non-text parts
+remain unsupported. Historical observation/5 keeps its stricter extraction and
+route equality contract in `strict-observation.mjs`. Historical observation/4 retains its human-qualified request meaning through
 `qualified-observation.mjs`. Historical observation/3 stays DOM intent/appearance through `dom-observation.mjs`;
 observation/2 and /1 retain their original meanings and immutable signed bytes.
 All legacy readers lack recording/Send authority. See the

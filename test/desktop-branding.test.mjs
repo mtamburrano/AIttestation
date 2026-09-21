@@ -48,7 +48,7 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     }
     const migrated = structuredClone(expected);
     if (file === 'spikes/browser/chatgpt/extension/manifest.json') {
-      migrated.version = '2.2.0';
+      migrated.version = '2.3.0';
       migrated.content_scripts = [
         { matches: ['https://chatgpt.com/*'], js: ['content-script.js'], run_at: 'document_start', world: 'ISOLATED' },
         { matches: ['https://chatgpt.com/*'], js: ['fetch-observer.js'], run_at: 'document_start', world: 'MAIN' },
@@ -59,14 +59,16 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
       migrated.content_security_policy = { extension_pages: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" };
     }
     if (file === 'spikes/distribution/fixtures/compatibility.json') {
-      for (const fixture of migrated.cases) if (fixture.adapterProfile === 'pap-chatgpt-chrome/2') fixture.adapterProfile = 'pap-chatgpt-chrome/8';
-      migrated.providerContract = 'chatgpt-web-text/2026-09-21';
+      for (const fixture of migrated.cases) if (fixture.adapterProfile === 'pap-chatgpt-chrome/2') fixture.adapterProfile = 'pap-chatgpt-chrome/9';
+      migrated.providerContract = 'chatgpt-web-text/2026-09-21.1';
       migrated.cases.push({ name: 'extension without epoch-bound reconnect', appSequence: 2,
         adapterProfile: 'pap-chatgpt-chrome/2', chromeMajor: 153, supported: false });
       migrated.cases.push({ name: 'legacy extension contract 3', appSequence: 2,
         adapterProfile: 'pap-chatgpt-chrome/3', chromeMajor: 153, supported: false });
       migrated.cases.push({ name: 'extension without independent document scopes', appSequence: 2,
         adapterProfile: 'pap-chatgpt-chrome/4', chromeMajor: 153, supported: false });
+      migrated.cases.push({ name: 'obsolete strict request extraction contract', appSequence: 2,
+        adapterProfile: 'pap-chatgpt-chrome/8', chromeMajor: 153, supported: false });
       migrated.cases.push({ name: 'obsolete human-qualified transport contract', appSequence: 2,
         adapterProfile: 'pap-chatgpt-chrome/7', chromeMajor: 153, supported: false });
       migrated.cases.push({ name: 'obsolete DOM acquisition contract', appSequence: 2,

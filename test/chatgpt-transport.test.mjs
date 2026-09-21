@@ -101,9 +101,9 @@ test('allowlist selects origin, POST, operation and one new user text; exclusion
     await f.target.fetch(resource, { method: 'POST', body: body() });
   }
   for (const patch of [{ action: 'variant' }, { action: 'continue' }, { action: 'edit' }, { action: 'regenerate' },
-    { conversation_id: 'other' }, { attachments: ['file'] }, { voice: true }, { is_edit: true }, { is_resubmit: true },
+    { is_edit: true }, { is_resubmit: true },
     { messages: [] }, { messages: [JSON.parse(body()).messages[0], JSON.parse(body()).messages[0]] },
-    { messages: [{ id: 'user-1', author: { role: 'user' }, content: { content_type: 'multimodal_text', parts: ['text', {}] } }] }]) {
+    { messages: [{ id: 'user-1', author: { role: 'user' }, content: { content_type: 'multimodal_text', parts: [{}] } }] }]) {
     await f.target.fetch(url, { method: 'POST', body: body('excluded', patch) });
   }
   await f.target.fetch(url, { method: 'GET' });

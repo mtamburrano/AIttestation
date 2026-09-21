@@ -1,0 +1,225 @@
+{
+  "profile": "chatgpt-wire-baseline-comparison/1",
+  "evidence": "SANITIZED_OWNER_CAPTURE_WITH_SYNTHETIC_FETCH",
+  "baselineCommit": "82d64730b3024ba61f7e9ec988ca0ea89bf0eff0",
+  "captureDate": "2026-09-21",
+  "sourceSHA256": {
+    "baseline": {
+      "spikes/browser/chatgpt/transport/bounded.mjs": "9fa6ef3b8d425806e5bf23175bae22302bcfc739ad4b12367c6fac318646cb06",
+      "spikes/browser/chatgpt/transport/chatgpt.mjs": "2fd794a9abe84d08fe3b44bc274d82c46a0aa78b183f04d285d3ce7ef4db69af",
+      "spikes/browser/chatgpt/transport/fetch-observer.mjs": "774c30c30e226d8c25f2a97ddd31ed49163853aed650e8e0deeda6a16e10e903"
+    },
+    "current": {
+      "spikes/browser/chatgpt/transport/bounded.mjs": "72a7ce426953d975e6dabea58136c956006513b1d294f738f295557d31e2e184",
+      "spikes/browser/chatgpt/transport/chatgpt.mjs": "28d952936ff1373a86598f1210610192555ac49518de8e6becf7c8b6e6c74b71",
+      "spikes/browser/chatgpt/transport/fetch-observer.mjs": "09f417670bdbe1e6cae1d519428a880fbcd82c1eddb819e64800c0939e21555e"
+    }
+  },
+  "cases": [
+    {
+      "fixture": "test/fixtures/chatgpt-wire/new-chat-text.json",
+      "fixtureSHA256": "f1efc7edf5ac81e1be667118c73c9af83e7b991c1b73b5d443fb49c5b16c17d0",
+      "baselineExtractorAccepted": true,
+      "observations": [
+        {
+          "version": "baseline",
+          "context": "new-chat-route",
+          "promptCaptured": true,
+          "diagnostics": [],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "new-chat-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_CONVERSATION_UNAVAILABLE"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "baseline",
+          "context": "different-conversation-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "different-conversation-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_CONVERSATION_UNAVAILABLE"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        }
+      ]
+    },
+    {
+      "fixture": "test/fixtures/chatgpt-wire/existing-chat-text.json",
+      "fixtureSHA256": "28e019c646367926f04df667f5122ba16decdd1f1c4666d28150a377f1ca9b30",
+      "baselineExtractorAccepted": true,
+      "observations": [
+        {
+          "version": "baseline",
+          "context": "new-chat-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "new-chat-route",
+          "promptCaptured": true,
+          "diagnostics": [],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "baseline",
+          "context": "different-conversation-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "different-conversation-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_CONVERSATION_DIFFERENT"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "baseline",
+          "context": "matching-conversation-route",
+          "promptCaptured": true,
+          "diagnostics": [],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "matching-conversation-route",
+          "promptCaptured": true,
+          "diagnostics": [],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        }
+      ]
+    },
+    {
+      "fixture": "test/fixtures/chatgpt-wire/new-chat-image.json",
+      "fixtureSHA256": "f2448e7deee2d6d0abd0ef30d35b507c0112dd3fccd21ffc9c12d367c4fba0e2",
+      "baselineExtractorAccepted": false,
+      "observations": [
+        {
+          "version": "baseline",
+          "context": "new-chat-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "new-chat-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_MEDIA_IGNORED",
+            "REQUEST_CONVERSATION_UNAVAILABLE"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "baseline",
+          "context": "different-conversation-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "different-conversation-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_MEDIA_IGNORED",
+            "REQUEST_CONVERSATION_UNAVAILABLE"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        }
+      ]
+    },
+    {
+      "fixture": "test/fixtures/chatgpt-wire/new-chat-file.json",
+      "fixtureSHA256": "a25b43eb58d665fbc4222bd239ab9b9d96958fffb846ce626a3071c6f7b07790",
+      "baselineExtractorAccepted": false,
+      "observations": [
+        {
+          "version": "baseline",
+          "context": "new-chat-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "new-chat-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_MEDIA_IGNORED",
+            "REQUEST_CONVERSATION_UNAVAILABLE"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "baseline",
+          "context": "different-conversation-route",
+          "promptCaptured": false,
+          "diagnostics": [
+            "REQUEST_EXTRACTOR_REJECTED"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        },
+        {
+          "version": "current",
+          "context": "different-conversation-route",
+          "promptCaptured": true,
+          "diagnostics": [
+            "REQUEST_MEDIA_IGNORED",
+            "REQUEST_CONVERSATION_UNAVAILABLE"
+          ],
+          "providerFetchCalls": 1,
+          "originalPromiseAndArgumentsPreserved": true
+        }
+      ]
+    }
+  ],
+  "result": "PASS"
+}

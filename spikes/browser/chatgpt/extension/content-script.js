@@ -1,6 +1,9 @@
-const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21';
-const CAPTURE_PROFILE = 'pap-chatgpt-capture/4';
+const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21.1';
+const CAPTURE_PROFILE = 'pap-chatgpt-capture/5';
 const CHANNEL = 'pap-chatgpt-transport/2';
+const REQUEST_GAPS = new Set(['REQUEST_BODY_READ_FAILED', 'REQUEST_BODY_LIMIT', 'REQUEST_JSON_INVALID',
+  'REQUEST_OPERATION_UNSUPPORTED', 'REQUEST_MEDIA_ONLY', 'REQUEST_PROMPT_MISSING', 'REQUEST_IDENTITY_MISSING', 'REQUEST_PROMPT_INVALID']);
+const REQUEST_NOTICES = new Set(['REQUEST_MEDIA_IGNORED', 'REQUEST_CONVERSATION_UNAVAILABLE', 'REQUEST_CONVERSATION_DIFFERENT']);
 const MAX_TEXT_BYTES = 256 * 1024;
 const observations = new Map(), bindings = new Map();
 let activeBinding = null, advisoryTimer = null;
@@ -240,8 +243,10 @@ addEventListener('message', event => {
     if (message.kind === 'request') reportDiagnostic('REQUEST_MESSAGE_REJECTED');
     return;
   }
+  if (message.kind === 'notice' && exactKeys(message, ['channel', 'kind', 'id', 'code'])
+      && REQUEST_NOTICES.has(message.code)) { reportDiagnostic(message.code); return; }
   if (message.kind === 'gap' && exactKeys(message, ['channel', 'kind', 'id', 'code'])
-      && message.code === 'REQUEST_EXTRACTOR_REJECTED') {
+      && REQUEST_GAPS.has(message.code)) {
     if (!pending.saved) {
       clearTimeout(pending.timer); reportDiagnostic(message.code); reportOutcome(pending, 'GAP'); observations.delete(pending.eventId);
     } return;
@@ -258,9 +263,9 @@ addEventListener('message', event => {
     if (performance.now() - pending.observedAt >= 5000
         || !exactKeys(message, ['channel', 'kind', 'id', 'text', 'request'])
         || !exactKeys(request, ['profile', 'path', 'messageId', 'conversationId'])
-        || request.profile !== 'chatgpt-new-user-text/2' || !wireId(request.messageId)
+        || request.profile !== 'chatgpt-new-user-text/3' || !wireId(request.messageId)
         || !['/backend-api/conversation', '/backend-api/f/conversation'].includes(request.path)
-        || request.conversationId !== (pending.policy.destination === 'new-chat' ? null : pending.policy.destination.slice(13))
+        || request.conversationId !== null && !wireId(request.conversationId)
         || typeof message.text !== 'string' || !message.text.length || message.text.length > MAX_TEXT_BYTES
         || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > MAX_TEXT_BYTES) {
       reportDiagnostic('REQUEST_MESSAGE_REJECTED'); reportOutcome(pending, 'GAP'); return;

@@ -181,7 +181,7 @@ try {
   await delay(2200);
   const tabId = runtime.adapter.scopes().find(source => source.destination === 'new-chat').tabId;
   for (let index = 0; index < 10; index++) await evaluate(workerSession, `chrome.tabs.sendMessage(${tabId},
-    {kind:'PAP_INSPECT',pageContract:'chatgpt-web-text/2026-09-21'},{frameId:0})`);
+    {kind:'PAP_INSPECT',pageContract:'chatgpt-web-text/2026-09-21.1'},{frameId:0})`);
   assert.equal(await evaluate(page, 'wrapperEffects'), 1);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
   await evaluate(page, 'document.body.append(savedSendButton)');
@@ -301,11 +301,46 @@ try {
   assert.equal(runtime.session.status().versions[6].source.destination, 'conversation:next-conversation');
   report.checks.push('ADMITTED_CONVERSATION_REQUEST_AND_ACK_RETAIN_ORIGINAL_SOURCE_ACROSS_SAME_DOCUMENT_NAVIGATION');
   report.checks.push('SUBSEQUENT_REQUEST_USES_NEW_CONVERSATION_POLICY');
+  await evaluate(page, `delete requestOnlyPayload.conversation_id;requestOnlyPayload.messages[0].id=crypto.randomUUID();
+    requestOnlyPayload.feature_config={future:{image:{edit:true},attachment:['unattested'],voice:true}};requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 8);
+  assert.equal(runtime.session.status().versions[7].request.conversationId, null);
+  assert.equal(runtime.session.status().versions[7].source.destination, 'conversation:next-conversation');
+  report.checks.push('MISSING_PROVIDER_CONVERSATION_AND_UNKNOWN_METADATA_PRESERVE_CAPTURE');
+  const mixedText = '\uFEFF  MIXED_e\u0301\r\n☕\t';
+  await evaluate(page, `requestOnlyPayload.conversation_id='different-provider-conversation';
+    requestOnlyPayload.messages[0].id=crypto.randomUUID();
+    requestOnlyPayload.messages[0].content={content_type:'future-multimodal',parts:${JSON.stringify([
+      '\uFEFF  ', { text: 'MIXED_e\u0301\r\n' }, { content_type: 'image_asset_pointer', asset_pointer: 'SYNTHETIC_UNATTESTED_IMAGE' }, '☕\t'])}};requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 9);
+  const mixed = runtime.session.status().versions[8];
+  assert.equal(mixed.request.conversationId, 'different-provider-conversation');
+  assert.equal(mixed.source.destination, 'conversation:next-conversation');
+  const mixedPreview = runtime.session.receipts.prepare({ ids: [mixed.descriptorId] });
+  assert.equal(mixedPreview.texts[0].preview, mixedText);
+  report.checks.push('MIXED_TEXT_PARTS_SAVE_EXACTLY_WITH_SEPARATE_PROVIDER_AND_ROUTE_IDENTITIES');
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();
+    requestOnlyPayload.messages[0].content.parts=[{content_type:'image_asset_pointer',asset_pointer:'SYNTHETIC_MEDIA_ONLY'}];requestOnly()`);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Recording gap'`));
+  assert.equal(runtime.session.receipts.list().length, 9);
+  report.checks.push('MEDIA_ONLY_REPORTS_GAP_WITHOUT_NEW_EVIDENCE_OR_PROVIDER_INTERFERENCE');
+  for (const [index, name] of ['new-chat-text', 'existing-chat-text', 'new-chat-image', 'new-chat-file'].entries()) {
+    const wire = await readFile(new URL(`./fixtures/chatgpt-wire/${name}.json`, import.meta.url), 'utf8');
+    const body = JSON.parse(wire);
+    await evaluate(page, `fetch('/backend-api/f/conversation',{method:'POST',body:${JSON.stringify(wire)}}).then(response=>response.text())`);
+    await wait(() => runtime.session.receipts.list().length === 10 + index);
+    const captured = runtime.session.status().versions.find(value => value.request.messageId === body.messages[0].id);
+    assert.equal(captured.source.destination, 'conversation:next-conversation');
+    assert.equal(captured.request.conversationId, body.conversation_id ?? null);
+    const preview = runtime.session.receipts.prepare({ ids: [captured.descriptorId] });
+    assert.equal(preview.texts[0].preview, `Wire fixture: ${name}.`);
+  }
+  report.checks.push('FOUR_SANITIZED_OWNER_REQUEST_SHAPES_SAVE_EXACT_TEXT_UNDER_AUTHENTICATED_CHROME_ROUTE');
   await setRecording(false);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));
   await evaluate(page, 'requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()');
   await delay(250);
-  assert.equal(runtime.session.receipts.list().length, 7); assert.equal(interceptedSends, 10);
+  assert.equal(runtime.session.receipts.list().length, 13); assert.equal(interceptedSends, 17);
   report.checks.push('OFF_CUTOFF_ALSO_APPLIES_WITHOUT_DOM_CONTROLS');
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
   report.syntheticSends = interceptedSends;

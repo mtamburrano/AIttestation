@@ -48,7 +48,7 @@ test('resumed batches reconcile lost replies through the unchanged durable spons
     }, verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED', assurance: FAST_CONFIRM_PROFILE, round: 42 }) };
   session = await new ChatGPTRecordingSession(root, adapter, options).init();
   const saved = session.observeNormal({ kind: 'request-observed', eventId: randomUUID(), inputMethod: 'provider-request',
-    text: 'SYNTHETIC_RECOVERABLE_PROMPT', request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'recovery-message', conversationId: 'test' },
+    text: 'SYNTHETIC_RECOVERABLE_PROMPT', request: { profile: 'chatgpt-new-user-text/3', path: '/backend-api/conversation', messageId: 'recovery-message', conversationId: 'test' },
     source: { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT, scope: randomUUID(),
       runtimeEpoch: randomUUID(), browserSessionId: 'synthetic-browser', tabId: 17, windowId: 1,
       tabEpoch: 'synthetic-tab', documentId: 'synthetic-document', destination: 'conversation:test' } });

@@ -169,7 +169,7 @@ test('a refused newer human Send retires older save feedback without disturbing 
   const f = await fixture(t, { afterCapture: async () => { entered = true; await result.promise; } });
   const page = f.pages.get(17);
   f.send('SAVED_A'); await until(() => entered);
-  page.attachments = true; f.send('REFUSED_B', { payload: { attachments: ['file'] } });
+  f.send('REFUSED_B', { payload: { action: 'regenerate' } });
   await assertFeedback(f, 'Attestamp · Recording gap');
   result.release(); await assertFeedback(f, 'Attestamp · Recording gap');
   assert.equal(saved(f).length, 1); assert.equal(f.deliveries.length, 1);

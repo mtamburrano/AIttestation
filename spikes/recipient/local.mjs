@@ -32,7 +32,7 @@ export class LocalReceipts {
       return { record, value: signedObservation(record, bytes, verifyRecord(record, bytes)) };
     }).filter(entry => entry.value);
     const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version'
-      || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3', 'pap-chatgpt-observation/4', 'pap-chatgpt-observation/5'].includes(entry.value.profile)
+      || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3', 'pap-chatgpt-observation/4', 'pap-chatgpt-observation/5', 'pap-chatgpt-observation/6'].includes(entry.value.profile)
         && ['normal-send-intent', 'normal-request-observed'].includes(entry.value.kind)).map(({ record, value }) => {
       const text = records.find(r => r.manifest.eventId === value.textRecord
         && r.manifest.evidence[0].objectDigest === value.textObject);

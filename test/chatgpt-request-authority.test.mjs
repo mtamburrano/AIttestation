@@ -369,7 +369,7 @@ for (const cutoff of ['OFF', 'OFF/ON', 'reload', 'other tab', 'permission loss',
   });
 }
 
-test('diagnostics distinguish matched, extraction rejection, invalid relay, dispatch and deduplication without content', async t => {
+test('diagnostics distinguish matched, unsupported operation, invalid relay, dispatch and deduplication without content', async t => {
   const diagnostics = new LocalDiagnostics(), f = await fixture(t, { diagnostics }), page = f.pages.get(17);
   await page.request(exact, { action: 'regenerate' });
   await until(() => page.feedback === 'Attestamp · Recording gap');
@@ -380,7 +380,7 @@ test('diagnostics distinguish matched, extraction rejection, invalid relay, disp
   const payload = JSON.parse(page.requests.at(-1)[1].body);
   await page.request(exact, payload); await until(() => f.results.some(v => v.result.deduplicated));
   const events = diagnostics.preview().report.events, codes = new Set(events.map(v => v.code));
-  for (const code of ['REQUEST_MATCHED', 'REQUEST_EXTRACTOR_REJECTED', 'REQUEST_MESSAGE_REJECTED',
+  for (const code of ['REQUEST_MATCHED', 'REQUEST_OPERATION_UNSUPPORTED', 'REQUEST_MESSAGE_REJECTED',
     'DURABLE_SAVE_DISPATCHED', 'REQUEST_DEDUPLICATED']) assert.ok(codes.has(code), code);
   assert.doesNotMatch(JSON.stringify(events), /REQUEST_AUTHORITY|chatgpt\.com|fixture-17|backend-api/);
   const pageCodes = f.port.messages.filter(v => v.kind === 'PAP_CAPTURE_DIAGNOSTIC');

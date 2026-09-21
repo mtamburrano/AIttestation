@@ -8,8 +8,10 @@ const REQUEST_TIMEOUT_MS = 750;
 const ACK_BYTES = 64 * 1024;
 const ACK_TIMEOUT_MS = 2000;
 
-// Duplicate JSON keys and deeply nested extensions have no unambiguous profile.
-function parseWireJSON(text) {
+// Request callers restrict ambiguity checks to fields used as evidence. Unknown
+// extensions may nest or repeat keys without changing the selected prompt.
+function parseWireJSON(text, relevantKey = null) {
+  const value = JSON.parse(text);
   const stack = []; let start = -1, escaped = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -20,19 +22,29 @@ function parseWireJSON(text) {
         const frame = stack.at(-1);
         if (frame?.key) {
           const key = JSON.parse(text.slice(start, i + 1));
-          if (frame.names.has(key)) throw Error('UNSUPPORTED_JSON');
-          frame.names.add(key); frame.key = false;
+          if (!relevantKey || frame.path && relevantKey(frame.path, key)) {
+            if (frame.names.has(key)) throw Error('UNSUPPORTED_JSON');
+            frame.names.add(key);
+          }
+          frame.property = key; frame.key = false;
         }
         start = -1;
       }
     } else if (c === '"') start = i;
     else if (c === '{' || c === '[') {
-      if (stack.length >= 24) throw Error('UNSUPPORTED_JSON');
-      stack.push(c === '{' ? { key: true, names: new Set() } : {});
+      if (!relevantKey && stack.length >= 24) throw Error('UNSUPPORTED_JSON');
+      const parent = stack.at(-1);
+      const path = !parent ? [] : parent.path && parent.path.length < 6
+        ? [...parent.path, parent.names ? parent.property : parent.index] : null;
+      stack.push(c === '{' ? { key: true, names: new Set(), path } : { index: 0, path });
     } else if (c === '}' || c === ']') stack.pop();
-    else if (c === ',' && stack.at(-1)?.names) stack.at(-1).key = true;
+    else if (c === ',') {
+      const frame = stack.at(-1);
+      if (frame?.names) frame.key = true;
+      else if (frame) frame.index++;
+    }
   }
-  return JSON.parse(text);
+  return value;
 }
 
 // Cancel only our clone branch. Awaiting tee cancellation can wait for the
@@ -83,7 +95,7 @@ async function readRequest(stream, signal) {
 
 // transport/chatgpt.mjs
 
-const EXTRACTION_PROFILE = 'chatgpt-new-user-text/2';
+const EXTRACTION_PROFILE = 'chatgpt-new-user-text/3';
 const ACK_PROFILE = 'chatgpt-early-ack/1';
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value);
@@ -93,44 +105,59 @@ function matchChatGPT(url, method) {
     && !url.search && !url.hash && method === 'POST' && requestPath(url.pathname);
 }
 
-function excluded(value, depth = 0) {
-  if (!value || typeof value !== 'object') return false;
-  if (depth > 20) return true;
-  for (const [key, item] of Object.entries(value)) {
-    if (/(?:attachment|file_ids|audio|voice|image|edit|resubmit|regenerat|anonymous)/i.test(key)
-        && item !== false && item !== null && item !== '' && !(Array.isArray(item) && !item.length)) return true;
-    if (typeof item === 'object' && excluded(item, depth + 1)) return true;
-  }
-  return false;
+const REQUEST_EXTRACTION_CODES = Object.freeze(['REQUEST_BODY_READ_FAILED', 'REQUEST_BODY_LIMIT', 'REQUEST_JSON_INVALID',
+  'REQUEST_OPERATION_UNSUPPORTED', 'REQUEST_MEDIA_ONLY', 'REQUEST_PROMPT_MISSING',
+  'REQUEST_IDENTITY_MISSING', 'REQUEST_PROMPT_INVALID']);
+const operations = new Set(['edit', 'regenerate', 'resubmit', 'continue', 'variant']);
+const operationFlags = ['is_edit', 'is_regenerate', 'is_resubmit'];
+const unsupportedOperation = value => operations.has(value?.action)
+  || operationFlags.some(key => value?.[key] === true);
+const fail = code => { throw Error(code); };
+
+function evidenceKey(selected, path, key) {
+  if (!path.length) return ['messages', 'action', 'parent_message_id', 'conversation_id', ...operationFlags].includes(key);
+  if (path[0] !== 'messages') return false;
+  // Roles select the latest user; only that user's identity/content is evidence.
+  if (path[1] >= selected && (path.length === 2 && key === 'author'
+      || path.length === 3 && path[2] === 'author' && key === 'role')) return true;
+  if (path[1] !== selected) return false;
+  if (path.length === 2) return ['id', 'content', 'metadata', 'action', ...operationFlags].includes(key);
+  if (path.length === 3 && path[2] === 'metadata') return ['action', ...operationFlags].includes(key);
+  if (path.length === 3 && path[2] === 'content') return key === 'parts';
+  return path.length === 5 && path[2] === 'content' && path[3] === 'parts' && key === 'text';
 }
 
-function extractChatGPT(text, path) {
-  if (typeof text !== 'string' || text.length > MAX_REQUEST_BYTES || !text.isWellFormed()
-      || new TextEncoder().encode(text).length > MAX_REQUEST_BYTES) throw Error('REQUEST_LIMIT');
-  const body = parseWireJSON(text);
-  if (!requestPath(path) || !body || body.action !== 'next' || !Array.isArray(body.messages)
-      || body.messages.length < 1 || body.messages.length > 128
-      || !wireId(body.parent_message_id) || body.conversation_id != null && !wireId(body.conversation_id)
-      || excluded(body)) return null;
-  const message = body.messages.at(-1), content = message?.content;
-  // History is accepted only when the parent explicitly identifies the message
-  // immediately before the new user turn. Never guess the last user in an
-  // arbitrary batch, or concatenate history/multimodal parts into evidence.
-  const ids = new Set();
-  for (const entry of body.messages) {
-    if (!wireId(entry?.id) || ids.has(entry.id) || !['user', 'assistant'].includes(entry.author?.role)) return null;
-    ids.add(entry.id);
-  }
-  if (message.id === body.parent_message_id || body.messages.length > 1
-      && (body.messages.at(-2).id !== body.parent_message_id || body.messages.at(-2).author.role !== 'assistant')) return null;
-  if (!wireId(message?.id) || message.author?.role !== 'user' || content?.content_type !== 'text'
-      || !Array.isArray(content.parts) || content.parts.length !== 1 || typeof content.parts[0] !== 'string'
-      || message.recipient != null && message.recipient !== 'all'
-      || message.channel != null || body.conversation_mode?.kind && body.conversation_mode.kind !== 'primary_assistant') return null;
-  const prompt = content.parts[0];
-  if (!prompt.length || !prompt.isWellFormed() || new TextEncoder().encode(prompt).length > MAX_PROMPT_BYTES) throw Error('PROMPT_LIMIT');
-  return { text: prompt, request: { profile: EXTRACTION_PROFILE, path, messageId: message.id,
-    conversationId: body.conversation_id ?? null } };
+function extractChatGPT(text, path, notice = () => {}) {
+  if (typeof text !== 'string' || !text.isWellFormed()) fail('REQUEST_BODY_READ_FAILED');
+  if (text.length > MAX_REQUEST_BYTES || new TextEncoder().encode(text).length > MAX_REQUEST_BYTES) fail('REQUEST_BODY_LIMIT');
+  let body, selected;
+  try {
+    body = JSON.parse(text);
+    selected = Array.isArray(body?.messages) ? body.messages.findLastIndex(entry => entry?.author?.role === 'user') : -1;
+    parseWireJSON(text, (path, key) => evidenceKey(selected, path, key));
+  } catch { fail('REQUEST_JSON_INVALID'); }
+  if (!requestPath(path)) fail('REQUEST_OPERATION_UNSUPPORTED');
+  if (unsupportedOperation(body)) fail('REQUEST_OPERATION_UNSUPPORTED');
+  if (selected < 0) fail('REQUEST_PROMPT_MISSING');
+  const message = body.messages[selected], content = message.content;
+  if (unsupportedOperation(message) || unsupportedOperation(message.metadata)
+      || wireId(message.id) && message.id === body.parent_message_id) fail('REQUEST_OPERATION_UNSUPPORTED');
+  if (!wireId(message.id)) fail('REQUEST_IDENTITY_MISSING');
+  // A repeated selected ID is ambiguous, but unrelated history needs no schema.
+  if (body.messages.some((entry, index) => index !== selected && entry?.id === message.id)) fail('REQUEST_IDENTITY_MISSING');
+  const parts = Array.isArray(content?.parts) ? content.parts : [];
+  const strings = parts.flatMap(part => typeof part === 'string' ? [part]
+    : typeof part?.text === 'string' ? [part.text] : []);
+  const media = parts.some(part => typeof part !== 'string' && typeof part?.text !== 'string')
+    || [message.attachments, message.metadata?.attachments, message.metadata?.file_ids].some(value => Array.isArray(value) && value.length > 0)
+    || ['image', 'audio', 'video', 'file', 'multimodal_text'].includes(content?.content_type);
+  const prompt = strings.join('');
+  if (!prompt.length) fail(media ? 'REQUEST_MEDIA_ONLY' : 'REQUEST_PROMPT_MISSING');
+  if (strings.some(part => !part.isWellFormed()) || new TextEncoder().encode(prompt).length > MAX_PROMPT_BYTES) fail('REQUEST_PROMPT_INVALID');
+  if (media) notice('REQUEST_MEDIA_IGNORED');
+  const conversationId = wireId(body.conversation_id) ? body.conversation_id : null;
+  if (conversationId === null) notice('REQUEST_CONVERSATION_UNAVAILABLE');
+  return { text: prompt, request: { profile: EXTRACTION_PROFILE, path, messageId: message.id, conversationId } };
 }
 
 // Correlation is the particular fetch call, with any supplied conversation and
@@ -274,7 +301,7 @@ function installFetchObserver(target, { emit, baseURL = () => target.location.hr
           if (active.size > 8) throw Error('OBSERVATION_LIMIT');
         });
       }
-    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); }
+    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_BODY_READ_FAILED' }); }
     let result, failure, threw = false;
     try { result = Reflect.apply(original, this, args); }
     catch (error) { threw = true; failure = error; }
@@ -287,13 +314,25 @@ function installFetchObserver(target, { emit, baseURL = () => target.location.hr
     bodyReady.catch(() => {});
     const extraction = bodyReady.then(body => {
       if (stopped || controller.signal.aborted) return null;
-      const value = extractChatGPT(body, path);
-      if (!value || candidate.conversationId !== value.request.conversationId) throw Error('UNSUPPORTED_REQUEST');
+      let value;
+      try {
+        value = extractChatGPT(body, path, code => notify({ kind: 'notice', id: candidate.id, code }));
+      } catch (error) {
+        notify({ kind: 'gap', id: candidate.id, code: REQUEST_EXTRACTION_CODES.includes(error?.message)
+          ? error.message : 'REQUEST_PROMPT_INVALID' });
+        return null;
+      }
+      // The authenticated route owns capture authority. Provider conversation
+      // metadata is independently preserved, including absence or disagreement.
+      if (candidate.conversationId !== null && value.request.conversationId !== null
+          && candidate.conversationId !== value.request.conversationId) {
+        notify({ kind: 'notice', id: candidate.id, code: 'REQUEST_CONVERSATION_DIFFERENT' });
+      }
       // Only the durable engine deduplicates provider message identity. Dropping
       // retries here could discard the sole retry after a failed local delivery.
       notify({ kind: 'request', id: candidate.id, ...value });
       return value.request;
-    }).catch(() => { if (!stopped && !controller.signal.aborted) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); return null; });
+    }, () => { if (!stopped && !controller.signal.aborted) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_BODY_READ_FAILED' }); return null; });
     snapshot = null;
     // Observation is a detached branch; the page receives exactly fetch's
     // promise and original Response, including its original rejection/abort.

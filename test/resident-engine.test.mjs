@@ -66,7 +66,7 @@ for (const [failure, recover, resume] of [
       tabEpoch: 'synthetic-tab', documentId: 'synthetic-document', destination: 'conversation:retry' };
     const saved = session.observeNormal({ kind: 'request-observed', eventId: randomUUID(), source,
       inputMethod: 'provider-request', text: 'SYNTHETIC_ANCHOR_RETRY',
-      request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'retry-message', conversationId: 'retry' } });
+      request: { profile: 'chatgpt-new-user-text/3', path: '/backend-api/conversation', messageId: 'retry-message', conversationId: 'retry' } });
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const engine = await new ResidentEngine(directory, session, adapter, randomUUID(), diagnostics).init();
     t.after(() => engine.stop());
@@ -104,7 +104,7 @@ for (const [failure, recover, resume] of [
   });
 }
 
-test('historical qualified transport evidence keeps its signed meaning and dedup identity after reopen', async t => {
+for (const profile of [4, 5]) test(`historical transport evidence /${profile} keeps its signed meaning and dedup identity after reopen`, async t => {
   const directory = await root(t), vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true });
   t.after(() => vault.close());
   const text = vault.capture(Buffer.from('HISTORICAL_QUALIFIED_PROMPT'));
@@ -115,6 +115,11 @@ test('historical qualified transport evidence keeps its signed meaning and dedup
     textRecord: text.manifest.eventId, textObject: text.manifest.evidence[0].objectDigest,
     mode: 'ON', boundary: 'provider_fetch', coverage: 'UTF8_NEW_USER_MESSAGE', releaseClass: 'RETROSPECTIVE_OBSERVATION',
     attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
+  if (profile === 5) {
+    value.profile = 'pap-chatgpt-observation/5'; value.source.adapterProfile = 'pap-chatgpt-chrome/8';
+    value.source.pageContract = 'chatgpt-web-text/2026-09-21'; value.inputMethod = 'provider-request';
+    value.request.profile = 'chatgpt-new-user-text/2';
+  }
   const record = vault.capture(Buffer.from(canonical(value)), { type: 'observation' });
   vault.capture(Buffer.from(canonical({ profile: value.profile, kind: 'normal-acknowledgement', eventId: value.eventId,
     source: value.source, recordDigest: record.recordDigest, acknowledgement: { profile: 'chatgpt-early-ack/1',
@@ -124,7 +129,7 @@ test('historical qualified transport evidence keeps its signed meaning and dedup
   t.after(() => session.close());
   const preview = session.receipts.prepare({ ids: [record.manifest.eventId] });
   const assertions = verifyPortable(session.receipts.export(preview.previewId)).records.flatMap(v => v.localAssertions);
-  assert.ok(assertions.some(v => /qualified by human Send/.test(v.claim)));
+  assert.ok(assertions.some(v => (profile === 4 ? /qualified by human Send/ : /No human-interaction/).test(v.claim)));
   assert.ok(assertions.some(v => v.kind === 'normal-acknowledgement'));
   assert.throws(() => session.observeNormal({ eventId: value.eventId }), /read-only/);
   const retried = session.observeNormal({ ...value, kind: 'request-observed', eventId: randomUUID(), text: 'HISTORICAL_QUALIFIED_PROMPT' });
@@ -265,7 +270,7 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
     windowId: policy.windowId, tabEpoch: policy.tabEpoch, documentId: 'queue-document', destination: policy.destination };
   const observation = { profile: CHATGPT_CAPTURE_PROFILE, kind: 'request-observed', token: policy.token,
     eventId: randomUUID(), source, text: 'SYNTHETIC_QUEUE_FULL', inputMethod: 'provider-request',
-    request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'queued-message', conversationId: source.destination.slice(13) } };
+    request: { profile: 'chatgpt-new-user-text/3', path: '/backend-api/conversation', messageId: 'queued-message', conversationId: source.destination.slice(13) } };
   const ack = await engine.observe(observation);
   assert.equal(ack.state, 'PROMPT_SAVED');
   assert.deepEqual(await engine.observe(observation), ack);
@@ -425,7 +430,7 @@ test('an unconfigured client consumes no attempts across restart and can later a
     windowId: 1, tabEpoch: 'synthetic-epoch', documentId: 'synthetic-document', destination: 'conversation:synthetic' };
   const original = session.observeNormal({ kind: 'request-observed', eventId: id, source,
     text: 'UNCONFIGURED_SYNTHETIC', inputMethod: 'provider-request',
-    request: { profile: 'chatgpt-new-user-text/2', path: '/backend-api/conversation', messageId: 'unconfigured-message', conversationId: 'synthetic' } });
+    request: { profile: 'chatgpt-new-user-text/3', path: '/backend-api/conversation', messageId: 'unconfigured-message', conversationId: 'synthetic' } });
   await assert.rejects(session.confirmFast({ id, transactionId: 'invalid' }), /Algorand transaction ID required/);
   assert.equal(session.status().versions[0].anchorAttempts, 0);
   for (let index = 0; index < 4; index++) {

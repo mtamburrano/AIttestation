@@ -1,5 +1,5 @@
 import { MAX_REQUEST_BYTES, ACK_BYTES, ACK_TIMEOUT_MS, readRequest, readPrefix, cancelReader } from './bounded.mjs';
-import { matchChatGPT, extractChatGPT, chatGPTAcknowledgement } from './chatgpt.mjs';
+import { matchChatGPT, extractChatGPT, chatGPTAcknowledgement, REQUEST_EXTRACTION_CODES } from './chatgpt.mjs';
 
 // Only standard data-valued init options are inspected. Accessors/custom input
 // conversions belong to fetch; evaluating them twice could change a Send.
@@ -114,7 +114,7 @@ export function installFetchObserver(target, { emit, baseURL = () => target.loca
           if (active.size > 8) throw Error('OBSERVATION_LIMIT');
         });
       }
-    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); }
+    } catch { if (candidate) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_BODY_READ_FAILED' }); }
     let result, failure, threw = false;
     try { result = Reflect.apply(original, this, args); }
     catch (error) { threw = true; failure = error; }
@@ -127,13 +127,25 @@ export function installFetchObserver(target, { emit, baseURL = () => target.loca
     bodyReady.catch(() => {});
     const extraction = bodyReady.then(body => {
       if (stopped || controller.signal.aborted) return null;
-      const value = extractChatGPT(body, path);
-      if (!value || candidate.conversationId !== value.request.conversationId) throw Error('UNSUPPORTED_REQUEST');
+      let value;
+      try {
+        value = extractChatGPT(body, path, code => notify({ kind: 'notice', id: candidate.id, code }));
+      } catch (error) {
+        notify({ kind: 'gap', id: candidate.id, code: REQUEST_EXTRACTION_CODES.includes(error?.message)
+          ? error.message : 'REQUEST_PROMPT_INVALID' });
+        return null;
+      }
+      // The authenticated route owns capture authority. Provider conversation
+      // metadata is independently preserved, including absence or disagreement.
+      if (candidate.conversationId !== null && value.request.conversationId !== null
+          && candidate.conversationId !== value.request.conversationId) {
+        notify({ kind: 'notice', id: candidate.id, code: 'REQUEST_CONVERSATION_DIFFERENT' });
+      }
       // Only the durable engine deduplicates provider message identity. Dropping
       // retries here could discard the sole retry after a failed local delivery.
       notify({ kind: 'request', id: candidate.id, ...value });
       return value.request;
-    }).catch(() => { if (!stopped && !controller.signal.aborted) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_EXTRACTOR_REJECTED' }); return null; });
+    }, () => { if (!stopped && !controller.signal.aborted) notify({ kind: 'gap', id: candidate.id, code: 'REQUEST_BODY_READ_FAILED' }); return null; });
     snapshot = null;
     // Observation is a detached branch; the page receives exactly fetch's
     // promise and original Response, including its original rejection/abort.

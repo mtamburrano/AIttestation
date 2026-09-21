@@ -4,8 +4,10 @@ export const REQUEST_TIMEOUT_MS = 750;
 export const ACK_BYTES = 64 * 1024;
 export const ACK_TIMEOUT_MS = 2000;
 
-// Duplicate JSON keys and deeply nested extensions have no unambiguous profile.
-export function parseWireJSON(text) {
+// Request callers restrict ambiguity checks to fields used as evidence. Unknown
+// extensions may nest or repeat keys without changing the selected prompt.
+export function parseWireJSON(text, relevantKey = null) {
+  const value = JSON.parse(text);
   const stack = []; let start = -1, escaped = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -16,19 +18,29 @@ export function parseWireJSON(text) {
         const frame = stack.at(-1);
         if (frame?.key) {
           const key = JSON.parse(text.slice(start, i + 1));
-          if (frame.names.has(key)) throw Error('UNSUPPORTED_JSON');
-          frame.names.add(key); frame.key = false;
+          if (!relevantKey || frame.path && relevantKey(frame.path, key)) {
+            if (frame.names.has(key)) throw Error('UNSUPPORTED_JSON');
+            frame.names.add(key);
+          }
+          frame.property = key; frame.key = false;
         }
         start = -1;
       }
     } else if (c === '"') start = i;
     else if (c === '{' || c === '[') {
-      if (stack.length >= 24) throw Error('UNSUPPORTED_JSON');
-      stack.push(c === '{' ? { key: true, names: new Set() } : {});
+      if (!relevantKey && stack.length >= 24) throw Error('UNSUPPORTED_JSON');
+      const parent = stack.at(-1);
+      const path = !parent ? [] : parent.path && parent.path.length < 6
+        ? [...parent.path, parent.names ? parent.property : parent.index] : null;
+      stack.push(c === '{' ? { key: true, names: new Set(), path } : { index: 0, path });
     } else if (c === '}' || c === ']') stack.pop();
-    else if (c === ',' && stack.at(-1)?.names) stack.at(-1).key = true;
+    else if (c === ',') {
+      const frame = stack.at(-1);
+      if (frame?.names) frame.key = true;
+      else if (frame) frame.index++;
+    }
   }
-  return JSON.parse(text);
+  return value;
 }
 
 // Cancel only our clone branch. Awaiting tee cancellation can wait for the

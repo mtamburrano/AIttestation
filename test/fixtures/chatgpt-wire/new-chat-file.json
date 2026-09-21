@@ -1,0 +1,83 @@
+{
+  "action": "next",
+  "messages": [
+    {
+      "id": "787cbe80-54b2-58d3-ad22-5fb21c88c51b",
+      "author": {
+        "role": "user"
+      },
+      "create_time": 1700000000.0,
+      "content": {
+        "content_type": "text",
+        "parts": [
+          "Wire fixture: new-chat-file."
+        ]
+      },
+      "metadata": {
+        "attachments": [
+          {
+            "id": "file_fixture-new-chat-file-0",
+            "size": 1024,
+            "name": "fixture-new-chat-file.rtf",
+            "mime_type": "text/rtf",
+            "source": "local",
+            "library_file_id": "c906b363-492b-503b-b077-d0d6ca3b66dd",
+            "is_big_paste": false
+          }
+        ],
+        "selected_sources": [],
+        "serialization_metadata": {
+          "custom_symbol_offsets": []
+        },
+        "submission_mode": "manual_send",
+        "file_upload_slot_prefetch_attribution": {
+          "actual_path": "reservation",
+          "reason": "ready"
+        }
+      }
+    }
+  ],
+  "parent_message_id": "client-created-root",
+  "model": "gpt-5-6-thinking",
+  "client_prepare_state": "sent",
+  "timezone_offset_min": 0,
+  "timezone": "Etc/UTC",
+  "conversation_mode": {
+    "kind": "primary_assistant"
+  },
+  "enable_message_followups": true,
+  "system_hints": [],
+  "model_response_contracts": [
+    {
+      "id": "photo_upload_action.v1",
+      "protocol_version": 1,
+      "presets": [
+        "cap:image",
+        "cap:file",
+        "placement:end"
+      ]
+    }
+  ],
+  "supports_buffering": true,
+  "supported_encodings": [
+    "v1"
+  ],
+  "client_contextual_info": {
+    "is_dark_mode": false,
+    "time_since_loaded": 1000,
+    "page_height": 680,
+    "page_width": 1280,
+    "pixel_ratio": 1,
+    "screen_height": 720,
+    "screen_width": 1280,
+    "app_name": "chatgpt.com",
+    "has_web_push_capabilities": true,
+    "web_push_notification_permission": "default"
+  },
+  "paragen_cot_summary_display_override": "allow",
+  "force_parallel_switch": "auto",
+  "thinking_effort": "max",
+  "local_function_names": [
+    "local.continue_in_work"
+  ]
+}
