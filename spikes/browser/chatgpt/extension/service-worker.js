@@ -35,7 +35,7 @@ const exactKeys = (value, keys) => value && Object.keys(value).sort().join(',') 
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 function validRequest(value) {
   return exactKeys(value, ['profile', 'path', 'messageId', 'conversationId']) && value.profile === 'chatgpt-new-user-text/3'
-    && ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value.path)
+    && ['/backend-api/conversation', '/backend-api/f/conversation', '/backend-api/f/steer_turn'].includes(value.path)
     && wireId(value.messageId) && (value.conversationId === null || wireId(value.conversationId));
 }
 function validAcknowledgement(value) {

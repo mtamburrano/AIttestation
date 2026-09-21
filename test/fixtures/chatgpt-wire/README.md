@@ -1,6 +1,6 @@
 # ChatGPT request fixtures
 
-These four JSON bodies preserve actual requests captured by the owner from a
+The four `*-text`, `*-image` and `*-file` JSON bodies preserve actual requests captured by the owner from a
 dedicated test account on 2026-09-21. They are permanent offline regressions for
 `POST /backend-api/f/conversation`, covering new-chat text, existing-chat text,
 text with an image, and text with an RTF document.
@@ -32,3 +32,23 @@ fixture and source hashes, positive controls and exact observed outcomes.
 
 This corpus grounds request parsing in observed wire shapes. Offline replay and
 synthetic Chrome tests do not establish live installed capture or owner acceptance.
+
+`steer-turn.json` is a reduced fixture derived from the owner's recorded live
+steering request and the exact Request URL confirmed on 2026-09-22:
+`POST https://chatgpt.com/backend-api/f/steer_turn`. It retains the reported
+`action: "next"`, system-entry/user-entry ordering, explicit user role, text
+parts, fresh message identity, conversation and parent identity, serialization
+metadata and `submission_mode: "manual_send"`. Text and IDs are synthetic;
+serialization metadata is an empty placeholder. Unreported system content and
+additive model/client/chime/turn-exchange values are omitted. Unlike the four
+full bodies above, this is an owner-derived projection, not a verbatim sanitized
+copy of the entire wire body.
+
+`test/chatgpt-steering.test.mjs` exercises this projection through the full
+capture and portable-verification path while an assistant stream stays open.
+It also covers exact UTF-8, operation exclusions, message-ID deduplication,
+multitab attribution, OFF/ON stale delivery and unchanged fetch semantics.
+The [steering baseline comparison](../../evidence/steering-baseline.json) shows
+that `8a7460a` does not match this endpoint, while the identical body on the
+ordinary conversation endpoint is a passing control. The current observer
+captures both without changing the original fetch call.

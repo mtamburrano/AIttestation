@@ -1,0 +1,28 @@
+{
+  "action": "next",
+  "messages": [
+    {
+      "author": {
+        "role": "system"
+      }
+    },
+    {
+      "id": "0c23d4e5-f607-489a-bcde-123456789abc",
+      "author": {
+        "role": "user"
+      },
+      "content": {
+        "content_type": "text",
+        "parts": [
+          "Wire fixture: steer-turn."
+        ]
+      },
+      "metadata": {
+        "serialization_metadata": {},
+        "submission_mode": "manual_send"
+      }
+    }
+  ],
+  "conversation_id": "d72c0c01-47dd-570f-8b38-5528c82fa4e4",
+  "parent_message_id": "03b77d3a-edac-5496-9bf0-8b300a9f90d8"
+}

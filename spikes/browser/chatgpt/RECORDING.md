@@ -18,8 +18,8 @@ spikes/browser/chatgpt/build-observer.mjs --check` verifies the shipped bundle.
 There is no XHR, WebSocket, webRequest, debugger, proxy, iframe or prototype hook,
 remote executable adapter, CSP change, secondary recorder or provider refetch.
 
-Supported requests are authenticated POSTs to exactly `/backend-api/conversation`
-or `/backend-api/f/conversation` on the provider origin, without URL query/fragment
+Supported requests are authenticated POSTs to exactly `/backend-api/conversation`,
+`/backend-api/f/conversation` or `/backend-api/f/steer_turn` on the provider origin, without URL query/fragment
 or credentials in the URL. Extraction selects the latest entry whose
 `author.role` is explicitly `user`, requires its stable message ID, and reads its
 `content.parts`. It does not require a parent-linked history, validate other
@@ -253,6 +253,9 @@ conversation capture authority transfers to the new conversation.
 
 Current contracts: adapter/9, page `2026-09-21.1`, capture/5, observation/6,
 extraction `chatgpt-new-user-text/3`, acknowledgement `chatgpt-early-ack/1`.
+Steering adds one supported request path with the same extraction and signed
+assertion semantics. Older verifiers that lack that path reject new steering
+records; existing valid observations retain their original interpretation.
 `normal-request-observed` binds the exact new text, request metadata and source,
 with `inputMethod: "provider-request"` and no human-interaction claim;
 `normal-acknowledgement` binds the existing descriptor digest/event/source/key.
@@ -287,6 +290,20 @@ preserve the real 2026-09-21 text, image and document wire structures. The
 text accepted by the prior parser but vetoed by route/provider equality, plus
 image/document extractor failures. All four now capture under both new-chat and
 conversation source bindings, without changing the provider fetch.
+
+The owner-derived `steer-turn.json` projection retains the reported steering
+fields and exact `/backend-api/f/steer_turn` endpoint confirmed on 2026-09-22.
+The same latest-user extraction applies while an assistant response is open;
+save does not wait for either response to finish. Other steering-like paths
+remain unsupported, and known edit/regenerate/resubmit/continue/variant
+operations remain excluded. The fixture README distinguishes this reduced
+projection from the four full sanitized wire bodies.
+The [steering baseline](../../../test/evidence/steering-baseline.json) compares
+the same projection against `8a7460a`; its ordinary-conversation control passes
+while steering is unmatched. The [Chrome steering result](../../../test/evidence/steering-chrome-153/capture.json)
+adds genuine Send input with an intercepted response held past the advisory
+deadline: exact evidence is durable and the page reports Prompt saved before
+the provider response is released. Live installed steering remains unverified.
 
 These comparisons informed an original implementation. Endpoint, source/document,
 consent, exact-byte, resource and stable-identity checks protect attribution and

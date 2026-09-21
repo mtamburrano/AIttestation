@@ -22,7 +22,7 @@ export function validateCaptureSource(source) {
 export function validateRequest(request) {
   keys(request, ['profile', 'path', 'messageId', 'conversationId']);
   if (request.profile !== 'chatgpt-new-user-text/3'
-      || !['/backend-api/conversation', '/backend-api/f/conversation'].includes(request.path)
+      || !['/backend-api/conversation', '/backend-api/f/conversation', '/backend-api/f/steer_turn'].includes(request.path)
       || !id(request.messageId) || request.conversationId !== null && !id(request.conversationId)) invalid();
 }
 

@@ -18,6 +18,7 @@ let runtime, browser, socket, native, pump, failure;
 const input = new PassThrough(), output = new PassThrough(), decoder = new NativeFrameDecoder(), incoming = [];
 const pending = new Map(), report = { evidence: 'REAL_CHROME_WITH_SYNTHETIC_PAGE_AND_NATIVE_PEER', checks: [] };
 let sequence = 0, interceptedSends = 0;
+const heldSteering = [];
 function call(method, params = {}, sessionId) {
   return new Promise((resolve, reject) => {
     const id = ++sequence, timer = setTimeout(() => { pending.delete(id); reject(Error(`CDP timeout: ${method}`)); }, 10000);
@@ -125,8 +126,10 @@ try {
     const value = JSON.parse(event.data);
     if (value.method === 'Fetch.requestPaused') {
       const isPage = value.params.request.url === 'https://chatgpt.com/' && value.params.resourceType === 'Document';
-      const isSend = value.params.request.url === 'https://chatgpt.com/backend-api/f/conversation' && value.params.request.method === 'POST';
+      const isSteering = value.params.request.url === 'https://chatgpt.com/backend-api/f/steer_turn' && value.params.request.method === 'POST';
+      const isSend = isSteering || value.params.request.url === 'https://chatgpt.com/backend-api/f/conversation' && value.params.request.method === 'POST';
       if (isSend) interceptedSends++;
+      if (isSteering) { heldSteering.push(value); return; }
       const responseBody = isPage ? html : isSend ? 'data: ' + JSON.stringify({ type: 'stream_handoff',
         conversation_id: 'synthetic-conversation', turn_exchange_id: 'synthetic-' + randomUUID() }) + '\n\n' : '';
       void call('Fetch.fulfillRequest', { requestId: value.params.requestId, responseCode: isPage || isSend ? 200 : 404,
@@ -205,9 +208,9 @@ try {
   report.checks.push('IDLE_HEARTBEATS_AND_INSPECTIONS_VALIDATE_EACH_FETCH_IDENTITY_ONCE');
   report.checks.push('GENUINE_OBSERVER_BYPASS_UNAVAILABLE_AND_FORWARDING_WRAPPER_RECOVERS_WITHOUT_SEND');
   const text = 'SYNTHETIC_BROWSER_e\u0301\n☕  ';
-  const send = async () => {
+  const send = async (prompt = text) => {
     await evaluate(page, 'document.querySelector("textarea").focus()');
-    await call('Input.insertText', { text }, page);
+    await call('Input.insertText', { text: prompt }, page);
     const rect = await evaluate(page, `(()=>{const r=document.querySelector('button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await call('Input.dispatchMouseEvent', { type: 'mousePressed', ...rect, button: 'left', clickCount: 1 }, page);
     await call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...rect, button: 'left', clickCount: 1 }, page);
@@ -368,6 +371,36 @@ try {
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Prompt saved'`));
   assert.equal(runtime.session.receipts.list().length, 14);
   report.checks.push('DURABLE_SAVE_REPLY_AFTER_BOTH_LOCAL_DEADLINES_STAYS_UNCONFIRMED_THEN_SAVED');
+  const steeringWire = await readFile(new URL('./fixtures/chatgpt-wire/steer-turn.json', import.meta.url), 'utf8');
+  const steeringBody = JSON.parse(steeringWire), steeringText = steeringBody.messages[1].content.parts[0];
+  report.steeringFixtureSHA256 = createHash('sha256').update(steeringWire).digest('hex');
+  await evaluate(page, `globalThis.steeringPayload=${steeringWire};globalThis.steeringResponse=false;
+    document.body.insertAdjacentHTML('beforeend','<textarea id="prompt-textarea"></textarea><button data-testid="send-button">Send</button>');
+    document.querySelector('button').onclick=()=>{
+      steeringPayload.messages[1].content.parts=[document.querySelector('textarea').value];
+      fetch('/backend-api/f/steer_turn',{method:'POST',body:JSON.stringify(steeringPayload)})
+        .then(response=>response.text()).then(()=>steeringResponse=true);
+      document.querySelector('textarea').value='';
+    }`);
+  await send(steeringText);
+  await wait(() => runtime.session.receipts.list().length === 15 && heldSteering.length === 1);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Prompt saved'`));
+  await delay(1600);
+  assert.equal(await evaluate(page, 'steeringResponse'), false);
+  assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · Prompt saved');
+  const steering = runtime.session.status().versions[14];
+  assert.equal(steering.request.path, '/backend-api/f/steer_turn');
+  assert.equal(steering.request.messageId, steeringBody.messages[1].id);
+  assert.equal(steering.request.conversationId, steeringBody.conversation_id);
+  assert.equal(steering.source.destination, 'conversation:next-conversation');
+  const steeringPreview = runtime.session.receipts.prepare({ ids: [steering.descriptorId] });
+  assert.equal(steeringPreview.texts[0].preview, steeringText);
+  const held = heldSteering.shift();
+  await call('Fetch.fulfillRequest', { requestId: held.params.requestId, responseCode: 200,
+    body: Buffer.from('SYNTHETIC_STEERING_RESPONSE').toString('base64') }, held.sessionId);
+  await wait(() => evaluate(page, 'steeringResponse'));
+  assert.equal(runtime.session.receipts.list().length, 15); assert.equal(interceptedSends, 19);
+  report.checks.push('OWNER_DERIVED_STEERING_SEND_SAVES_EXACTLY_BEFORE_RESPONSE_WITHOUT_ADVISORY_GAP');
   await setRecording(false);
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
   report.syntheticSends = interceptedSends;

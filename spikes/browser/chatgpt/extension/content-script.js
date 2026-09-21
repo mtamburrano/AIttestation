@@ -282,7 +282,7 @@ addEventListener('message', event => {
         || !exactKeys(message, ['channel', 'kind', 'id', 'text', 'request'])
         || !exactKeys(request, ['profile', 'path', 'messageId', 'conversationId'])
         || request.profile !== 'chatgpt-new-user-text/3' || !wireId(request.messageId)
-        || !['/backend-api/conversation', '/backend-api/f/conversation'].includes(request.path)
+        || !['/backend-api/conversation', '/backend-api/f/conversation', '/backend-api/f/steer_turn'].includes(request.path)
         || request.conversationId !== null && !wireId(request.conversationId)
         || typeof message.text !== 'string' || !message.text.length || message.text.length > MAX_TEXT_BYTES
         || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > MAX_TEXT_BYTES) {

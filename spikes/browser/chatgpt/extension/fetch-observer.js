@@ -98,7 +98,7 @@ async function readRequest(stream, signal) {
 const EXTRACTION_PROFILE = 'chatgpt-new-user-text/3';
 const ACK_PROFILE = 'chatgpt-early-ack/1';
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value);
+const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation', '/backend-api/f/steer_turn'].includes(value);
 
 function matchChatGPT(url, method) {
   return url.origin === 'https://chatgpt.com' && !url.username && !url.password

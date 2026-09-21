@@ -1,0 +1,62 @@
+{
+  "profile": "chatgpt-steering-baseline/1",
+  "evidence": "OWNER_DERIVED_PROJECTION_WITH_SYNTHETIC_FETCH",
+  "baselineCommit": "8a7460a8af6a11e607535095e688eab1c05dacec",
+  "fixture": "test/fixtures/chatgpt-wire/steer-turn.json",
+  "fixtureSHA256": "e372f2962559ce7af41f62818cb68002511cfd0fb0b3c6380576a6afa72e91e7",
+  "sourceSHA256": {
+    "baseline": {
+      "spikes/browser/chatgpt/transport/bounded.mjs": "72a7ce426953d975e6dabea58136c956006513b1d294f738f295557d31e2e184",
+      "spikes/browser/chatgpt/transport/chatgpt.mjs": "28d952936ff1373a86598f1210610192555ac49518de8e6becf7c8b6e6c74b71",
+      "spikes/browser/chatgpt/transport/fetch-observer.mjs": "09f417670bdbe1e6cae1d519428a880fbcd82c1eddb819e64800c0939e21555e"
+    },
+    "current": {
+      "spikes/browser/chatgpt/transport/bounded.mjs": "72a7ce426953d975e6dabea58136c956006513b1d294f738f295557d31e2e184",
+      "spikes/browser/chatgpt/transport/chatgpt.mjs": "0422f4c317932acb20648da5d24245043643891fb5d17da774296a1e69ba6e6b",
+      "spikes/browser/chatgpt/transport/fetch-observer.mjs": "09f417670bdbe1e6cae1d519428a880fbcd82c1eddb819e64800c0939e21555e"
+    }
+  },
+  "cases": [
+    {
+      "version": "baseline",
+      "path": "/backend-api/f/steer_turn",
+      "extractorAccepted": false,
+      "extractorCode": "REQUEST_OPERATION_UNSUPPORTED",
+      "matched": false,
+      "promptCaptured": false,
+      "providerFetchCalls": 1,
+      "originalReceiverArgumentsPromiseResponsePreserved": true
+    },
+    {
+      "version": "baseline",
+      "path": "/backend-api/f/conversation",
+      "extractorAccepted": true,
+      "extractorCode": null,
+      "matched": true,
+      "promptCaptured": true,
+      "providerFetchCalls": 1,
+      "originalReceiverArgumentsPromiseResponsePreserved": true
+    },
+    {
+      "version": "current",
+      "path": "/backend-api/f/steer_turn",
+      "extractorAccepted": true,
+      "extractorCode": null,
+      "matched": true,
+      "promptCaptured": true,
+      "providerFetchCalls": 1,
+      "originalReceiverArgumentsPromiseResponsePreserved": true
+    },
+    {
+      "version": "current",
+      "path": "/backend-api/f/conversation",
+      "extractorAccepted": true,
+      "extractorCode": null,
+      "matched": true,
+      "promptCaptured": true,
+      "providerFetchCalls": 1,
+      "originalReceiverArgumentsPromiseResponsePreserved": true
+    }
+  ],
+  "result": "PASS"
+}

@@ -3,7 +3,7 @@ import { MAX_REQUEST_BYTES, MAX_PROMPT_BYTES, parseWireJSON } from './bounded.mj
 export const EXTRACTION_PROFILE = 'chatgpt-new-user-text/3';
 export const ACK_PROFILE = 'chatgpt-early-ack/1';
 export const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-export const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation'].includes(value);
+export const requestPath = value => ['/backend-api/conversation', '/backend-api/f/conversation', '/backend-api/f/steer_turn'].includes(value);
 
 export function matchChatGPT(url, method) {
   return url.origin === 'https://chatgpt.com' && !url.username && !url.password
