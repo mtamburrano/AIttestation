@@ -49,11 +49,14 @@ No request headers, credentials, history, model context or answer text are saved
 While recording is ON, a supported validated outgoing request is the capture
 event. No click, Enter, visible composer, Send button, focus, attachment indicator
 or DOM timer may gate or veto it. The isolated relay arms the observer with an
-opaque, renewable recording-policy binding, never an engine token. A matched
+opaque recording-policy binding, never an engine token. A matched
 request snapshots that binding at fetch invocation, before asynchronous extraction
 or page-message delivery. Unrelated requests and `/prepare` create no evidence.
-The three-second policy freshness bound is renewed by the existing heartbeat;
-it is not a time window after a human interaction.
+Heartbeat scheduling does not expire capture admission. A delayed renewal still
+allows a bounded snapshot under the original binding; current engine consent,
+permission and source checks authorize its durable delivery. Explicit revocation
+clears the binding and observations. A failed status poll reports unavailable
+status while retaining the original binding for engine validation.
 
 DOM click/Enter listeners are optional diagnostics only. An apparent Send with no
 matched request can report `REQUEST_NOT_OBSERVED` and a recording gap after 1.5
@@ -138,7 +141,8 @@ accepted relay records expire after 6.5 seconds. New-chat authority expires afte
 five seconds. Native deliveries are capped at 32. The page uses a 2.5-second
 local-delivery deadline and at most one IPC retry; the worker deadline is two
 seconds. This retries delivery of an observation, never the provider request.
-Policy polls run each second and expire locally after three seconds.
+Policy polls run each second. The three-second observer readiness indicator is
+advisory and does not expire an otherwise valid request's capture binding.
 
 The durable session indexes stable ChatGPT message IDs from signed history.
 Repeated fetches, tab copies, route changes and reloads with the same identity
@@ -155,15 +159,29 @@ capture authority. An unavailable state cannot hide OFF.
 
 Anchoring starts only after local durability. Temporary service, network,
 rate-limit, quota or credit failure schedules at most two asynchronous retries,
-after five and thirty seconds, within the existing durable three-external-attempt
-budget. A saved transaction is reused for confirmation. Missing configuration or
-credentials and invalid proof results are not automatically retried. Exhausted
-work remains pending for an explicit retry or a later runtime if budget remains.
+after five and thirty seconds, for at most three automatic calls per observation
+per runtime. A saved transaction is reused for confirmation. Missing configuration
+or credentials and invalid proof results are not automatically retried. Exhausted
+batches leave durable pending evidence eligible for an explicit authenticated
+anchor retry or a fresh bounded batch after app restart. The cumulative signed
+attempt journal is never reset. Managed service reservations remain keyed to the
+same account and blinded payload, with at most three broadcasts of the same
+transaction; confirmation of a known transaction does not submit again.
 Timers, queued jobs and two active workers share a 512-job bound. OFF retains
 already-durable anchor work; engine shutdown cancels scheduled timers. No anchor
 job has a provider Send API.
 
 ## Navigation and evidence compatibility
+
+An event admitted by the isolated relay on an existing conversation retains its
+immutable original source across same-document route changes until its bounded
+delivery settles. Retiring a binding cannot admit additional events. The worker
+challenges the same Chrome document for the exact pending event and payload,
+checks the current route, permission and epochs, then supplies the original
+source to the engine. Worker and engine retain at most 512 retired policies for
+12 seconds; relay observations retain their shorter delivery limits. Reload,
+replacement documents, tab/window changes, OFF/ON, permission loss and disconnect
+revoke this continuation. Subsequent requests need the new route's binding.
 
 The first validated request at New Chat may finish across the first same-document
 `/c/<id>` transition. A five-second retained policy is bound to one event and
@@ -248,3 +266,11 @@ distinct equal-text message identities and OFF without DOM input. It records 13
 checks and eight intercepted synthetic requests, with hashes for the observer,
 relay, worker, engine, evidence readers and fixture. It does not establish live
 provider payload compatibility or installed native identity acceptance.
+
+The [request-continuity Chrome result](../../../test/evidence/request-authority-chrome-153/capture-continuity.json)
+adds held request and acknowledgement delivery across an existing conversation's
+same-document navigation, followed by a request on the new route. Its 15 checks
+and ten intercepted requests retain the same synthetic traffic and native-peer
+limitations. Deterministic tests separately cover late and failed policy renewal,
+consent revocation during a document challenge, and anchor recovery after a full
+automatic retry batch and restart with unchanged sponsor accounting.

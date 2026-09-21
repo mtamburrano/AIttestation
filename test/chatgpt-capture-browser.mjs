@@ -281,11 +281,31 @@ try {
   await wait(() => runtime.session.receipts.list().length === 5);
   assert.equal(await evaluate(page, 'providerSends'), 4, 'request-only captures have no button or Enter event');
   report.checks.push('REQUEST_WITHOUT_DOM_CONTROLS_SAVES_AND_STABLE_ID_RETRY_DEDUPLICATES');
+  const routePolicyStart = await evaluate(workerSession, '__policies.length');
+  await evaluate(page, `globalThis.heldTransport=[];globalThis.originalPostMessage=window.postMessage;
+    window.postMessage=function(message,...args){
+      if(message?.channel==='pap-chatgpt-transport/2'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
+      else return Reflect.apply(originalPostMessage,this,[message,...args]);
+    };requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => evaluate(page, `heldTransport.some(message=>message[0].kind==='request')
+    &&document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  await evaluate(page, `history.pushState(null,'','/c/next-conversation')`);
+  await wait(() => evaluate(workerSession, `__policies.slice(${routePolicyStart}).some(value=>value.state==='READY'&&value.url==='https://chatgpt.com/c/next-conversation')`));
+  assert.equal(runtime.session.receipts.list().length, 5);
+  await evaluate(page, `window.postMessage=originalPostMessage;for(const args of heldTransport)Reflect.apply(originalPostMessage,window,args);heldTransport=[]`);
+  await wait(() => runtime.session.receipts.list().length === 6);
+  await wait(() => runtime.session.status().versions[5].acknowledgement?.conversationId === 'synthetic-conversation');
+  assert.equal(runtime.session.status().versions[5].source.destination, 'conversation:synthetic-conversation');
+  await evaluate(page, `requestOnlyPayload.conversation_id='next-conversation';requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 7);
+  assert.equal(runtime.session.status().versions[6].source.destination, 'conversation:next-conversation');
+  report.checks.push('ADMITTED_CONVERSATION_REQUEST_AND_ACK_RETAIN_ORIGINAL_SOURCE_ACROSS_SAME_DOCUMENT_NAVIGATION');
+  report.checks.push('SUBSEQUENT_REQUEST_USES_NEW_CONVERSATION_POLICY');
   await setRecording(false);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status').hidden`));
   await evaluate(page, 'requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()');
   await delay(250);
-  assert.equal(runtime.session.receipts.list().length, 5); assert.equal(interceptedSends, 8);
+  assert.equal(runtime.session.receipts.list().length, 7); assert.equal(interceptedSends, 10);
   report.checks.push('OFF_CUTOFF_ALSO_APPLIES_WITHOUT_DOM_CONTROLS');
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
   report.syntheticSends = interceptedSends;

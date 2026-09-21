@@ -74,7 +74,8 @@ export class ChromeBridgeController {
     }
     if (message.kind === 'PAP_CAPTURE') {
       if (!this.#engine || this.#observations >= 32 || Object.keys(message).sort().join(',') !==
-          (message.newChatContinuation === true ? 'kind,newChatContinuation,observation,requestId' : 'kind,observation,requestId')
+          (message.newChatContinuation === true ? 'kind,newChatContinuation,observation,requestId'
+            : message.requestContinuation === true ? 'kind,observation,requestContinuation,requestId' : 'kind,observation,requestId')
           || !/^[a-f0-9-]{36}$/.test(message.requestId ?? '')) throw Error('Invalid capture delivery');
       const { textBytes, ...observation } = message.observation ?? {};
       if (observation.kind === 'request-observed') {
@@ -83,7 +84,8 @@ export class ChromeBridgeController {
         observation.text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(textBytes, 'base64'));
       } else if (textBytes !== undefined) throw Error('Invalid capture encoding');
       this.#observations++;
-      this.#engine.observe(observation, { newChatContinuation: message.newChatContinuation === true }).then(result => {
+      this.#engine.observe(observation, { newChatContinuation: message.newChatContinuation === true,
+        requestContinuation: message.requestContinuation === true }).then(result => {
         if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId, result });
       }).catch(() => {
         emit(this.#diagnostics, 'CAPTURE_GAP');

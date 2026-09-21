@@ -4,7 +4,7 @@ const CHANNEL = 'pap-chatgpt-transport/2';
 const MAX_TEXT_BYTES = 256 * 1024;
 const observations = new Map(), bindings = new Map();
 let activeBinding = null, advisoryTimer = null;
-let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyChecked = 0, policyUpdate = 0;
+let capturePolicy = null, policyState = null, policySession = null, policyRevision = -1, policyUpdate = 0;
 let stopped = false, feedback;
 let transportSeen = -Infinity, transportAvailable = false, lastReported = null, sendOrder = 0, newChatToken = null;
 let observerState = 'unavailable';
@@ -46,8 +46,10 @@ function render(state = lastReported) {
 }
 function policyCurrent(policy) {
   return !stopped && capturePolicy?.token === policy.token && policy.expectedUrl === location.href
-    && policy.destination === destination() && performance.now() - policyChecked < 3000;
+    && policy.destination === destination();
 }
+const sameDocumentPolicy = (a, b) => a?.profile === CAPTURE_PROFILE && b?.profile === CAPTURE_PROFILE
+  && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch'].every(key => a[key] === b[key]);
 function continuationCurrent(pending) {
   return !stopped && pending.firstNewChat && observations.get(pending.eventId) === pending
     && performance.now() - pending.observedAt < 5000
@@ -55,7 +57,11 @@ function continuationCurrent(pending) {
     && (!pending.continuationUrl || pending.continuationUrl === location.href)
     && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href);
 }
-function pendingCurrent(pending) { return policyCurrent(pending.policy) || continuationCurrent(pending); }
+function pendingCurrent(pending) {
+  return !stopped && observations.get(pending.eventId) === pending && policyState === 'READY'
+    && policySession === pending.policy.browserSessionId
+    && (pending.policy.destination !== 'new-chat' || policyCurrent(pending.policy) || continuationCurrent(pending));
+}
 function reportOutcome(pending, state) {
   pending.feedback = state;
   if (pending.sendOrder === sendOrder) render(state);
@@ -66,17 +72,18 @@ function clearObservations(keep = []) {
 function setCapturePolicy(message) {
   if (message.browserSessionId === policySession && message.revision < policyRevision) return;
   policyUpdate++;
-  policySession = message.browserSessionId; policyRevision = message.revision; policyChecked = performance.now();
+  policySession = message.browserSessionId; policyRevision = message.revision;
   const policy = message.policy;
   const next = policy?.profile === CAPTURE_PROFILE && policy.expectedUrl === location.href
     && policy.destination === destination() ? policy : null;
   const state = message.state;
-  if (capturePolicy?.token !== next?.token || state !== 'READY' && bindings.size) {
-    const continuing = [];
+  if (capturePolicy?.token !== next?.token || state !== 'READY' && (bindings.size || observations.size)) {
+    // Preserve only events already admitted by this isolated document. Retired
+    // bindings cannot admit another conversation's subsequent requests.
+    const continuing = [...observations.values()].filter(pending => pending.policy.destination !== 'new-chat'
+      && state === 'READY' && sameDocumentPolicy(policy, pending.policy));
     for (const [id, binding] of bindings) {
-      const sameSource = state === 'READY' && policy?.profile === CAPTURE_PROFILE
-        && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch']
-          .every(key => policy[key] === binding.policy[key]);
+      const sameSource = state === 'READY' && sameDocumentPolicy(policy, binding.policy);
       const firstRoute = binding.policy.destination === 'new-chat' && sameSource
         && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href)
         && (!binding.continuationUrl || binding.continuationUrl === location.href)
@@ -88,7 +95,7 @@ function setCapturePolicy(message) {
         pending.continuationUrl = binding.continuationUrl; continuing.push(pending);
       }
     }
-    const latest = continuing.find(value => value.sendOrder === sendOrder);
+    const latest = continuing.find(value => value.sendOrder === sendOrder && (!value.saved || value.firstNewChat));
     const hadRequest = [...observations.values()].some(value => value.sendOrder === sendOrder && value.request && !value.saved);
     clearObservations(continuing);
     capturePolicy = next; activeBinding = null; policyState = state;
@@ -113,8 +120,10 @@ async function refreshCapturePolicy() {
     setCapturePolicy(status); render();
   } catch {
     if (update !== policyUpdate || stopped) return;
-    capturePolicy = null; activeBinding = null; bindings.clear(); transportControl('clear');
-    policyState = 'RECORDING_UNAVAILABLE'; clearObservations(); render(policyState);
+    // A missed poll is not consent revocation. Keep bounded observations under
+    // their original binding; authenticated policy updates and the engine's
+    // ordered cutoff still reject OFF, replaced documents and lost permission.
+    render('RECORDING_UNAVAILABLE');
   } finally { clearTimeout(timer); if (!stopped) setTimeout(refreshCapturePolicy, 1000); }
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -128,6 +137,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const pending = observations.get(message.eventId);
     respond({ nonce: message.nonce, url: location.href, confirmed: Boolean(pending?.firstNewChat && pending.request
       && performance.now() - pending.observedAt < 5000 && pendingCurrent(pending)
+      && pending.policy.token === message.token && (message.acknowledgement
+        ? pending.saved && JSON.stringify(pending.acknowledgement) === JSON.stringify(message.acknowledgement)
+        : pending.text === message.text && pending.inputMethod === message.inputMethod
+          && JSON.stringify(pending.request) === JSON.stringify(message.request))) }); return;
+  }
+  if (message.kind === 'PAP_CONFIRM_REQUEST') {
+    const pending = observations.get(message.eventId);
+    respond({ nonce: message.nonce, url: location.href, confirmed: Boolean(pending?.request
+      && pending.policy.destination !== 'new-chat' && pendingCurrent(pending)
       && pending.policy.token === message.token && (message.acknowledgement
         ? pending.saved && JSON.stringify(pending.acknowledgement) === JSON.stringify(message.acknowledgement)
         : pending.text === message.text && pending.inputMethod === message.inputMethod
@@ -206,7 +224,7 @@ addEventListener('message', event => {
       firstNewChat: binding.policy.destination === 'new-chat' && newChatToken !== binding.policy.token,
       continuationUrl: binding.continuationUrl };
     observations.set(message.id, pending);
-    if (!pendingCurrent(pending) || observations.size > 16) {
+    if (!(policyCurrent(pending.policy) || continuationCurrent(pending)) || observations.size > 16) {
       observations.delete(message.id); reportDiagnostic('REQUEST_MESSAGE_REJECTED'); render('GAP'); return;
     }
     binding.sequence = message.sequence; clearTimeout(advisoryTimer);

@@ -240,7 +240,7 @@ test('a page consuming the original body in its first promise handler still perm
   await tick(); assert.equal(f.events.filter(value => value.kind === 'ack').length, 1);
 });
 
-test('slow bodies retain invocation sequence without holding later requests; stale recording policies stop capture', async t => {
+test('slow bodies retain invocation sequence without holding later requests; late renewal retains the original binding', async t => {
   const f = fixture(t); let controller;
   const request = new Request(url, { method: 'POST', duplex: 'half', body: new ReadableStream({ start(c) { controller = c; } }) });
   await f.target.fetch(request);
@@ -252,8 +252,13 @@ test('slow bodies retain invocation sequence without holding later requests; sta
   let time = 0;
   const events = [], target = { location: new URL(url), fetch: () => Promise.resolve(new Response('provider')) };
   const observer = installFetchObserver(target, { emit: value => events.push(value), now: () => time }); t.after(() => observer.stop());
-  observer.arm(randomUUID(), 'conversation-1'); time = 3001;
-  await target.fetch(url, { method: 'POST', body: body() }); await tick(); assert.equal(events.length, 0);
+  const binding = randomUUID(); observer.arm(binding, 'conversation-1'); time = 4000;
+  await target.fetch(url, { method: 'POST', body: body() }); await tick();
+  assert.equal(events.filter(value => value.kind === 'request').length, 1);
+  assert.equal(events.find(value => value.kind === 'matched').binding, binding);
+  observer.clear(); time += 4000;
+  await target.fetch(url, { method: 'POST', body: body() }); await tick();
+  assert.equal(events.filter(value => value.kind === 'request').length, 1);
 });
 
 test('retries and subsequent distinct identities reach durable validation without consuming recording policy', async t => {

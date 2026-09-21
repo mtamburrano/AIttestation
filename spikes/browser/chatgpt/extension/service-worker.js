@@ -22,6 +22,9 @@ const documents = new Map();
 const documentRoutes = new Map();
 const routeChecks = new Map();
 const newChats = new Map();
+const retiredPolicies = new Map();
+const sameDocumentPolicy = (a, b) => a && b
+  && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch'].every(key => a[key] === b[key]);
 const conversationURL = url => typeof url === 'string' && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(url);
 const supportedURL = url => url === 'https://chatgpt.com/' || conversationURL(url);
 const exactKeys = (value, keys) => value && Object.keys(value).sort().join(',') === keys.sort().join(',');
@@ -128,6 +131,7 @@ function retire(context) {
   for (const pending of context.captures.values()) pending.resolve({ state: 'RECORDING_UNAVAILABLE' });
   context.captures.clear(); broadcastCapturePolicy(context, true);
   newChats.clear();
+  retiredPolicies.clear();
   documentRoutes.clear();
   for (const pending of context.panels.values()) pending({ error: 'PANEL_DISCONNECTED' });
   context.panels.clear();
@@ -185,8 +189,21 @@ function connect() {
     if (context.ready && message?.kind === 'PAP_CAPTURE_POLICY') {
       if (message.profile !== CAPTURE_PROFILE || !Array.isArray(message.policies) || message.policies.length > 32
           || !Array.isArray(message.states) || message.states.length > 32) return retire(context);
+      const previous = context.policies;
       context.policies = new Map(message.policies.map(policy => [policy.tabId, policy]));
       context.states = new Map(message.states.map(value => [value.tabId, value.state]));
+      for (const [token, entry] of retiredPolicies) {
+        const next = context.policies.get(entry.policy.tabId);
+        if (entry.expires <= performance.now() || context.states.get(entry.policy.tabId) !== 'READY'
+            || !sameDocumentPolicy(entry.policy, next) || documents.get(entry.policy.tabId) !== entry.documentId) retiredPolicies.delete(token);
+      }
+      for (const [id, policy] of previous) {
+        const next = context.policies.get(id), documentId = documents.get(id);
+        if (policy.token !== next?.token && policy.destination !== 'new-chat' && documentId
+            && context.states.get(id) === 'READY' && sameDocumentPolicy(policy, next) && retiredPolicies.size < 512) {
+          retiredPolicies.set(policy.token, { policy, documentId, expires: performance.now() + 12000 });
+        }
+      }
       for (const [id, pending] of newChats) {
         if (context.states.get(id) !== 'READY' || pending.expires <= performance.now()
             || !pending.url && context.policies.get(id)?.token !== pending.policy.token) newChats.delete(id);
@@ -384,7 +401,7 @@ async function panelMessage(message, sender, channel) {
 }
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-chrome.permissions.onRemoved.addListener(() => { newChats.clear(); documentRoutes.clear(); publishState(); });
+chrome.permissions.onRemoved.addListener(() => { newChats.clear(); retiredPolicies.clear(); documentRoutes.clear(); publishState(); });
 chrome.tabs.onActivated.addListener(() => publishState());
 chrome.tabs.onCreated.addListener(() => publishState());
 chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); documents.delete(id); newChats.delete(id); documentRoutes.delete(id); publishState(); });
@@ -512,9 +529,10 @@ async function captureMessage(message, sender) {
   }
   const kind = message.observationKind;
   const continuing = candidate?.policy.token === message.token;
-  const policy = continuing ? candidate.policy : context.policies.get(tab.id);
+  const retired = !continuing && retiredPolicies.get(message.token);
+  const policy = continuing ? candidate.policy : retired ? retired.policy : context.policies.get(tab.id);
   if (!policy || policy.token !== message.token || policy.tabEpoch !== epoch || policy.windowId !== tab.windowId
-      || !continuing && (!senderURLMatches || policy.expectedUrl !== tab.url)
+      || !continuing && (!senderURLMatches || !retired && policy.expectedUrl !== tab.url)
       || policy.runtimeEpoch !== context.epoch
       || policy.browserSessionId !== browserSessionId || documents.get(tab.id) !== sender.documentId
       || context.captures.size >= 32 || !['request-observed', 'acknowledgement'].includes(kind)
@@ -525,8 +543,28 @@ async function captureMessage(message, sender) {
         || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > 256 * 1024
         || message.inputMethod !== 'provider-request' || !validRequest(message.request))
       || kind === 'acknowledgement' && !validAcknowledgement(message.acknowledgement)) return { state: 'RECORDING_UNAVAILABLE' };
-  if (kind === 'acknowledgement' && conversationURL(tab.url)
-      && message.acknowledgement.conversationId !== new URL(tab.url).pathname.split('/')[2]) return { state: 'RECORDING_UNAVAILABLE' };
+  const acknowledgementURL = retired ? policy.expectedUrl : tab.url;
+  if (kind === 'acknowledgement' && conversationURL(acknowledgementURL)
+      && message.acknowledgement.conversationId !== new URL(acknowledgementURL).pathname.split('/')[2]) return { state: 'RECORDING_UNAVAILABLE' };
+  if (retired) {
+    const valid = () => retiredPolicies.get(message.token) === retired && retired.expires > performance.now()
+      && retired.documentId === sender.documentId && context.states.get(tab.id) === 'READY'
+      && sameDocumentPolicy(policy, context.policies.get(tab.id));
+    if (!valid()) return { state: 'RECORDING_UNAVAILABLE' };
+    // Old policy alone is insufficient: challenge the exact isolated document
+    // for this already-admitted event and its immutable original payload.
+    const nonce = crypto.randomUUID();
+    const proof = await bounded(chrome.tabs.sendMessage(tab.id, { kind: 'PAP_CONFIRM_REQUEST', pageContract: PAGE_CONTRACT,
+      nonce, token: message.token, eventId: message.eventId,
+      ...(kind === 'request-observed' ? { text: message.text, inputMethod: message.inputMethod, request: message.request }
+        : { acknowledgement: message.acknowledgement }) }, { documentId: sender.documentId, frameId: 0 }));
+    const [liveTabs, livePermission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
+    const live = liveTabs.find(value => value.id === tab.id);
+    if (!current(context) || !valid() || epoch !== tabEpochs.get(tab.id) || documents.get(tab.id) !== sender.documentId
+        || livePermission !== 'granted' || liveTabs.length > 32 || !live || live.incognito || live.windowId !== tab.windowId
+        || live.url !== context.policies.get(tab.id)?.expectedUrl
+        || proof?.nonce !== nonce || proof.confirmed !== true || proof.url !== live.url) return { state: 'RECORDING_UNAVAILABLE' };
+  }
   if (continuing) {
     if (candidate !== newChats.get(tab.id) || candidate.documentId !== sender.documentId
         || candidate.expires <= performance.now() || candidate.eventId && candidate.eventId !== message.eventId
@@ -560,7 +598,8 @@ async function captureMessage(message, sender) {
     ...(kind === 'request-observed' ? { textBytes: btoa(Array.from(new TextEncoder().encode(message.text), byte => String.fromCharCode(byte)).join('')),
       inputMethod: message.inputMethod, request: message.request } : { acknowledgement: message.acknowledgement }) };
   try {
-    post(context, { kind: 'PAP_CAPTURE', requestId, observation, ...(continuing ? { newChatContinuation: true } : {}) });
+    post(context, { kind: 'PAP_CAPTURE', requestId, observation, ...(continuing ? { newChatContinuation: true }
+      : retired ? { requestContinuation: true } : {}) });
     return await bounded(result);
   } finally { context.captures.delete(requestId); }
 }

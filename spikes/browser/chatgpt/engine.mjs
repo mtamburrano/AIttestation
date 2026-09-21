@@ -18,6 +18,7 @@ export class ResidentEngine {
   #listeners = new Set(); #unsubscribe; #closed = false; #failed = false;
   #captureTokens = new Map(); #anchorQueue = []; #anchoring = new Set();
   #newChatTokens = new Map();
+  #retiredTokens = new Map();
   #anchorRetries = new Map();
   #anchorCursor = 0; #durableVersions = 0;
 
@@ -68,6 +69,10 @@ export class ResidentEngine {
   capturePolicy() {
     const sources = this.#adapter.scopes().filter(source => !this.#closed && !this.#failed && this.#state.recording
       && this.#adapter.observationEligible(source.scope));
+    for (const [scope, entry] of this.#retiredTokens) {
+      if (this.#closed || this.#failed || !this.#state.recording || performance.now() >= entry.expires
+          || !this.#adapter.requestContinuation(entry.source)) this.#retiredTokens.delete(scope);
+    }
     for (const [scope, entry] of this.#newChatTokens) {
       if (this.#closed || this.#failed || !this.#state.recording || performance.now() >= entry.expires
           || !this.#adapter.newChatContinuation(entry.source)) this.#newChatTokens.delete(scope);
@@ -75,6 +80,9 @@ export class ResidentEngine {
     for (const [scope, entry] of this.#captureTokens) if (!sources.some(source => source.scope === scope)) {
       if (!this.#closed && !this.#failed && this.#state.recording && this.#adapter.newChatContinuation(entry.source)) {
         this.#newChatTokens.set(scope, { ...entry, expires: performance.now() + 5000 });
+      } else if (!this.#closed && !this.#failed && this.#state.recording && entry.source.destination !== 'new-chat'
+          && this.#adapter.requestContinuation(entry.source) && this.#retiredTokens.size < 512) {
+        this.#retiredTokens.set(scope, { ...entry, expires: performance.now() + 12000 });
       }
       this.#captureTokens.delete(scope);
     }
@@ -91,15 +99,19 @@ export class ResidentEngine {
       state: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
         || !this.#adapter.offersCapture(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
   }
-  observe(input, { newChatContinuation = false } = {}) {
+  observe(input, { newChatContinuation = false, requestContinuation = false } = {}) {
     let observation;
     try { observation = validateCapture(input); } catch (error) { return Promise.reject(error); }
     return this.#serial(async () => {
       const { eventId, source } = observation;
       this.capturePolicy();
       const active = this.#captureTokens.get(source.scope);
-      const entry = active ?? (newChatContinuation ? this.#newChatTokens.get(source.scope) : null);
+      const entry = active ?? (newChatContinuation ? this.#newChatTokens.get(source.scope)
+        : requestContinuation ? this.#retiredTokens.get(source.scope) : null);
       if (!entry || entry.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
+      if (requestContinuation && (newChatContinuation || entry.source.destination === 'new-chat'
+          || ['scope', 'runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch', 'destination']
+            .some(key => source[key] !== entry.source[key]))) reject('CAPTURE_NOT_ENABLED');
       if (newChatContinuation) {
         // The authenticated worker confirms the original document's pending
         // snapshot. Retired authority is usable for this one request only.
@@ -113,7 +125,8 @@ export class ResidentEngine {
         entry.eventId = eventId; entry.documentId = source.documentId;
       }
       if (active) this.#adapter.assertObservationSource(source);
-      else if (!this.#adapter.newChatContinuation(entry.source)) reject('CAPTURE_NOT_ENABLED');
+      else if (!(requestContinuation ? this.#adapter.requestContinuation(entry.source)
+        : this.#adapter.newChatContinuation(entry.source))) reject('CAPTURE_NOT_ENABLED');
       if (source.destination === 'new-chat' && observation.kind === 'request-observed' && !entry.eventId) {
         entry.eventId = eventId; entry.documentId = source.documentId;
       }
@@ -140,17 +153,19 @@ export class ResidentEngine {
   #pumpAnchors() {
     if (this.#closed) return;
     const versions = this.#session.status().versions;
+    // A runtime gets one bounded batch per pending observation, regardless of
+    // earlier outages. Cumulative attempts never permanently abandon evidence.
     // Walk insertion-ordered durable history once per runtime. Overflow waits
     // in the vault. Retries share the same bounded queue and workers. The
     // committed boundary excludes a capture whose metadata is still saving.
     while (this.#anchorCursor < this.#durableVersions && this.#anchorQueue.length + this.#anchoring.size + this.#anchorRetries.size < 512) {
       const version = versions[this.#anchorCursor++];
-      if (!version.legacy && version.anchor === 'PENDING' && version.anchorAttempts < 3) this.#anchorQueue.push({ id: version.id, retry: 0 });
+      if (!version.legacy && version.anchor === 'PENDING') this.#anchorQueue.push({ id: version.id, retry: 0 });
     }
     while (!this.#closed && this.#anchoring.size < 2 && this.#anchorQueue.length) {
       const { id, retry } = this.#anchorQueue.shift();
       const version = this.#session.status().versions.find(value => value.id === id);
-      if (!version || version.anchor !== 'PENDING' || version.anchorAttempts >= 3) continue;
+      if (!version || version.anchor !== 'PENDING') continue;
       this.#anchoring.add(id);
       if (retry) emit(this.#diagnostics, 'ANCHOR_RETRY_STARTED', { operationId: id });
       const work = this.#session.anchorManaged({ id }).then(result => {
@@ -168,9 +183,9 @@ export class ResidentEngine {
   }
   #retryAnchor(id, retry) {
     const version = this.#session.status().versions.find(value => value.id === id);
-    if (this.#closed || retry >= 2 || !version || version.anchor !== 'PENDING' || version.anchorAttempts >= 3) return;
+    if (this.#closed || retry >= 2 || !version || version.anchor !== 'PENDING') return;
     // This job can only invoke Algorand sponsorship/confirmation. The saved
-    // transaction and durable submission budget remain owned by the session.
+    // transaction and cumulative attempt journal remain owned by the session.
     const timer = setTimeout(() => {
       this.#anchorRetries.delete(id);
       if (this.#closed) return;
@@ -201,7 +216,7 @@ export class ResidentEngine {
       }
       if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
       if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
-      if (this.#state.recording !== command.enabled) { this.#captureTokens.clear(); this.#newChatTokens.clear(); }
+      if (this.#state.recording !== command.enabled) { this.#captureTokens.clear(); this.#newChatTokens.clear(); this.#retiredTokens.clear(); }
       this.#state.recording = command.enabled;
       // Publish revocation immediately; acknowledge the setting only after fsync.
       this.#publish();

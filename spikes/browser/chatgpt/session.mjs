@@ -105,7 +105,7 @@ export class ChatGPTRecordingSession {
       if (value.kind === 'managed-submission' && TRANSACTION_PATTERN.test(value.transactionId ?? '')) {
         version.managed = { state: 'SUBMITTED_OR_UNKNOWN', transactionId: value.transactionId };
       }
-      if (value.kind === 'anchor-attempt' && Number.isSafeInteger(value.number) && value.number >= 1 && value.number <= 3) {
+      if (value.kind === 'anchor-attempt' && Number.isSafeInteger(value.number) && value.number >= 1) {
         version.anchorAttempts = Math.max(version.anchorAttempts, value.number);
       }
       if (value.kind === 'fast-confirmation' && value.report?.anchor === 'SOURCE_CORROBORATED'
@@ -199,7 +199,7 @@ export class ChatGPTRecordingSession {
     return this.#serial(async () => {
       const started = performance.now(), version = this.#version(id);
       if (this.#closed || version.legacy || version.anchor !== 'PENDING') throw Error('Anchor work unavailable');
-      if (version.anchorAttempts >= 3) throw Error('ANCHOR_RETRY_LIMIT');
+      if (version.anchorAttempts >= Number.MAX_SAFE_INTEGER) throw Error('ANCHOR_RETRY_LIMIT');
       let attempted = false;
       const beforeSubmit = () => {
         if (attempted) return;
@@ -240,9 +240,9 @@ export class ChatGPTRecordingSession {
         transactionId = version.managed.transactionId;
       }
       if (!TRANSACTION_PATTERN.test(transactionId ?? '')) throw Error('Algorand transaction ID required');
-      // Confirmation of a saved transaction needs no account. A combined
-      // submission/confirmation consumes one attempt; confirmation alone also
-      // commits its budget before external work.
+      // This cumulative journal is an audit, not a lifetime abandonment limit.
+      // The engine bounds each automatic batch. Managed reservations/spend stay
+      // keyed to the same payload; a known transaction only needs reconciliation.
       beforeSubmit();
       const confirmationId = randomUUID(), confirmationStarted = performance.now();
       const confirmationRefs = { operationId: id, confirmationId };

@@ -33,32 +33,33 @@ const command = (engine, enabled, changes = {}) => ({ profile: ENGINE_COMMAND_PR
 const legacy = preferences => ({ profile: 'pap-resident-state/1', state: { revision: 4, operations: [], preferences } });
 const global = { paused: false, defaultMode: 'Continuous', conversations: {} };
 
-for (const [failure, recover] of [
+for (const [failure, recover, resume] of [
   ...['SERVICE_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'UNPAID', 'RATE_LIMITED', 'PENDING_FAST_CONFIRMATION'].map(code => [code, true]),
-  ['SERVICE_UNAVAILABLE', false], ['PENDING_FAST_CONFIRMATION', false],
+  ...['SERVICE_UNAVAILABLE', 'PENDING_FAST_CONFIRMATION'].flatMap(code => ['explicit', 'restart'].map(resume => [code, false, resume])),
 ]) {
-  test(`asynchronous ${failure} retry uses only the durable anchor while OFF (recover=${recover})`, async t => {
+  test(`asynchronous ${failure} retry uses only the durable anchor while OFF (recover=${recover}, resume=${resume})`, async t => {
     const directory = await root(t), diagnostics = new LocalDiagnostics();
     const vault = new Vault(join(directory, 'vault'), randomBytes(32), undefined, { create: true });
     t.after(() => vault.close());
     const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
-    let submissions = 0, confirmations = 0;
-    const payloads = [], session = await new ChatGPTRecordingSession(directory, adapter, {
+    let submissions = 0, confirmations = 0, serviceRecovered = false;
+    const payloads = [], options = {
       vault, diagnostics, fastTrust: { profile: FAST_CONFIRM_PROFILE },
       managed: { submit: async (payload, { beforeSubmit }) => {
         // Text and the signed descriptor already exist before any anchor I/O.
         assert.equal(session.receipts.list().length, 1);
         payloads.push(payload); beforeSubmit(); submissions++;
-        if (failure !== 'PENDING_FAST_CONFIRMATION' && (!recover || submissions === 1)) throw Object.assign(Error('synthetic'), { code: failure });
+        if (!serviceRecovered && failure !== 'PENDING_FAST_CONFIRMATION' && (!recover || submissions === 1)) throw Object.assign(Error('synthetic'), { code: failure });
         return { transactionId: 'A'.repeat(52) };
       } },
       collectFast: async () => {
         confirmations++;
-        if (failure === 'PENDING_FAST_CONFIRMATION' && (!recover || confirmations === 1)) throw Object.assign(Error('synthetic'), { code: failure });
+        if (!serviceRecovered && failure === 'PENDING_FAST_CONFIRMATION' && (!recover || confirmations === 1)) throw Object.assign(Error('synthetic'), { code: failure });
         return {};
       },
       verifyFast: () => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED', assurance: FAST_CONFIRM_PROFILE, round: 42 }),
-    }).init();
+    };
+    const session = await new ChatGPTRecordingSession(directory, adapter, options).init();
     t.after(() => session.close());
     const source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT, scope: randomUUID(),
       runtimeEpoch: 'synthetic-runtime', browserSessionId: 'synthetic-browser', tabId: 17, windowId: 1,
@@ -85,6 +86,21 @@ for (const [failure, recover] of [
     t.mock.timers.tick(100000); await engine.drain();
     assert.equal(session.status().versions[0].anchorAttempts, recover ? 2 : 3);
     engine.stop();
+    if (!recover) {
+      serviceRecovered = true;
+      let resumed = session;
+      if (resume === 'restart') {
+        session.close(); resumed = await new ChatGPTRecordingSession(directory, adapter, options).init();
+        t.after(() => resumed.close());
+        assert.equal(resumed.status().versions[0].anchorAttempts, 3);
+        const restarted = await new ResidentEngine(directory, resumed, adapter, randomUUID()).init();
+        t.after(() => restarted.stop()); await restarted.drain();
+      } else await resumed.anchorManaged({ id: saved.id });
+      assert.equal(resumed.status().versions[0].anchor, 'SOURCE_CORROBORATED');
+      assert.equal(resumed.status().versions[0].anchorAttempts, 4);
+      assert.equal(submissions, failure === 'PENDING_FAST_CONFIRMATION' ? 1 : 4);
+      assert.equal(new Set(payloads).size, 1); assert.equal(resumed.receipts.list().length, 1);
+    }
   });
 }
 
@@ -344,7 +360,7 @@ test('the resident lock prevents two recorders loading one directory', async t =
   lockResidentEngine(directory)();
 });
 
-test('anchor retries retain their transaction and durable attempt budget across restart', async t => {
+test('anchor retries retain their transaction and cumulative attempt journal across restart', async t => {
   let submissions = 0;
   const f = await fixture(t, { managed: { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
     beforeSubmit(); submissions++; return { transactionId: 'A'.repeat(52) };
@@ -355,7 +371,8 @@ test('anchor retries retain their transaction and durable attempt budget across 
   assert.equal(submissions, 1);
   await f.restart(); await f.runtime.engine.drain();
   assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 3);
-  await assert.rejects(f.runtime.session.anchorManaged({ id }), /ANCHOR_RETRY_LIMIT/);
+  await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 4);
   assert.equal(submissions, 1); assert.equal(f.runtime.session.receipts.list().length, 1);
 });
 
@@ -388,8 +405,9 @@ for (const retry of ['explicit', 'reopen']) test(`disconnected account preserves
   await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
   await f.restart(); await f.runtime.engine.drain();
   assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 3);
-  await assert.rejects(f.runtime.session.anchorManaged({ id }), /ANCHOR_RETRY_LIMIT/);
-  assert.equal(requests, 2); assert.equal(submissions, 1); assert.equal(f.confirmed, 3);
+  await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 4);
+  assert.equal(requests, 2); assert.equal(submissions, 1); assert.equal(f.confirmed, 4);
   assert.equal(f.runtime.session.anchorRequest(id).payload, payload);
   assert.equal(f.runtime.session.status().versions[0].managed.transactionId, 'A'.repeat(52));
   assert.equal(f.runtime.session.receipts.list().length, 1);
@@ -457,11 +475,11 @@ for (const failure of ['ACCOUNT_REQUIRED', 'SERVICE_UNAVAILABLE']) test(`externa
   assert.equal(f.runtime.session.status().versions[0].managed.transactionId, 'B'.repeat(52));
   client.disconnect(); await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
   await f.restart(); await f.runtime.engine.drain();
-  await assert.rejects(f.runtime.session.anchorManaged({ id }), /ANCHOR_RETRY_LIMIT/);
+  await assert.rejects(f.runtime.session.anchorManaged({ id }), /SYNTHETIC_TIMEOUT/);
   assert.deepEqual(payloads, [f.runtime.session.anchorRequest(id).payload, f.runtime.session.anchorRequest(id).payload]);
-  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 3);
+  assert.equal(f.runtime.session.status().versions[0].anchorAttempts, 5);
   assert.equal(f.runtime.session.status().versions[0].managed.transactionId, 'B'.repeat(52));
-  assert.equal(f.confirmed, 2); assert.equal(f.runtime.session.receipts.list().length, 1);
+  assert.equal(f.confirmed, 4); assert.equal(f.runtime.session.receipts.list().length, 1);
   assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
 });
 

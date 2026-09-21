@@ -1,0 +1,48 @@
+{
+  "evidence": "REAL_CHROME_WITH_SYNTHETIC_PAGE_AND_NATIVE_PEER",
+  "checks": [
+    "LATE_FORWARDING_WRAPPER_READY_WITH_EMPTY_COMPOSER_AFTER_FULL_RELOAD_WITHOUT_SEND",
+    "EMPTY_TYPE_CLEAR_WITHOUT_SEND_BUTTON_STAYS_ARMED",
+    "IDLE_HEARTBEATS_AND_INSPECTIONS_VALIDATE_EACH_FETCH_IDENTITY_ONCE",
+    "GENUINE_OBSERVER_BYPASS_UNAVAILABLE_AND_FORWARDING_WRAPPER_RECOVERS_WITHOUT_SEND",
+    "FIRST_GENUINE_SEND_DURABLE_ONCE_AFTER_REAL_SAME_DOCUMENT_NAVIGATION_WITH_HELD_BROWSER_CHECK",
+    "LATER_EQUAL_TEXT_SEND_HAS_DISTINCT_RECEIPT_ON_CURRENT_CONVERSATION",
+    "EARLY_HANDOFF_BINDS_TO_BOTH_DURABLE_EVENTS",
+    "FIRST_SEND_ROUTE_POLICY_PRECEDES_MAIN_TO_ISOLATED_REQUEST_DELIVERY",
+    "CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD",
+    "PAGE_WRAPPER_REFERENCE_UNCHANGED_ACROSS_HEARTBEATS_AND_SPA_NAVIGATION",
+    "OFF_CONTINUES_PROVIDER_ACTION_WITHOUT_NEW_CAPTURE",
+    "REQUEST_WITHOUT_DOM_CONTROLS_SAVES_AND_STABLE_ID_RETRY_DEDUPLICATES",
+    "ADMITTED_CONVERSATION_REQUEST_AND_ACK_RETAIN_ORIGINAL_SOURCE_ACROSS_SAME_DOCUMENT_NAVIGATION",
+    "SUBSEQUENT_REQUEST_USES_NEW_CONVERSATION_POLICY",
+    "OFF_CUTOFF_ALSO_APPLIES_WITHOUT_DOM_CONTROLS"
+  ],
+  "workerSHA256": "86aa9db99bad8bbab46da8389cccc1c1df1bc652b1f463af62d2e55fc013c865",
+  "observerSHA256": "b497232c96fe54c93731ba338975e7d68293a1d81cccc8923b15fdd34491570c",
+  "contentSHA256": "35e2c6ab7fb837a2e257ce103a395490fccfc1a03fcfdfa2cf757337c3133e6a",
+  "browser": "Chrome/153.0.8010.48",
+  "healthWrapperEffects": {
+    "forwarding": 1,
+    "bypass": 1
+  },
+  "totalWrapperEffects": 11,
+  "syntheticSends": 10,
+  "result": "PASS",
+  "liveProviderCoverage": "UNVERIFIED",
+  "nativeIdentityCoverage": "SYNTHETIC_PEER",
+  "resourceIsolation": "Fresh temporary Chrome profile, encrypted vault, memory keys, intercepted page traffic and blocked external DNS",
+  "node": "22.23.1",
+  "additionalSourceSHA256": {
+    "test/chatgpt-capture-browser.mjs": "e3315718d3b7b4176fb3f74e0861a747fc96ca777c54d680e4220ba75fd9d263",
+    "test/chatgpt-request-authority.test.mjs": "dd055e4544380e5a9257fb9aa90053b6e3c9b05ecc5dffe7c3cd0858864dcb5d",
+    "test/chatgpt-anchor-recovery.test.mjs": "4674c9f6c6505088bd8b2ad20d28c06323800bcbbd52fc03fdc52bb461532d04",
+    "spikes/browser/chatgpt/adapter.mjs": "363ab272d4d3d7b494c5f699d4adcc20ed6ce864c5ed168bb471d3669a92d7aa",
+    "spikes/browser/chatgpt/bridge.mjs": "f4b24cdfb1cc58aa5be6b13ba14e99261aa5b07d0cbacc7dd1cbc0fcb29487b2",
+    "spikes/browser/chatgpt/engine.mjs": "f1f8f2c62186e999323f2d6a9bdfd87252439b18e8e988839cb9dac057105ee2",
+    "spikes/browser/chatgpt/session.mjs": "f920aee67367f948a0703720d26d89402a7f1cfc9a15faa4c09bb0f516c65517",
+    "spikes/managed/client.mjs": "8267fb743e724896ea63700e64155799d50835a2750f3e3b44c7dbec3cf9625a",
+    "spikes/managed/service.mjs": "58218543de4d2084c01826f2710ba28ecd6ef4b21c766aeb2657d76b0376f9b2",
+    "spikes/recipient/normal-observation.mjs": "7eef5c93c665c8f8ffd456f70d2f447900e26b3d9e8d663ed74c462cec662b9b",
+    "spikes/recipient/qualified-observation.mjs": "8e0a256c384e3c05aede36da005df20d3eba30b756d76949b10d141184f79ab5"
+  }
+}

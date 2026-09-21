@@ -7,7 +7,6 @@ const MAX_PROMPT_BYTES = 256 * 1024;
 const REQUEST_TIMEOUT_MS = 750;
 const ACK_BYTES = 64 * 1024;
 const ACK_TIMEOUT_MS = 2000;
-const POLICY_MS = 3000;
 
 // Duplicate JSON keys and deeply nested extensions have no unambiguous profile.
 function parseWireJSON(text) {
@@ -225,7 +224,7 @@ async function observeAcknowledgement(response, request, signal, alreadyCloned =
     } });
 }
 
-function installFetchObserver(target, { emit, now = () => performance.now(), baseURL = () => target.location.href } = {}) {
+function installFetchObserver(target, { emit, baseURL = () => target.location.href } = {}) {
   const original = target.fetch;
   const active = new Set(); let policy = null, sequence = 0, stopped = false;
   const probeController = new AbortController(); probeController.abort();
@@ -263,7 +262,9 @@ function installFetchObserver(target, { emit, now = () => performance.now(), bas
     }
     let candidate, snapshot, controller, deadline;
     try {
-      const binding = !stopped && policy && policy.expires > now() && policy.url === baseURL() ? policy : null;
+      // Scheduling a heartbeat late must not lose an otherwise valid request.
+      // Snapshot under the original binding; the engine still checks live consent.
+      const binding = !stopped && policy && policy.url === baseURL() ? policy : null;
       if (binding) {
         controller = new AbortController(); active.add(controller);
         deadline = setTimeout(() => { controller.abort(); active.delete(controller); }, 4000);
@@ -319,7 +320,7 @@ function installFetchObserver(target, { emit, now = () => performance.now(), bas
   return {
     state,
     available: () => ['ready', 'wrapped'].includes(state()),
-    arm(id, conversationId) { if (!stopped) policy = { id, conversationId, url: baseURL(), expires: now() + POLICY_MS }; },
+    arm(id, conversationId) { if (!stopped) policy = { id, conversationId, url: baseURL() }; },
     clear() { policy = null; for (const controller of active) controller.abort(); active.clear(); },
     stop() { stopped = true; this.clear(); if (target.fetch === fetchObserved) target.fetch = original; },
   };

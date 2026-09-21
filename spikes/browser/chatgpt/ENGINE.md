@@ -39,8 +39,12 @@ Capture and preference changes share one serial queue. A capture must match the
 current runtime, browser session, tab/window/document, destination and policy
 token when it reaches that queue. OFF clears all current tokens and publishes
 revocation before acknowledging its durable preference write. Later ON generates
-new tokens. A stale delivery cannot revive across OFF/ON, navigation, disconnect
-or restart.
+new tokens. A stale delivery cannot revive across OFF/ON, replacement documents,
+disconnect or restart. Already-admitted events may settle across same-document
+navigation with their original source: the worker must challenge the exact
+isolated document's pending event, and the engine checks the retired token against
+the current tab/window/epoch and consent. Retired authority is bounded and grants
+no new admission on the old route.
 
 A save acknowledgement follows the encrypted signed text and observation writes
 and durable engine metadata. Storage uncertainty fails closed and reports a gap.
@@ -54,17 +58,22 @@ time. A full anchor queue leaves new durable evidence saved with PENDING anchori
 it does not reject capture. An insertion-order cursor fills freed slots from
 durable history, considering each observation once per runtime. Metadata still
 being saved is excluded. Temporary service/quota/credit or confirmation timeout failures schedule at most
-two retries, after five and thirty seconds. The saved anchor identity and durable
-attempt budget apply to every retry. Restart resumes eligible pending history;
+two retries, after five and thirty seconds. The saved anchor identity and cumulative
+attempt journal apply to every retry. Restart resumes pending history in a fresh
+bounded batch, including observations whose earlier batch exhausted its retries;
 invalid proof results, missing configuration and missing credentials do not
 automatically retry. No job can replay a provider request.
 
-Each observation has at most three persisted external submission/confirmation
-attempts across restarts. Missing local configuration or account credentials
-consumes no attempt. The attempt is committed immediately before an external
-request; remote rejection and ambiguous outcomes still count. A saved transaction
-is reused. OFF permits that bounded work to finish, but account disconnect
-separately removes service access. Pre-ON/OFF observation/2 is read-only and never enters this queue; historical
+Each observation has at most three automatic submission/confirmation calls per
+runtime, rather than a permanent abandonment limit. An authenticated explicit
+`POST /managed/anchor` can retry a pending observation after service recovery.
+Missing local configuration or account credentials consumes no attempt. The
+cumulative attempt number is committed immediately before external work; remote
+rejection and ambiguous outcomes still count and reopening never resets the count.
+Managed service reservations retain the same account/payload identity and their
+three-broadcast lifetime cap. A known transaction is only reconciled, including
+without account credentials. OFF permits bounded anchor work to finish; account
+disconnect separately removes service access. Pre-ON/OFF observation/2 is read-only and never enters this queue; historical
 ON/OFF observation/3 and /4 retain their bounded pending anchor workflow.
 
 ## Persistence and migration
