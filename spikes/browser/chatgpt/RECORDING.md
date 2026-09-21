@@ -183,6 +183,15 @@ source to the engine. Worker and engine retain at most 512 retired policies for
 replacement documents, tab/window changes, OFF/ON, permission loss and disconnect
 revoke this continuation. Subsequent requests need the new route's binding.
 
+If the worker forwards while the original source is still active, the engine
+validates and snapshots that individual observation's admission before queueing
+it. Same-document navigation while it waits cannot erase this admission. When
+the queued operation runs, the original token must still be active or retained
+within the bounded continuation window, with unchanged document and consent
+authority. Consent commands keep their queue order: OFF ahead of an observation
+rejects it; OFF behind an admitted observation preserves that earlier capture.
+Neither a late unadmitted event nor a cleared token can borrow this admission.
+
 The first validated request at New Chat may finish across the first same-document
 `/c/<id>` transition. A five-second retained policy is bound to one event and
 document. A fresh challenge targets that Chrome document ID, confirms the

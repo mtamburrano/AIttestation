@@ -100,16 +100,28 @@ export class ResidentEngine {
         || !this.#adapter.offersCapture(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
   }
   observe(input, { newChatContinuation = false, requestContinuation = false } = {}) {
-    let observation;
-    try { observation = validateCapture(input); } catch (error) { return Promise.reject(error); }
+    let observation, admittedSource = false;
+    try {
+      observation = validateCapture(input);
+      this.capturePolicy();
+      const entry = this.#captureTokens.get(observation.source.scope);
+      if (entry?.token === observation.token) {
+        this.#adapter.assertObservationSource(observation.source);
+        admittedSource = entry.source.destination !== 'new-chat';
+      }
+    } catch (error) { return Promise.reject(error); }
+    // Preserve this call's authenticated active-source admission if navigation
+    // retires its binding while queued. The maps below still enforce ordered
+    // consent revocation, document continuity and the retired token's lifetime.
+    const continuingRequest = requestContinuation || admittedSource;
     return this.#serial(async () => {
       const { eventId, source } = observation;
       this.capturePolicy();
       const active = this.#captureTokens.get(source.scope);
       const entry = active ?? (newChatContinuation ? this.#newChatTokens.get(source.scope)
-        : requestContinuation ? this.#retiredTokens.get(source.scope) : null);
+        : continuingRequest ? this.#retiredTokens.get(source.scope) : null);
       if (!entry || entry.token !== observation.token) reject('CAPTURE_NOT_ENABLED');
-      if (requestContinuation && (newChatContinuation || entry.source.destination === 'new-chat'
+      if (continuingRequest && (newChatContinuation || entry.source.destination === 'new-chat'
           || ['scope', 'runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch', 'destination']
             .some(key => source[key] !== entry.source[key]))) reject('CAPTURE_NOT_ENABLED');
       if (newChatContinuation) {
@@ -125,7 +137,7 @@ export class ResidentEngine {
         entry.eventId = eventId; entry.documentId = source.documentId;
       }
       if (active) this.#adapter.assertObservationSource(source);
-      else if (!(requestContinuation ? this.#adapter.requestContinuation(entry.source)
+      else if (!(continuingRequest ? this.#adapter.requestContinuation(entry.source)
         : this.#adapter.newChatContinuation(entry.source))) reject('CAPTURE_NOT_ENABLED');
       if (source.destination === 'new-chat' && observation.kind === 'request-observed' && !entry.eventId) {
         entry.eventId = eventId; entry.documentId = source.documentId;

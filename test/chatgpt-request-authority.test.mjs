@@ -6,6 +6,7 @@ import { recordingFixture, until } from './recording-fixture.mjs';
 import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
 import { CHATGPT_PAGE_CONTRACT } from '../spikes/browser/chatgpt/adapter.mjs';
+import { EngineStateStore } from '../spikes/browser/chatgpt/engine-store.mjs';
 
 const exact = '\uFEFF  REQUEST_AUTHORITY_e\u0301\r\n☕\t';
 const tick = () => new Promise(setImmediate);
@@ -17,6 +18,35 @@ async function fixture(t, options = {}) {
 const receipts = f => f.runtime.session.receipts.list();
 const message = (id = randomUUID(), text = exact) => ({ id, author: { role: 'user' },
   content: { content_type: 'text', parts: [text] } });
+
+async function queuedFixture(t, options = {}) {
+  const save = EngineStateStore.prototype.save;
+  let release, entered, held = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  // Release before fixture cleanup, including on assertion failure.
+  t.after(() => { EngineStateStore.prototype.save = save; release(); });
+  const f = await fixture(t, options), engine = f.runtime.engine, admissions = [];
+  const observe = engine.observe.bind(engine);
+  engine.observe = (input, options) => {
+    const result = observe(input, options);
+    admissions.push({ observation: structuredClone(input), options: { ...options } });
+    return result;
+  };
+  EngineStateStore.prototype.save = async function (state) {
+    if (this.vault === f.runtime.session.vault && !held) { held = true; entered(); await gate; }
+    return save.call(this, state);
+  };
+  const command = f.command('SET_RECORDING', { enabled: true });
+  command.catch(() => {});
+  await started;
+  return { f, admissions, async resume() { EngineStateStore.prototype.save = save; release(); await command; } };
+}
+
+async function route(f, url) {
+  f.navigate(17, url);
+  await until(async () => (await f.refresh()).policy?.expectedUrl === url);
+}
 
 test('validated request saves exact text with no DOM Send, composer or Send button', async t => {
   const f = await fixture(t), page = f.pages.get(17);
@@ -139,6 +169,135 @@ for (const fixedSenderURL of [false, true]) test(`admitted request retains its s
   await page.request('NEXT_ROUTE'); await until(() => receipts(f).length === 2);
   assert.equal(f.sources[1].destination, 'conversation:other');
   assert.equal(page.requests.length, 2);
+});
+
+for (const fixedSenderURL of [false, true]) for (const destination of ['unchanged', 'conversation', 'New Chat', 'two routes']) {
+  test(`engine-queued request and IPC retry retain their source across ${destination} (creation URL=${fixedSenderURL})`, async t => {
+    const response = new Response('UNCHANGED_PROVIDER_RESPONSE'), provider = Promise.resolve(response);
+    const q = await queuedFixture(t, { fixedSenderURL, fetchResponse: () => provider });
+    const { f, admissions } = q, page = f.pages.get(17);
+    assert.equal(page.request(exact), provider); assert.equal(await provider, response);
+    assert.equal(await response.text(), 'UNCHANGED_PROVIDER_RESPONSE');
+    // Wait for the real worker timeout and the relay's single IPC retry. Both
+    // deliveries must reach the real engine while A is still the active source.
+    await until(() => admissions.length === 2);
+    assert.equal(f.deliveries.length, 2); assert.deepEqual(admissions[0], admissions[1]);
+    assert.equal(admissions[0].options.requestContinuation, false);
+    assert.equal(admissions[0].options.newChatContinuation, false);
+    assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0);
+    if (destination !== 'unchanged') await route(f, destination === 'New Chat'
+      ? 'https://chatgpt.com/' : 'https://chatgpt.com/c/queued-next');
+    if (destination === 'two routes') await route(f, 'https://chatgpt.com/c/queued-third');
+    await q.resume(); await f.runtime.engine.drain();
+    await until(() => f.results.length === 2);
+    assert.deepEqual(f.results.map(value => value.result.state), ['PROMPT_SAVED', 'PROMPT_SAVED']);
+    await until(() => page.feedback === 'Attestamp · Prompt saved');
+    assert.equal(receipts(f).length, 1); assert.equal(f.anchorCalls, 1);
+    const version = f.runtime.session.status().versions[0];
+    assert.deepEqual(version.source, admissions[0].observation.source);
+    assert.equal(version.source.destination, 'conversation:fixture-17');
+    const preview = f.runtime.session.receipts.prepare({ ids: [receipts(f)[0].id] });
+    assert.equal(preview.texts[0].preview, exact);
+    assert.equal(page.requests.length, 1); assert.equal(f.userSends, 0);
+    assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+  });
+}
+
+test('engine queue preserves first-New-Chat and overlapping tab attribution', async t => {
+  const q = await queuedFixture(t, { newChat: true, fixedSenderURL: true }), { f, admissions } = q;
+  await f.pages.get(17).request(exact);
+  await f.pages.get(18).request('INDEPENDENT_TAB');
+  await until(() => admissions.length === 2);
+  await route(f, 'https://chatgpt.com/c/queued-first');
+  await q.resume(); await f.runtime.engine.drain();
+  await until(() => f.results.length === 2);
+  assert.ok(f.results.every(value => value.result.state === 'PROMPT_SAVED'));
+  const versions = f.runtime.session.status().versions;
+  assert.equal(versions.length, 2); assert.equal(f.anchorCalls, 2);
+  for (const { observation } of admissions) {
+    assert.deepEqual(versions.find(value => value.id === observation.eventId).source, observation.source);
+  }
+  assert.equal(versions.find(value => value.source.tabId === 17).source.destination, 'new-chat');
+  assert.equal(versions.find(value => value.source.tabId === 18).source.destination, 'conversation:fixture-18');
+  assert.equal(f.pages.get(17).requests.length, 1); assert.equal(f.pages.get(18).requests.length, 1);
+});
+
+for (const cutoff of ['OFF', 'OFF/ON', 'reload', 'replacement document', 'window change', 'tab removal',
+  'unsupported route', 'permission loss', 'disconnect']) {
+  test(`engine-queued active admission cannot cross ${cutoff}`, async t => {
+    const q = await queuedFixture(t), { f, admissions } = q, controls = [];
+    // Consent commands remain ordered ahead of capture even though their
+    // metadata cannot finish until the held no-op save is released.
+    if (cutoff.startsWith('OFF')) controls.push(f.command('SET_RECORDING', { enabled: false }));
+    if (cutoff === 'OFF/ON') controls.push(f.command('SET_RECORDING', {
+      enabled: true, expectedRevision: f.runtime.engine.state().revision + 1,
+    }));
+    await f.pages.get(17).request(exact);
+    await until(() => admissions.length === 1);
+    assert.equal(admissions[0].options.requestContinuation, false);
+    await route(f, 'https://chatgpt.com/c/queued-revoked');
+    if (cutoff === 'reload') await f.reload();
+    if (cutoff === 'replacement document') {
+      f.pages.get(17).documentId = 'replacement-queued-document';
+      await until(async () => {
+        const { policy } = await f.refresh();
+        return policy && policy.tabEpoch !== admissions[0].observation.source.tabEpoch;
+      });
+    }
+    if (cutoff === 'window change') {
+      f.inventory.get(17).windowId++;
+      f.worker.chrome.tabs.onActivated.emit();
+      await until(() => f.runtime.adapter.scopes().find(value => value.tabId === 17)?.windowId === 2);
+    }
+    if (cutoff === 'tab removal') { f.inventory.delete(17); f.worker.chrome.tabs.onRemoved.emit(17); }
+    if (cutoff === 'unsupported route') f.navigate(17, 'https://chatgpt.com/settings');
+    if (cutoff === 'permission loss') f.revokePermission();
+    if (cutoff === 'disconnect') f.disconnect();
+    if (['tab removal', 'unsupported route', 'permission loss', 'disconnect'].includes(cutoff)) {
+      await until(() => !f.runtime.adapter.scopes().some(value => value.tabId === 17));
+    }
+    await q.resume(); await Promise.all(controls); await f.runtime.engine.drain();
+    assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0);
+    assert.equal(f.runtime.engine.state().recording, cutoff !== 'OFF');
+    assert.ok(f.results.every(value => value.result.state === 'RECORDING_UNAVAILABLE'));
+  });
+}
+
+test('OFF ordered after an engine-queued admission preserves that earlier request only', async t => {
+  const q = await queuedFixture(t), { f, admissions } = q;
+  await f.pages.get(17).request(exact); await until(() => admissions.length === 1);
+  const off = f.command('SET_RECORDING', { enabled: false, expectedRevision: f.runtime.engine.state().revision + 1 });
+  await route(f, 'https://chatgpt.com/c/queued-before-off');
+  await q.resume(); await off; await f.runtime.engine.drain();
+  assert.equal(receipts(f).length, 1); assert.equal(f.anchorCalls, 1);
+  assert.equal(f.runtime.engine.state().recording, false);
+  assert.equal(f.runtime.session.status().versions[0].source.destination, 'conversation:fixture-17');
+  await f.pages.get(17).request('AFTER_OFF'); await tick(); await f.runtime.engine.drain();
+  assert.equal(receipts(f).length, 1); assert.equal(f.pages.get(17).requests.length, 2);
+});
+
+test('an unadmitted retired token cannot borrow a queued active admission', async t => {
+  const q = await queuedFixture(t), { f, admissions } = q;
+  await f.pages.get(17).request(exact); await until(() => admissions.length === 1);
+  await route(f, 'https://chatgpt.com/c/queued-other');
+  const forged = { ...admissions[0].observation, eventId: randomUUID(),
+    request: { ...admissions[0].observation.request, messageId: 'unadmitted-message' } };
+  const rejected = assert.rejects(f.runtime.engine.observe(forged), /CAPTURE_NOT_ENABLED/);
+  await q.resume(); await rejected; await f.runtime.engine.drain();
+  assert.equal(receipts(f).length, 1); assert.equal(f.anchorCalls, 1);
+  assert.equal(f.runtime.session.status().versions[0].id, admissions[0].observation.eventId);
+});
+
+test('engine-queued admission expires with its retired binding', async t => {
+  const q = await queuedFixture(t), { f, admissions } = q;
+  await f.pages.get(17).request(exact); await until(() => admissions.length === 1);
+  await route(f, 'https://chatgpt.com/c/queued-expired');
+  const expired = performance.now() + 12001;
+  t.mock.method(performance, 'now', () => expired);
+  await q.resume(); await f.runtime.engine.drain();
+  await until(() => f.results.length === 1);
+  assert.equal(f.results[0].result.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0);
 });
 
 test('a retired binding cannot admit another event or authenticate an unobserved payload', async t => {
