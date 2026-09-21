@@ -53,7 +53,7 @@ const payload={action:'next',parent_message_id:crypto.randomUUID(),
 fetch(new Request('https://chatgpt.com/backend-api/f/conversation',{method:'POST',body:JSON.stringify(payload)}))
   .then(response=>response.text()).then(()=>globalThis.providerResponses=(globalThis.providerResponses??0)+1);
 document.querySelector('textarea').value='';
-if(location.pathname==='/')history.pushState(null,'','/c/synthetic-conversation');
+if(location.pathname==='/')setTimeout(()=>history.pushState(null,'','/c/synthetic-conversation'),25);
 };</script>`;
 try {
   const extension = join(root, 'extension');
@@ -64,6 +64,10 @@ try {
   report.contentSHA256 = createHash('sha256').update(await readFile(join(extension, 'content-script.js'))).digest('hex');
   await writeFile(join(extension, 'service-worker.js'), `
     globalThis.__writes=[];globalThis.__gate=null;globalThis.__captureProbes=[];globalThis.__routes=[];globalThis.__proofs=[];globalThis.__policies=[];
+    globalThis.__updateListeners=[];
+    const updated=chrome.tabs.onUpdated.addListener.bind(chrome.tabs.onUpdated);
+    chrome.tabs.onUpdated.addListener=listener=>{__updateListeners.push(listener);updated(listener)};
+    globalThis.__update=(id,change)=>{for(const listener of __updateListeners)listener(id,change)};
     const event=()=>({listeners:[],addListener(f){this.listeners.push(f)},emit(v){this.listeners.forEach(f=>f(v))}});
     chrome.runtime.connectNative=()=>globalThis.__native={onMessage:event(),onDisconnect:event(),postMessage:m=>__writes.push(m),disconnect(){}};
     const add=chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
@@ -210,6 +214,8 @@ try {
   await send();
   await wait(() => runtime.adapter.scopes().some(source => source.destination === 'conversation:synthetic-conversation'));
   await wait(() => evaluate(workerSession, 'typeof __gate.release === "function"'));
+  await evaluate(workerSession, `__update(${tabId},{status:'loading'});__update(${tabId},{status:'loading'})`);
+  await delay(100);
   await evaluate(workerSession, '__gate.release();__gate=null');
   try { await wait(() => runtime.session.receipts.list().length === 1); }
   catch (error) {
@@ -224,6 +230,7 @@ try {
   assert.equal(runtime.session.status().versions[0].source.destination, 'new-chat');
   assert.equal(await evaluate(page, 'providerSends'), 1);
   report.checks.push('FIRST_GENUINE_SEND_DURABLE_ONCE_AFTER_REAL_SAME_DOCUMENT_NAVIGATION_WITH_HELD_BROWSER_CHECK');
+  report.checks.push('FRESH_TAB_FIRST_SEND_SURVIVES_INJECTED_REPEATED_LOADING_WITH_REAL_DOCUMENT_PROOFS');
   await send(); await wait(() => runtime.session.receipts.list().length === 2);
   assert.equal(await evaluate(page, 'providerSends'), 2);
   report.checks.push('LATER_EQUAL_TEXT_SEND_HAS_DISTINCT_RECEIPT_ON_CURRENT_CONVERSATION');
@@ -244,6 +251,9 @@ try {
   await send();
   await wait(() => evaluate(page, `heldTransport.some(message=>message[0].kind==='request')&&providerResponses===3`));
   await wait(() => evaluate(workerSession, `__policies.slice(${policyStart}).some(value=>value.state==='READY'&&value.url==='https://chatgpt.com/c/synthetic-conversation')`));
+  await evaluate(workerSession, `__update(${tabId},{status:'loading'});__update(${tabId},{status:'loading'});
+    __update(${tabId},{url:'https://chatgpt.com/c/synthetic-conversation',status:'loading'});__update(${tabId},{status:'complete'})`);
+  await delay(100);
   assert.equal(runtime.session.receipts.list().length, 2);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
   await evaluate(page, `window.postMessage=originalPostMessage;for(const args of heldTransport)Reflect.apply(originalPostMessage,window,args);heldTransport=[]`);
@@ -253,6 +263,7 @@ try {
   assert.equal(await evaluate(page, 'providerSends'), 3);
   report.checks.push('FIRST_SEND_ROUTE_POLICY_PRECEDES_MAIN_TO_ISOLATED_REQUEST_DELIVERY');
   report.checks.push('CONVERSATION_TO_NEW_CHAT_AND_NEXT_SEND_WITHOUT_RELOAD');
+  report.checks.push('HELD_NEW_CHAT_RELAY_SURVIVES_INJECTED_REPEATED_LOADING_AND_ROUTE_UPDATES');
   assert.equal(await evaluate(page, 'fetch===lateFetch'), true);
   assert.equal(await evaluate(page, 'wrapperEffects'), 4, 'one health validation plus three synthetic Sends');
   report.checks.push('PAGE_WRAPPER_REFERENCE_UNCHANGED_ACROSS_HEARTBEATS_AND_SPA_NAVIGATION');

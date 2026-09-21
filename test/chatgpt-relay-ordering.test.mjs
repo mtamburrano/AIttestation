@@ -27,6 +27,35 @@ async function assertFeedback(f, state) {
   assert.equal(f.pages.get(17).feedback, state);
 }
 
+for (const newChat of [true, false]) {
+  test(`first New Chat Send survives repeated loading updates (${newChat ? 'fresh tab' : 'same-tab return'})`, async t => {
+    const f = await fixture(t, { newChat, fixedSenderURL: true });
+    if (!newChat) await conversationPolicy(f, 'https://chatgpt.com/');
+    const page = f.pages.get(17), relay = page.holdTransport('request');
+    const originalPolicy = (await f.refresh()).policy;
+    f.send('FIRST_SEND_e\u0301\r\n  ☕');
+    await until(() => relay.messages.length === 1);
+    for (let index = 0; index < 2; index++) {
+      f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+      await tick(); await f.refresh();
+    }
+    await conversationPolicy(f);
+    f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+    await tick();
+    f.worker.chrome.tabs.onUpdated.emit(17, { url: page.location.href, status: 'loading' });
+    f.worker.chrome.tabs.onUpdated.emit(17, { status: 'complete' });
+    await until(async () => (await f.refresh()).policy?.expectedUrl === page.location.href);
+    assert.equal((await f.refresh()).policy.tabEpoch, originalPolicy.tabEpoch);
+    assert.equal(saved(f).length, 0);
+    relay.release();
+    await until(() => page.feedback === 'Attestamp · Prompt saved');
+    assert.equal(saved(f).length, 1); assert.equal(f.deliveries.length, 1);
+    assert.equal(f.sources[0].destination, 'new-chat');
+    assert.equal(f.runtime.session.receipts.prepare({ ids: [saved(f)[0].id] }).texts[0].preview, 'FIRST_SEND_e\u0301\r\n  ☕');
+    assert.equal(page.requests.length, 1); assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+  });
+}
+
 for (const order of ['policy before relay', 'relay before policy']) {
   test(`first New Chat Send captures once with ${order}`, async t => {
     const capture = gate(t); let entered = false;

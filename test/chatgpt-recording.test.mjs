@@ -240,16 +240,17 @@ test('first New-chat Send survives Chrome reporting loading before the conversat
   assert.equal(f.userSends, 1); assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
 });
 
-test('a repeated status-only loading precursor still revokes New-chat continuity', async t => {
+test('repeated loading with a replacement document revokes New-chat continuity', async t => {
   let release, entered;
   const gate = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
   t.after(() => release());
   const f = await fixture(t, { newChat: true, beforeCapture: async () => { entered(); await gate; } });
   await f.recording(true); f.send(exact); await started;
-  // Only the first bounded precursor is tolerated; a second one is a real second
-  // navigation and must revoke before any durable capture.
+  // The old document must not borrow authority even when its replacement has
+  // the same URL and Chrome emits the same loading sequence as a SPA route.
   f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
+  f.pages.get(17).documentId = 'replacement-document';
   f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
   f.navigate(17, 'https://chatgpt.com/c/created-by-send');
   await until(() => f.runtime.adapter.scopes().some(source => source.destination === 'conversation:created-by-send'));

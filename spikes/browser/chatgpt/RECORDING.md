@@ -234,8 +234,10 @@ transition under the same runtime, browser session and tab epoch, for at most
 five seconds. Neither a binding nor a matched-stage message creates evidence.
 Once the exact validated request arrives, the worker and ordered engine bind one
 first event. The continuation is pinned to that first route.
-One status-only loading precursor is tolerated without granting new authority;
-repeated loading, replacement documents, unrelated tabs/routes and OFF/ON revoke.
+Loading notifications, including repeated status-only updates, require a fresh
+challenge to the exact original Chrome document at its current supported URL.
+Their count does not establish document replacement or extend the request's
+deadline. Replacement documents, unrelated tabs/routes and OFF/ON revoke.
 The evidence retains its original `new-chat` source.
 
 Other same-document navigation, including conversation to New Chat, gets a fresh
@@ -297,6 +299,13 @@ blocked. Native ancestry is synthetic. Installed provider Sends, app-bound
 custody, additional browsers/providers and owner acceptance remain unverified.
 The earlier [DOM fixture result](../../../test/evidence/new-chat-chrome-153/capture.json)
 is historical evidence for its own hashes, not validation of transport capture.
+
+The [loading-continuity result](../../../test/evidence/new-chat-chrome-153/loading-continuity.json)
+adds repeated loading and route updates during first New Chat Sends in a fresh
+tab and after returning from a conversation. The updates are injected into the
+real Chrome worker; the original document challenges, provider request, delayed
+SPA route and held relay are exercised with intercepted synthetic traffic.
+It does not establish the precise live provider event schedule.
 
 The [Chrome 153 transport result](../../../test/evidence/transport-chrome-153/capture.json)
 records genuine-input synthetic-network coverage and exact script hashes for

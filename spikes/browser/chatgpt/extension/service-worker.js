@@ -411,48 +411,28 @@ chrome.tabs.onCreated.addListener(() => publishState());
 chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); documents.delete(id); newChats.delete(id); documentRoutes.delete(id); publishState(); });
 chrome.tabs.onUpdated.addListener((id, change) => {
   if (!change.url && change.status !== 'loading') { if (change.status === 'complete') publishState(); return; }
-  const pending = newChats.get(id);
-  if (!change.url) {
-    // Real Chrome delivers the navigation precursor and the conversation route
-    // as separate updates, so a status-only loading can arrive while this tab is
-    // still a pending first-New-chat candidate. Tolerate exactly one such
-    // precursor: it grants no capture authority, keeps the original document
-    // binding, and expires on its own. The later exact route, the same-document
-    // challenge and the pending validated-request proof are all still required, and
-    // a second precursor, a later loading or any real navigation revokes below.
-    if (pending && !pending.navigated && !pending.navigating && pending.expires > performance.now()
-        && documents.get(id) === pending.documentId) {
-      pending.navigating = true;
-      pending.expires = Math.min(pending.expires, performance.now() + 5000);
-      publishState(); return;
-    }
-  } else if (pending && !pending.navigated && pending.expires > performance.now()
-      && conversationURL(change.url) && (!pending.url || pending.url === change.url)) {
-    // Chrome can report loading even for pushState. Only the first expected
-    // route may retain this epoch; the document-targeted challenge must prove
-    // the original document now lives at that route. Further loading revokes.
-    pending.navigated = true;
-    if (!pending.url) { pending.url = change.url; pending.expires = performance.now() + 5000; }
-    publishState(); return;
-  }
-  if (change.url && supportedURL(change.url) && documents.has(id)) {
+  if ((!change.url || supportedURL(change.url)) && documents.has(id)) {
     const documentId = documents.get(id), epoch = tabEpochs.get(id), context = connection;
-    // A route change is not a new document. Challenge the exact old document
-    // before accepting its creation URL at the new route. Full navigation fails
-    // this proof and rotates authority instead of borrowing the old scope.
+    // Chrome may report multiple loading updates during a same-document route
+    // change. Their count cannot establish document replacement. Preserve the
+    // epoch only when the exact original document proves its current live URL;
+    // every pending request still needs its separate bounded payload challenge.
     const check = (async () => {
-      let valid = false;
+      let valid = false, live;
       try {
         const nonce = crypto.randomUUID();
         const proof = await bounded(chrome.tabs.sendMessage(id, { kind: 'PAP_CONFIRM_DOCUMENT', pageContract: PAGE_CONTRACT, nonce }, { documentId, frameId: 0 }));
         const [tabs, permission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
-        const live = tabs.find(tab => tab.id === id);
+        live = tabs.find(tab => tab.id === id);
         valid = current(context) && permission === 'granted' && tabs.length <= 32 && live && !live.incognito
-          && live.url === change.url && proof?.nonce === nonce && proof.active === true && proof.url === live.url;
+          && supportedURL(live.url) && (!change.url || live.url === change.url)
+          && proof?.nonce === nonce && proof.active === true && proof.url === live.url;
       } catch {}
       if (documents.get(id) !== documentId || tabEpochs.get(id) !== epoch || routeChecks.get(id) !== check) return;
-      if (valid) documentRoutes.set(id, { documentId, epoch, url: change.url,
-        creationUrl: documentRoutes.get(id)?.creationUrl });
+      if (valid) {
+        documentRoutes.set(id, { documentId, epoch, url: live.url, creationUrl: documentRoutes.get(id)?.creationUrl });
+        noteNewChatRoute(id, live.url);
+      }
       else { tabEpochs.set(id, crypto.randomUUID()); documents.delete(id); newChats.delete(id); documentRoutes.delete(id); }
       routeChecks.delete(id); publishState();
     })();
