@@ -9,8 +9,8 @@ import { startManagedServer } from '../managed/http.mjs';
 import { readReleaseFile } from '../distribution/release-inputs.mjs';
 import { DEVELOPMENT_PROFILE, newDirectory, ownerDirectory, privateJSON, writeNewJSON } from './environment.mjs';
 
-const limits = { accounts: 1, ledger: 10, accountMonth: 10, accountDay: 10,
-  globalDay: 10, accountMinute: 20, globalMinute: 30 };
+const limits = { accounts: 1, ledger: 1000, accountMonth: 1000, accountDay: 100,
+  globalDay: 1000, accountMinute: 20, globalMinute: 30 };
 
 export function algorandAddress(publicKey) {
   const key = Buffer.from(publicKey);
@@ -56,7 +56,7 @@ export async function initializeSponsor(directory, port) {
   } finally { service.close(); }
   await checkSponsor(directory);
   return { profile: DEVELOPMENT_PROFILE, network: 'testnet-v1.0', address, origin: `https://127.0.0.1:${port}`,
-    maxTransactions: 10, externalCalls: 0, next: 'FUND_NEW_ADDRESS_WITH_FREE_TESTNET_FAUCET_ONLY' };
+    maxTransactions: 1000, externalCalls: 0, next: 'FUND_NEW_ADDRESS_WITH_FREE_TESTNET_FAUCET_ONLY' };
 }
 
 export async function checkSponsor(directory) {
@@ -113,7 +113,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     else if (action === 'init') console.log(JSON.stringify(await initializeSponsor(directory, Number(option))));
     else if (action === 'serve') {
       const server = await serveSponsor(directory, option);
-      console.log(JSON.stringify({ origin: server.origin, network: 'testnet-v1.0', maxTransactions: 10 }));
+      console.log(JSON.stringify({ origin: server.origin, network: 'testnet-v1.0', maxTransactions: 1000 }));
       const stop = () => server.close().then(() => process.exit(0));
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
     } else throw Error('USAGE');
