@@ -173,6 +173,12 @@ accepted relay records expire after 6.5 seconds. New-chat authority expires afte
 five seconds. Native deliveries are capped at 32. The page uses a 2.5-second
 local-delivery deadline and at most one IPC retry; the worker deadline is two
 seconds. This retries delivery of an observation, never the provider request.
+Exhausting a response deadline reports **Save not confirmed · Check History**,
+because the local write may already be durable. A correctly correlated late
+success may confirm the original event within its existing 6.5-second lifetime;
+it cannot revive OFF consent or replace a newer event's feedback. Explicit
+rejection and extraction failures remain recording gaps. Deadlines and retry
+counts are unchanged.
 Policy polls run each second. The three-second observer readiness indicator is
 advisory and does not expire an otherwise valid request's capture binding.
 
@@ -306,6 +312,15 @@ tab and after returning from a conversation. The updates are injected into the
 real Chrome worker; the original document challenges, provider request, delayed
 SPA route and held relay are exercised with intercepted synthetic traffic.
 It does not establish the precise live provider event schedule.
+
+The [capture-response result](../../../test/evidence/capture-responsiveness-chrome-153/capture.json)
+holds real Chrome local-save replies past both deadlines: History gains one
+record, the page reports an unconfirmed save, and a late correlated reply reports
+Prompt saved without another provider request. Separate deterministic tests hold
+two native verifier processes while a 15-record synthetic backlog, new capture
+and authenticated debug/control requests run. Offline fast and archival proof
+tests compare synchronous and asynchronous verdicts, including tampered proofs.
+These tests do not establish the cause or timing of an owner-observed live delay.
 
 The [Chrome 153 transport result](../../../test/evidence/transport-chrome-153/capture.json)
 records genuine-input synthetic-network coverage and exact script hashes for

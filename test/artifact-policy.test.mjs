@@ -100,6 +100,7 @@ test('missing app and recipient imports or assets reject even after inventories 
       `${resources}/spikes/managed/client.mjs`, `${extension}/content-script.js`,
       `${verifier}/Contents/Resources/spikes/recipient/server.mjs`, `${verifier}/Contents/Resources/spikes/recipient/recipient.css`,
       `${verifier}/Contents/Resources/spikes/vault/records.mjs`,
+      `${verifier}/Contents/Resources/spikes/anchor/native-verifier.mjs`,
     ]) {
       const bytes = await readFile(join(f.output, path));
       await rm(join(f.output, path)); await f.seal();

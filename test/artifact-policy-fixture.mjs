@@ -91,7 +91,7 @@ export async function fixture(t, channel = 'release-candidate') {
   }
   sourceBytes.set('spikes/browser/chatgpt/runtime-main.mjs', "import './bridge-runtime.mjs';\n");
   // Keep the synthetic producer independent of the verifier's resource list.
-  const recipientSources = ['vault/format.mjs', 'vault/records.mjs', 'anchor/verifier.mjs', 'anchor/merkle.mjs',
+  const recipientSources = ['vault/format.mjs', 'vault/records.mjs', 'anchor/verifier.mjs', 'anchor/merkle.mjs', 'anchor/native-verifier.mjs',
     'recipient/portable.mjs', 'recipient/normal-observation.mjs', 'recipient/strict-observation.mjs', 'recipient/qualified-observation.mjs', 'recipient/dom-observation.mjs', 'recipient/legacy-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
     'recipient/recipient.html', 'recipient/recipient.js', 'recipient/recipient.css'];
   for (const path of recipientSources) {

@@ -40,6 +40,7 @@ function showRecording(state) {
     document.documentElement.append(feedback);
   }
   const labels = { READY: 'Attestamp · ON', SAVING: 'Attestamp · Saving prompt…', PROMPT_SAVED: 'Attestamp · Prompt saved',
+    SAVE_UNCONFIRMED: 'Attestamp · Save not confirmed · Check History',
     GAP: 'Attestamp · Recording gap', RECORDING_UNAVAILABLE: 'Attestamp · Recording unavailable' };
   feedback.textContent = labels[state] ?? ''; feedback.hidden = !labels[state];
 }
@@ -181,19 +182,36 @@ async function deliver(pending, kind) {
     eventId: pending.eventId, observationKind: kind,
     ...(kind === 'request-observed' ? { text: pending.text, inputMethod: pending.inputMethod, request: pending.request }
       : { acknowledgement: pending.acknowledgement }) };
+  let uncertain = false;
   for (let attempt = 0; attempt < 2 && observations.get(pending.eventId) === pending && pendingCurrent(pending); attempt++) {
     let timer;
     try {
-      const result = await Promise.race([chrome.runtime.sendMessage(message),
+      // A local response timeout says nothing about whether the vault committed.
+      // Keep each bounded attempt's late success eligible to confirm this exact
+      // pending event, without reviving consent or replacing a newer outcome.
+      const delivery = chrome.runtime.sendMessage(message).then(result => {
+        if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind
+            && result.state === 'PROMPT_SAVED' && pendingCurrent(pending)) {
+          if (result.deduplicated) pending.deduplicated = true;
+          if (kind === 'request-observed') {
+            pending.saved = true; reportOutcome(pending, 'PROMPT_SAVED');
+            if (pending.deduplicated) reportDiagnostic('REQUEST_DEDUPLICATED');
+            deliverAck(pending);
+          }
+        }
+        return result;
+      });
+      const result = await Promise.race([delivery,
         new Promise((_, reject) => { timer = setTimeout(() => reject(Error('timeout')), 2500); })]);
       if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind
           && result.state === 'PROMPT_SAVED') {
         if (result.deduplicated) pending.deduplicated = true;
         return true;
       }
-    } catch {} finally { clearTimeout(timer); }
+      if (result?.state !== 'RECORDING_UNAVAILABLE') uncertain = true;
+    } catch { uncertain = true; } finally { clearTimeout(timer); }
   }
-  return false;
+  return kind === 'request-observed' && pending.saved ? true : uncertain ? null : false;
 }
 function deliverAck(pending) {
   if (!pending.saved || pending.deduplicated || !pending.acknowledgement || pending.ackSent || !pendingCurrent(pending)) return;
@@ -275,9 +293,10 @@ addEventListener('message', event => {
     clearTimeout(pending.timer); pending.timer = setTimeout(() => observations.delete(pending.eventId), 6500);
     reportDiagnostic('DURABLE_SAVE_DISPATCHED'); reportOutcome(pending, 'SAVING');
     deliver(pending, 'request-observed').then(saved => {
-      pending.saved = saved;
+      if (pending.saved) return;
+      pending.saved = saved === true;
       if (observations.get(pending.eventId) !== pending || !pendingCurrent(pending)) return;
-      reportOutcome(pending, saved ? 'PROMPT_SAVED' : 'GAP');
+      reportOutcome(pending, saved ? 'PROMPT_SAVED' : saved === null ? 'SAVE_UNCONFIRMED' : 'GAP');
       if (pending.deduplicated) reportDiagnostic('REQUEST_DEDUPLICATED');
       if (saved) deliverAck(pending);
     });

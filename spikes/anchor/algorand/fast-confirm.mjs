@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { canonical, parseCanonical, unb64 } from '../../vault/format.mjs';
 import { emit } from '../../diagnostics/local.mjs';
 import { parseUniqueJSON } from '../../distribution/unique-json.mjs';
+import { runNativeVerifier } from '../native-verifier.mjs';
 
 export const FAST_CONFIRM_PROFILE = 'PAP_ALGORAND_FAST_CONFIRM_V1';
 export const FAST_CONFIRM_WAIT_MS = 20_000;
@@ -23,18 +24,31 @@ function evidenceObject(value) {
   return structuredClone(value);
 }
 
-export function verifyFastConfirmation(evidence, trust, expectedPayload, { verifierPath } = {}) {
+function verificationInput(evidence, trust, expectedPayload) {
   evidence = evidenceObject(evidence);
   if (!trust || typeof trust !== 'object') throw Error('Independent fast-confirmation trust configuration required');
   const payload = Buffer.isBuffer(expectedPayload) ? expectedPayload : unb64(expectedPayload, 36);
   if (payload.length !== 36 || !payload.subarray(0, 4).equals(Buffer.from([0x50, 0x41, 0x50, 0x01]))) {
     throw Error('Invalid expected anchor payload');
   }
+  return canonical({ evidence, trust, expectedPayload: payload.toString('base64') });
+}
+
+export function verifyFastConfirmation(evidence, trust, expectedPayload, { verifierPath } = {}) {
   const binary = verifierPath ?? fileURLToPath(new URL('./bin/fast-verify', import.meta.url));
-  const result = spawnSync(binary, [], {
-    input: canonical({ evidence, trust, expectedPayload: payload.toString('base64') }),
-    encoding: 'utf8', env: {}, timeout: 10_000, maxBuffer: 128 * 1024,
-  });
+  return verificationReport(spawnSync(binary, [], { input: verificationInput(evidence, trust, expectedPayload),
+    encoding: 'utf8', env: {}, timeout: 10_000, maxBuffer: 128 * 1024 }));
+}
+
+export async function verifyFastConfirmationAsync(evidence, trust, expectedPayload, { verifierPath } = {}) {
+  const binary = verifierPath ?? fileURLToPath(new URL('./bin/fast-verify', import.meta.url));
+  const result = await runNativeVerifier(binary, { input: verificationInput(evidence, trust, expectedPayload),
+    timeout: 10_000, maxBuffer: 128 * 1024 });
+  if (result.error?.code === 'VERIFIER_BUSY') throw pending('local verifier capacity unavailable');
+  return verificationReport(result);
+}
+
+function verificationReport(result) {
   if (result.error) throw Error('Local fast-confirmation verifier unavailable or resource limit exceeded');
   let report;
   try { report = JSON.parse(result.stdout); } catch { throw Error('Malformed local fast-confirmation verifier result'); }

@@ -28,7 +28,7 @@ See [ENGINE.md](ENGINE.md) for control, migration and OFF ordering,
 
 ## Authenticated Chrome transport
 
-Extension 2.3.0 negotiates adapter `pap-chatgpt-chrome/9`, page contract
+Extension 2.3.1 negotiates adapter `pap-chatgpt-chrome/9`, page contract
 `chatgpt-web-text/2026-09-21.1`, capture `pap-chatgpt-capture/5` and sidebar
 `pap-chatgpt-panel/2`. Old active contracts reject. Native bridge profile 3,
 bundle identities and cryptographic domains are unchanged.

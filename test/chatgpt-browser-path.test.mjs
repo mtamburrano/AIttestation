@@ -151,7 +151,7 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
   assert.equal(manifest.name, 'Attestamp for ChatGPT');
   assert.equal(manifest.short_name, 'Attestamp');
-  assert.equal(manifest.version, '2.3.0');
+  assert.equal(manifest.version, '2.3.1');
   assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
   assert.match(manifest.description, /Attestamp desktop app/);
   assert.match(manifest.description, /supported ChatGPT tabs/);
@@ -165,7 +165,9 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   assert.equal(derivedId, CHATGPT_EXTENSION_ID, 'consumer metadata updates must preserve the assigned Store ID');
   const content = await readFile(new URL('content-script.js', root), 'utf8');
   assert.match(content, /#prompt-textarea/); assert.match(content, /send-button/);
-  assert.doesNotMatch(content, /clipboard|downloads|history|bookmarks|file:\/\//i);
+  assert.doesNotMatch(content, /clipboard|downloads|bookmarks|file:\/\//i);
+  // A product History label does not grant access to the browser history API.
+  assert.doesNotMatch(content, /\bhistory\s*(?:\.|\[)|\[\s*['"]history['"]\s*\]/i);
   const worker = await readFile(new URL('service-worker.js', root), 'utf8');
   assert.match(worker, /browser: \{ product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 \}/);
   assert.doesNotMatch(worker, /browser: \{ product: 'Google Chrome', channel: 'stable'/);

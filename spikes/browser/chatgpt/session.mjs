@@ -4,8 +4,8 @@ import { emit } from '../../diagnostics/local.mjs';
 import { Vault } from '../../vault/vault.mjs';
 import { canonical, parseCanonical, b64, unb64 } from '../../vault/format.mjs';
 import { inclusion, anchorPayload } from '../../anchor/merkle.mjs';
-import { verifyAnchor } from '../../anchor/verifier.mjs';
-import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verifyFastConfirmation } from '../../anchor/algorand/fast-confirm.mjs';
+import { verifyAnchorAsync } from '../../anchor/verifier.mjs';
+import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verifyFastConfirmationAsync } from '../../anchor/algorand/fast-confirm.mjs';
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
 import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from '../../recipient/normal-observation.mjs';
@@ -23,8 +23,8 @@ export class ChatGPTRecordingSession {
   #managed; #diagnostics; #closed = false;
 
   constructor(directory, adapter, {
-    vault = null, vaultKey = null, fastTrust, collectFast = collectFastEvidence, verifyFast = verifyFastConfirmation,
-    verifyArchive = verifyAnchor, managed = null, diagnostics = null,
+    vault = null, vaultKey = null, fastTrust, collectFast = collectFastEvidence, verifyFast = verifyFastConfirmationAsync,
+    verifyArchive = verifyAnchorAsync, managed = null, diagnostics = null,
   } = {}) {
     if (!directory || !adapter || !fastTrust || fastTrust.profile !== FAST_CONFIRM_PROFILE || typeof collectFast !== 'function'
         || (!vault && (!Buffer.isBuffer(vaultKey) || vaultKey.length !== 32))) {
@@ -280,7 +280,7 @@ export class ChatGPTRecordingSession {
       if (version.anchor === 'CONSENSUS_VERIFIED') throw Error('Duplicate consensus upgrade');
       const envelopeBytes = Buffer.isBuffer(envelope) ? envelope : Buffer.from(envelope);
       const archivedEvidence = parseCanonical(envelopeBytes, 8 * 1024 * 1024);
-      const report = this.#verifyArchive(envelopeBytes, trust, version.recordDigest);
+      const report = await this.#verifyArchive(envelopeBytes, trust, version.recordDigest);
       if (!report?.independentlyVerified || report.anchor !== 'CONSENSUS_VERIFIED' || report.timestamp !== 'BLOCK_HASH_BOUND') {
         throw Error(`Consensus upgrade rejected: ${report?.reason ?? 'invalid proof'}`);
       }

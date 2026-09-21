@@ -3,12 +3,30 @@ import { parseCanonical, canonical, keys, unb64, b64, fail, LIMITS } from '../va
 import { verifyInclusion, anchorPayload } from './merkle.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runNativeVerifier } from './native-verifier.mjs';
 
 export const ALGORAND_CONSENSUS_ALLOWLIST = Object.freeze([
   'https://github.com/algorandfoundation/specs/tree/268b63433a907455d439995bf916f6b296018f4f',
 ]);
 
 export function verifyAnchor(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath, timeoutMs = 30000 } = {}) {
+  const check = verification(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath, timeoutMs });
+  const step = check.next();
+  if (step.done) return step.value;
+  const { binary, options } = step.value;
+  try { return check.next(spawnSync(binary, [], { ...options, encoding: 'utf8', env: {} })).value; }
+  catch (error) { return check.throw(error).value; }
+}
+
+export async function verifyAnchorAsync(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath, timeoutMs = 30000 } = {}) {
+  const check = verification(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath, timeoutMs });
+  const step = check.next();
+  if (step.done) return step.value;
+  const { binary, options } = step.value;
+  return check.next(await runNativeVerifier(binary, options)).value;
+}
+
+function* verification(input, trustedConfiguration, expectedRecordDigest, { algorandVerifierPath, timeoutMs }) {
   const report = { structure: 'VALID', recordInclusion: 'INVALID', anchor: 'INDETERMINATE',
     timestamp: 'INDETERMINATE', independentlyVerified: false, assurance: 'NONE', reason: '' };
   try {
@@ -37,9 +55,9 @@ export function verifyAnchor(input, trustedConfiguration, expectedRecordDigest, 
         report.reason = 'Archived proof material missing'; return report;
       }
       const binary = algorandVerifierPath ?? fileURLToPath(new URL('./algorand/bin/verify', import.meta.url));
-      const result = spawnSync(binary, [], { input: JSON.stringify({ archive: bundle.proof,
+      const result = yield { binary, options: { input: JSON.stringify({ archive: bundle.proof,
         trust: trustedConfiguration.checkpoint, expectedPayload: Buffer.from(payload, 'base64url').toString('base64') }),
-        encoding: 'utf8', env: {}, timeout: timeoutMs, maxBuffer: 65536 });
+        timeout: timeoutMs, maxBuffer: 65536 } };
       if (result.error) {
         report.anchor = 'UNSUPPORTED'; report.reason = 'Native Algorand verifier unavailable or resource limit exceeded'; return report;
       }

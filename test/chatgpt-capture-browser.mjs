@@ -64,6 +64,7 @@ try {
   report.contentSHA256 = createHash('sha256').update(await readFile(join(extension, 'content-script.js'))).digest('hex');
   await writeFile(join(extension, 'service-worker.js'), `
     globalThis.__writes=[];globalThis.__gate=null;globalThis.__captureProbes=[];globalThis.__routes=[];globalThis.__proofs=[];globalThis.__policies=[];
+    globalThis.__holdReplies=false;globalThis.__lateReplies=[];
     globalThis.__updateListeners=[];
     const updated=chrome.tabs.onUpdated.addListener.bind(chrome.tabs.onUpdated);
     chrome.tabs.onUpdated.addListener=listener=>{__updateListeners.push(listener);updated(listener)};
@@ -73,7 +74,8 @@ try {
     const add=chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
     chrome.runtime.onMessage.addListener=listener=>add((message,sender,respond)=>{
       if(message.kind==='PAP_CAPTURE'&&__gate&&!__gate.entered)__gate.armed=true;
-      return listener(message,sender,respond);
+      const reply=message.kind==='PAP_CAPTURE'&&__holdReplies?value=>__lateReplies.push(()=>respond(value)):respond;
+      return listener(message,sender,reply);
     });
     const query=chrome.tabs.query.bind(chrome.tabs);
     chrome.tabs.query=async(...args)=>{
@@ -353,6 +355,20 @@ try {
   await delay(250);
   assert.equal(runtime.session.receipts.list().length, 13); assert.equal(interceptedSends, 17);
   report.checks.push('OFF_CUTOFF_ALSO_APPLIES_WITHOUT_DOM_CONTROLS');
+  await setRecording(true);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  await evaluate(workerSession, '__holdReplies=true');
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();
+    requestOnlyPayload.messages[0].content={content_type:'text',parts:['SYNTHETIC_DELAYED_SAVE_REPLY']};requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 14);
+  await wait(() => evaluate(workerSession, '__lateReplies.length===2'));
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Save not confirmed · Check History'`));
+  assert.equal(interceptedSends, 18, 'local retries cannot repeat the provider request');
+  await evaluate(workerSession, '__holdReplies=false;for(const reply of __lateReplies.splice(0))reply()');
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Prompt saved'`));
+  assert.equal(runtime.session.receipts.list().length, 14);
+  report.checks.push('DURABLE_SAVE_REPLY_AFTER_BOTH_LOCAL_DEADLINES_STAYS_UNCONFIRMED_THEN_SAVED');
+  await setRecording(false);
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
   report.syntheticSends = interceptedSends;
   report.result = 'PASS';

@@ -584,7 +584,8 @@ async function captureMessage(message, sender) {
   try {
     post(context, { kind: 'PAP_CAPTURE', requestId, observation, ...(continuing ? { newChatContinuation: true }
       : retired ? { requestContinuation: true } : {}) });
-    return await bounded(result);
+    try { return await bounded(result); }
+    catch { return { state: 'SAVE_UNCONFIRMED' }; }
   } finally { context.captures.delete(requestId); }
 }
 connect();

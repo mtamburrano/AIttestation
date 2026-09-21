@@ -48,6 +48,9 @@ no new admission on the old route.
 
 A save acknowledgement follows the encrypted signed text and observation writes
 and durable engine metadata. Storage uncertainty fails closed and reports a gap.
+A missing local acknowledgement alone reports an unconfirmed save in the page;
+History may already contain the durable evidence. A late valid acknowledgement
+can confirm only its still-current pending event.
 A capture durably accepted before OFF remains evidence. Workers stop taking text
 snapshots once they receive OFF; stale in-flight buffers cannot become new evidence
 after the engine cutoff. A failed preference write also disables capture until
@@ -63,6 +66,14 @@ attempt journal apply to every retry. Restart resumes pending history in a fresh
 bounded batch, including observations whose earlier batch exhausted its retries;
 invalid proof results, missing configuration and missing credentials do not
 automatically retry. No job can replay a provider request.
+
+Native fast and archival proof verification use asynchronous child processes in
+the resident runtime, with the same independent proof validators and report
+checks as offline verification. At most two verifiers run concurrently, with
+empty child environments, bounded output and the existing 10-second fast and
+30-second archival timeouts. Capacity exhaustion leaves fast confirmation
+pending for the existing bounded retry policy. Captures and debug/control
+requests do not wait for these child processes.
 
 Each observation has at most three automatic submission/confirmation calls per
 runtime, rather than a permanent abandonment limit. An authenticated explicit

@@ -26,7 +26,7 @@ signed evidence keeps its bytes and meaning.
 
 Current wire versions: adapter/9, page `2026-09-21.1`, capture/5, sidebar/2,
 resident command/event/state/2, desktop command/event/2, dashboard/2,
-private runtime/2, local-record/2, normal observation/6. Extension version 2.3.0.
+private runtime/2, local-record/2, normal observation/6. Extension version 2.3.1.
 Native bridge/3, portable export formats, signing domains and frozen platform IDs
 are unchanged. Earlier active extension/control contracts reject.
 
