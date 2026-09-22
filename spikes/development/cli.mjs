@@ -113,6 +113,12 @@ export async function command(args) {
     await checkPlatform(rest[1]); return { ready: true, liveCheck: 'NOT_RUN' };
   }
   if (action === 'init' && rest.length === 0) { await initializeAccount(); return { initialized: true }; }
+  if (action === 'signing-preflight' && rest.length === 1) {
+    const { developmentSigningInputs } = await import('./prepare.mjs');
+    const { preflightSigning, ownerAction } = await import('./signing.mjs');
+    try { return await preflightSigning((await developmentSigningInputs(rest[0])).config); }
+    catch { return ownerAction('SIGNING_INPUTS_INVALID'); }
+  }
   if (action === 'prepare' && rest.length === 2) {
     const { prepareDevelopment } = await import('./prepare.mjs'); return prepareDevelopment(...rest);
   }
@@ -121,11 +127,14 @@ export async function command(args) {
   if (action === 'backup' && rest.length === 2) return maintenance(rest[0], { mode: 'backup', outputDirectory: rest[1] });
   if (action === 'restore' && rest.length === 4) return maintenance(rest[0], { mode: 'restore',
     outputDirectory: rest[1], packageFile: rest[2], secretFile: rest[3] });
-  throw Error('USAGE: dev doctor --chrome-app APP|init|prepare CONFIG NEW_BUILD|start BUILD --chrome-app APP --live-chatgpt-testnet|stop|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
+  throw Error('USAGE: dev doctor --chrome-app APP|init|signing-preflight CONFIG|prepare CONFIG NEW_BUILD|start BUILD --chrome-app APP --live-chatgpt-testnet|stop|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  command(process.argv.slice(2)).then(result => console.log(JSON.stringify(result))).catch(error => {
+  command(process.argv.slice(2)).then(result => {
+    console.log(JSON.stringify(result));
+    if (result.status === 'OWNER_ACTION_REQUIRED') process.exitCode = 2;
+  }).catch(error => {
     console.error(developmentCommandFailure(error));
     process.exitCode = 1;
   });

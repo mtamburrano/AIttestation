@@ -138,6 +138,7 @@ In the signing account, place a 0600 JSON config outside the checkout:
   "profile": "pap-private-development/1",
   "teamId": "YOURTEAMID",
   "signingIdentity": "FORTY_HEX_CHARACTERS_FROM_SECURITY_FIND_IDENTITY",
+  "signingKeychain": "/Users/SIGNING_OWNER/Library/Keychains/login.keychain-db",
   "helperProvisioningProfile": "/absolute/private/helper.provisionprofile",
   "sponsor": null
 }
@@ -164,15 +165,73 @@ production configuration.
 npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build
 ```
 
-macOS may display Keychain prompts for `codesign` to use the existing Developer ID
-key. Complete those prompts in the signing account. **Allow** grants one use, so
-the separately signed executables can each prompt again. **Always Allow** grants
-`codesign` continuing access to that particular signing key, including future
-builds; choosing that persistent permission is the signing account owner's
-decision. See [Apple's explanation](https://developer.apple.com/forums/thread/712005).
-The builder does not change Keychain permissions. A signing step has a ten-minute
-deadline; `PRIVATE_PREPARE_SIGNING_TIMED_OUT` leaves an incomplete output. After
-resolving the prompt, rerun preparation with a new output directory.
+### One-time signing authorization
+
+Each nested executable and bundle is signed separately. A Keychain **Allow**
+decision authorizes one private-key use, so the same build can ask repeatedly.
+The key's trusted-application ACL and partition restrictions are separate from
+certificate/profile validity. See [Apple's explanation of signing identities and
+access control](https://developer.apple.com/forums/thread/712005).
+
+In the signing owner's interactive login session, open Keychain Access, select
+the exact Developer ID certificate matching `signingIdentity`, expand it, and
+open **its private key → Get Info → Access Control**. Record the existing settings
+before changing them. Keep **Confirm before allowing access** selected; add only
+`/usr/bin/codesign` to the applications that are always allowed. If selected,
+clear **Ask for Keychain password** for this key. Save using the native macOS
+prompt. Do not select **Allow all applications** or change certificate trust.
+Alternatively, choose **Always Allow** on that exact key's legitimate `codesign`
+prompt during an owner-run signing operation. Enter passwords only into macOS,
+never into this CLI, a config, chat, an environment variable, or a shell argument.
+To revoke this authorization, remove `codesign` from that key's application list
+and restore its previous password-confirmation setting in Keychain Access.
+
+Select the canonical, owner-only Keychain file explicitly as `signingKeychain`;
+the builder never searches other Keychains for a substitute identity. Old config
+files without this field receive `KEYCHAIN_SELECTION_REQUIRED`. In the supported
+state, the signing owner is logged in, the selected file Keychain is unlocked,
+and the exact key permits `codesign` through both its application and partition
+ACLs. Login, reboot, locking, key replacement and toolchain changes require a new
+preflight. No command here unlocks a Keychain or changes its access rules.
+
+```sh
+npm run dev -- signing-preflight /absolute/private/dev-config.json
+```
+
+The result is JSON: `{"status":"READY"}` or
+`{"status":"OWNER_ACTION_REQUIRED","reason":"BOUNDED_REASON"}` (exit status 2).
+Preparation runs the same preflight before source inventory, output creation or
+application compilation. A small temporary native metadata inspector uses
+[`SecKeychainSetUserInteractionAllowed(false)`](https://developer.apple.com/documentation/security/seckeychainsetuserinteractionallowed(_:))
+and reads only the selected identity's access metadata. Locked/missing Keychains,
+missing keys, mandatory password confirmation, missing explicit `codesign` access,
+and absent/unrecognized partition authorization fail closed before the signing
+probe. `PARTITION_AUTHORIZATION_REQUIRED` needs owner inspection of that exact key;
+ordinary builds never invoke `set-key-partition-list`, rewrite ACLs or broaden
+permissions across a Keychain. Do not run a blanket partition-list repair.
+
+After those checks, `/usr/bin/codesign --dryrun` signs a disposable copy of
+`/usr/bin/true` without retaining a signature. `--dryrun` alone does **not** suppress
+Keychain interaction (see `man codesign`); the access inspection must precede it.
+The probe has a 15-second hard deadline. The builder rechecks access before each
+real signature, which has the same deadline. READY describes the current session,
+not a durable authorization token: locking or changing authorization between a
+check and a signature can still cause a prompt or a bounded failure. Do not leave
+an unattended build running across session/Keychain changes. A timed-out build is
+incomplete; after restoring the supported state, use a fresh output directory.
+
+After authorizing, validate with **two consecutive fresh outputs**:
+
+```sh
+npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build-one
+npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build-two
+```
+
+Both must finish without GUI/password prompts, retaining profile matching and
+strict signature verification. These are signing-account-only builds: do not
+install them, switch to the retained test user, or access its vault, Keychain,
+Chrome profile or sponsor ledger. Automated tests use temporary synthetic files
+and in-memory ACLs; they do not establish this owner-specific installed result.
 
 The private launcher reports fixed startup labels such as
 `PRIVATE_DEVELOPMENT_START_FAILED:KEYCHAIN_LOCKED` or

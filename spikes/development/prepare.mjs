@@ -11,15 +11,15 @@ import { codeSignatureCheckArguments } from '../distribution/local.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { assertNoPackagedLeaks } from '../distribution/artifact-files.mjs';
 import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, writeNewJSON } from './environment.mjs';
+import { withSigningAccess } from './signing.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const run = (command, args, options = {}) => {
   try {
-    // Developer ID signing can wait for an interactive Keychain prompt.
-    const timeout = command === '/usr/bin/codesign' && args.includes('--sign') ? 600000 : 120000;
+    const timeout = command === '/usr/bin/codesign' && args.includes('--sign') ? 15000 : 120000;
     return execFileSync(command, args, {
       env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', timeout,
-      maxBuffer: 4 * 1024 * 1024, ...options,
+      maxBuffer: 4 * 1024 * 1024, killSignal: 'SIGKILL', ...options,
     });
   } catch (cause) {
     const step = command === '/usr/bin/codesign' ? (args.includes('--verify') ? 'SIGNATURE_CHECK' : 'SIGNING')
@@ -36,10 +36,11 @@ const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1
   .join('')}</dict></plist>`;
 
 export function validateDevelopmentConfig(config) {
-  if (!config || Object.keys(config).sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
+  if (!config || Object.keys(config).filter(key => key !== 'signingKeychain').sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
       || config.profile !== DEVELOPMENT_PROFILE || !/^[A-Z0-9]{10}$/.test(config.teamId)
       || typeof config.signingIdentity !== 'string' || !/^[A-F0-9]{40}$/.test(config.signingIdentity)
-      || typeof config.helperProvisioningProfile !== 'string' || !config.helperProvisioningProfile.startsWith('/')) {
+      || typeof config.helperProvisioningProfile !== 'string' || !config.helperProvisioningProfile.startsWith('/')
+      || ('signingKeychain' in config && (typeof config.signingKeychain !== 'string' || !config.signingKeychain.startsWith('/')))) {
     throw Error('INVALID_PRIVATE_DEVELOPMENT_CONFIG');
   }
   if (config.sponsor !== null) {
@@ -73,13 +74,22 @@ export function validateDevelopmentSigner(decodedProfile, identity) {
   if (!matches) throw Error('PRIVATE_HELPER_SIGNING_CERTIFICATE_MISMATCH');
 }
 
-export async function prepareDevelopment(configPath, output) {
+export async function developmentSigningInputs(configPath) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('APPLE_SILICON_MAC_REQUIRED');
   const config = validateDevelopmentConfig(await privateJSON(configPath));
   const profileBytes = await readReleaseFile(config.helperProvisioningProfile, { limit: 1024 * 1024 });
   const decoded = run('/usr/bin/security', ['cms', '-D'], { input: profileBytes });
   const { appId, group } = validateHelperProfile(helperProfileFromPlist(decoded), config);
   validateDevelopmentSigner(decoded, config.signingIdentity);
+  return { config, profileBytes, appId, group };
+}
+
+export async function prepareDevelopment(configPath, output) {
+  const inputs = await developmentSigningInputs(configPath);
+  return withSigningAccess(inputs.config, inspect => prepareAuthorizedDevelopment(inputs, output, inspect));
+}
+
+async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group }, output, inspect) {
   const certificate = config.sponsor ? await readReleaseFile(config.sponsor.certificateFile, { limit: 8192 }) : null;
   if (certificate) {
     const cert = new X509Certificate(certificate);
@@ -120,12 +130,16 @@ export async function prepareDevelopment(configPath, output) {
     const html = join(contents, 'Resources/spikes/browser/chatgpt/dashboard.html');
     await writeFile(html, (await readFile(html, 'utf8')).replace('<body>',
       '<body><p role="note">PRIVATE DEVELOPMENT — TestNet only. Use synthetic test content in your dedicated account.</p>'));
-    const sign = (path, identifier, entitlements) => run('/usr/bin/codesign', ['--force', '--sign', config.signingIdentity,
+    const sign = (path, identifier, entitlements) => {
+      const access = inspect();
+      if (access.status !== 'AUTHORIZED') throw Error(`PRIVATE_PREPARE_${access.reason}`);
+      return run('/usr/bin/codesign', ['--force', '--sign', config.signingIdentity, '--keychain', config.signingKeychain,
       '--timestamp=none', '--options', 'runtime', ...(identifier ? ['--identifier', identifier] : []),
       ...(entitlements ? ['--entitlements', entitlements] : []), path]);
+    };
     for (const bundle of [app, join(packageDirectory, 'Recipient/Attestamp Verifier.app')]) {
       await assertNoPackagedLeaks(bundle);
-      process.stderr.write(`Signing ${bundle === app ? 'Attestamp' : 'Attestamp Verifier'}; approve macOS Keychain prompts if shown.\n`);
+      process.stderr.write(`Signing ${bundle === app ? 'Attestamp' : 'Attestamp Verifier'}.\n`);
       for (const file of await fileInventory(bundle)) {
         if (!/Contents\/(MacOS\/|Resources\/spikes\/anchor\/algorand\/bin\/)/.test(file.path) || file.path.includes('/Helpers/')) continue;
         const path = join(bundle, file.path), name = file.path.split('/').at(-1);
