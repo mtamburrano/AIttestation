@@ -45,14 +45,22 @@ export async function stopDevelopment(accountPaths, { requestExit = requestPriva
       if (current.dashboardURL !== entry.dashboardURL) throw Error('PRIVATE_STOP_RUNTIME_CHANGED');
       return true;
     };
-    const result = await requestExit(new URL(entry.dashboardURL));
+    let result;
+    try { result = await requestExit(new URL(entry.dashboardURL)); }
+    catch (error) {
+      if (error?.message !== 'PRIVATE_STOP_EXIT_TIMED_OUT') throw error;
+      // Losing the reply does not cancel engine shutdown. Reconcile only the
+      // original locator; never send another exit request or follow a new one.
+      result = 'TIMED_OUT';
+    }
     if (result === 'ALREADY_EXITED') {
       if (await sameState()) await stopStage('RUNTIME_CLEANUP_FAILED', () => unlink(state));
-    } else if (result === 'ACCEPTED') {
-      // The acknowledgment precedes drain. Never remove registration while
-      // evidence work is pending, or clean up a replacement runtime's locator.
+    } else if (result === 'ACCEPTED' || result === 'TIMED_OUT') {
+      // Neither an acknowledgment nor a timeout proves drain is complete.
+      // Locator removal authorizes cleanup; a replacement still fails closed.
       for (let i = 0; i < 300 && await sameState(); i++) await wait(100);
-      if (await sameState()) throw Error('PRIVATE_STOP_STILL_DRAINING');
+      if (await sameState()) throw Error(result === 'TIMED_OUT'
+        ? 'PRIVATE_STOP_EXIT_TIMED_OUT' : 'PRIVATE_STOP_STILL_DRAINING');
     } else throw Error('PRIVATE_STOP_EXIT_INVALID_RESPONSE');
   }
   if (await present()) throw Error('PRIVATE_STOP_RUNTIME_CHANGED');

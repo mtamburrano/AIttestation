@@ -72,18 +72,101 @@ test('stop cleans up an already-exited direct listener without signalling any PI
   assert.equal(f.requests(), 0);
 });
 
+test('stop reconciles late exit after the request deadline without retrying or premature cleanup', async t => {
+  const f = await fixture(t, 'timeout');
+  let waits = 0;
+  const result = await stopDevelopment(f.paths, { wait: async milliseconds => {
+    assert.equal(milliseconds, 100);
+    for (const path of [f.state, f.launch, f.registration, join(f.paths.control, 'registration.json')]) {
+      assert.equal(await exists(path), true, 'control state is retained until the original runtime exits');
+    }
+    if (++waits === 2) {
+      await unlink(f.state);
+      await new Promise(resolve => f.server.close(resolve));
+    }
+  } });
+  assert.deepEqual(result, { stopped: true, evidence: 'RETAINED', browser: 'CLOSE_TEST_CHROME_MANUALLY' });
+  assert.equal(waits, 2); assert.equal(f.requests(), 1);
+  for (const path of [f.state, f.launch, f.registration, join(f.paths.control, 'registration.json')]) {
+    assert.equal(await exists(path), false);
+  }
+  assert.equal(await readFile(join(f.paths.support, 'retained-evidence'), 'utf8'), 'EVIDENCE_CANARY');
+  assert.equal(await readFile(join(f.paths.chrome, 'Preferences'), 'utf8'), 'BROWSER_CANARY');
+});
+
+test('stop accepts locator disappearance before timeout reconciliation begins', async t => {
+  const f = await fixture(t, 'timeout');
+  let requests = 0;
+  const result = await stopDevelopment(f.paths, {
+    requestExit: async url => {
+      assert.equal(url.href, f.locator.dashboardURL); requests++;
+      await unlink(f.state);
+      throw Error('PRIVATE_STOP_EXIT_TIMED_OUT');
+    },
+    wait: async () => assert.fail('an exited runtime needs no more drain polling'),
+  });
+  assert.equal(result.stopped, true); assert.equal(requests, 1);
+  assert.equal(await exists(f.registration), false); assert.equal(await exists(f.launch), false);
+});
+
+test('timeout reconciliation never requests exit from or cleans up a replacement runtime', async t => {
+  for (const identity of ['bearer', 'endpoint']) for (const replacementAt of [0, 1, 300]) {
+    await t.test(`${identity} replacement at drain poll ${replacementAt}`, async t => {
+      const f = await fixture(t, 'timeout');
+      const controlFiles = [f.state, f.launch, f.registration, join(f.paths.control, 'registration.json')];
+      const bytes = () => Promise.all(controlFiles.map(path => readFile(path, 'utf8')));
+      let replacementBytes, requests = 0, waits = 0;
+      const replace = async () => {
+        const url = new URL(f.locator.dashboardURL);
+        if (identity === 'bearer') url.hash = randomBytes(32).toString('base64url');
+        else url.port = url.port === '12345' ? '12346' : '12345';
+        await writeFile(f.state, JSON.stringify({ ...f.locator, dashboardURL: url.href }));
+        const launch = JSON.parse(await readFile(f.launch, 'utf8'));
+        await writeFile(f.launch, JSON.stringify({ ...launch, chromeApplication: '/synthetic/replacement/Chrome.app' }));
+        const registration = JSON.parse(await readFile(f.registration, 'utf8'));
+        const manifest = JSON.stringify({ ...registration, path: join(f.root, 'replacement-browser-host') });
+        await writeFile(f.registration, manifest);
+        await writeFile(join(f.paths.control, 'registration.json'), manifest);
+        replacementBytes = await bytes();
+      };
+      await assert.rejects(stopDevelopment(f.paths, {
+        requestExit: async url => {
+          assert.equal(url.href, f.locator.dashboardURL); requests++;
+          if (replacementAt === 0) await replace();
+          throw Error('PRIVATE_STOP_EXIT_TIMED_OUT');
+        },
+        wait: async () => { if (++waits === replacementAt) await replace(); },
+      }), error => {
+        assert.equal(developmentCommandFailure(error), 'PRIVATE_STOP_RUNTIME_CHANGED'); return true;
+      });
+      assert.equal(requests, 1); assert.equal(waits, replacementAt);
+      assert.deepEqual(await bytes(), replacementBytes);
+      assert.equal(await readFile(join(f.paths.support, 'retained-evidence'), 'utf8'), 'EVIDENCE_CANARY');
+      assert.equal(await readFile(join(f.paths.chrome, 'Preferences'), 'utf8'), 'BROWSER_CANARY');
+    });
+  }
+});
+
 test('request failures and refusal to drain retain control state and emit bounded labels', async t => {
   for (const [behavior, label] of [['reset', 'EXIT_CONNECTION_FAILED'], ['reject', 'EXIT_REJECTED'],
     ['redirect', 'EXIT_REJECTED'], ['oversize', 'EXIT_INVALID_RESPONSE'], ['invalid', 'EXIT_INVALID_RESPONSE'],
     ['timeout', 'EXIT_TIMED_OUT'], ['no-drain', 'STILL_DRAINING'], ['replacement', 'RUNTIME_CHANGED']]) {
     await t.test(behavior, async t => {
       const f = await fixture(t, behavior);
-      await assert.rejects(stopDevelopment(f.paths, { wait: async () => {} }), error => {
+      const controlFiles = [f.state, f.launch, f.registration, join(f.paths.control, 'registration.json')];
+      const bytes = () => Promise.all(controlFiles.map(path => readFile(path, 'utf8')));
+      const before = await bytes(); let waitedMs = 0;
+      await assert.rejects(stopDevelopment(f.paths, { wait: async milliseconds => { waitedMs += milliseconds; } }), error => {
         assert.equal(error.message, `PRIVATE_STOP_${label}`);
         assert.equal(developmentCommandFailure(error), `PRIVATE_STOP_${label}`); return true;
       });
       assert.equal(await exists(f.state), true); assert.equal(await exists(f.registration), true);
       assert.equal(await exists(f.launch), true);
+      assert.equal(f.requests(), 1);
+      if (behavior !== 'replacement') {
+        assert.deepEqual(await bytes(), before);
+        assert.equal(waitedMs, ['timeout', 'no-drain'].includes(behavior) ? 30000 : 0);
+      }
     });
   }
 });

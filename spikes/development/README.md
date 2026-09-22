@@ -470,9 +470,15 @@ an isolated proxy-reset fixture reproduces the old generic failure with an other
 valid runtime locator. This establishes a request-path failure mode, not the exact
 environmental cause of an earlier installed failure.
 
-After acknowledgment, stop waits up to 30 seconds for the engine to remove its
-locator after drain. A replacement locator prevents cleanup. Only a direct
-connection refusal permits already-exited cleanup; timeouts, resets, denied
+After acknowledgment or a request timeout, stop polls for up to 30 seconds for the
+engine to remove its locator after drain. It checks only the original runtime's
+exact URL and bearer and never retries the exit request. Locator disappearance
+allows owned cleanup, including when shutdown finishes after the request deadline.
+A changed endpoint or bearer fails with `PRIVATE_STOP_RUNTIME_CHANGED` and leaves
+the replacement untouched. An unchanged locator at the end of the window retains
+control state and reports `PRIVATE_STOP_EXIT_TIMED_OUT` after a request timeout,
+or `PRIVATE_STOP_STILL_DRAINING` after acknowledgment. Only a direct connection
+refusal permits removal of a still-present, unchanged locator. Resets, denied
 networking and rejected replies leave control state in place. File ownership,
 permissions, hard-link/symlink, canonical-path and runtime-schema guards stay active.
 
@@ -481,7 +487,8 @@ permissions, hard-link/symlink, canonical-path and runtime-schema guards stay ac
 | `PRIVATE_STOP_ACCOUNT_INVALID` | Inspect the dedicated account's directory and account-marker guards. |
 | `PRIVATE_STOP_RUNTIME_UNREADABLE` / `PRIVATE_STOP_RUNTIME_INVALID` | Inspect locator file safety or its versioned shape; do not rewrite it to bypass checks. |
 | `PRIVATE_STOP_EXIT_NETWORK_DENIED` | Check the CLI's local-network execution permissions. |
-| `PRIVATE_STOP_EXIT_CONNECTION_FAILED` / `PRIVATE_STOP_EXIT_TIMED_OUT` | Inspect runtime availability; cleanup has not been authorized. |
+| `PRIVATE_STOP_EXIT_CONNECTION_FAILED` | Inspect runtime availability; cleanup has not been authorized. |
+| `PRIVATE_STOP_EXIT_TIMED_OUT` | The original locator remained after the request deadline and drain window; inspect runtime availability before retrying. |
 | `PRIVATE_STOP_EXIT_REJECTED` / `PRIVATE_STOP_EXIT_INVALID_RESPONSE` | Inspect endpoint/authentication mismatch; do not remove state manually. |
 | `PRIVATE_STOP_STILL_DRAINING` / `PRIVATE_STOP_RUNTIME_CHANGED` | Let pending work finish, or inspect the replacement runtime before retrying. |
 | `PRIVATE_STOP_REGISTRATION_CLEANUP_FAILED` | Inspect the ownership journal and installed registration for conflict or unsafe files. |
