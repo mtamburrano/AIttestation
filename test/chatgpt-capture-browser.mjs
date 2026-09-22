@@ -420,7 +420,7 @@ try {
   await wait(() => evaluate(page, 'steeringResponse'));
   assert.equal(runtime.session.receipts.list().length, 15); assert.equal(interceptedSends, 19);
   report.checks.push('OWNER_DERIVED_STEERING_SEND_SAVES_EXACTLY_BEFORE_RESPONSE_WITHOUT_ADVISORY_GAP');
-  const reloadExtension = async () => {
+  const reloadExtension = async ({ expectPairing = true } = {}) => {
     clearInterval(pump); await wait(() => !pumping);
     native.destroy(); input.destroy(); output.destroy(); incoming.length = 0;
     await wait(() => !runtime.browserState());
@@ -435,7 +435,8 @@ try {
     workerSession = (await call('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
     await wait(() => evaluate(workerSession, 'typeof __native !== "undefined"'));
     input = new PassThrough(); output = new PassThrough(); decoder = new NativeFrameDecoder();
-    await pairWorker(); await wait(() => runtime.browserState());
+    await pairWorker();
+    if (expectPairing) await wait(() => runtime.browserState());
     assert.ok((await evaluate(workerSession, '__installReasons')).includes('update'));
   };
   const lifecycleDocument = await evaluate(page, 'documentToken');
@@ -497,6 +498,55 @@ try {
   assert.equal(interceptedSends, lifecycleSends + 4);
   report.checks.push('OFF_SURVIVES_RELOAD_AND_LATER_ON_CAPTURES_WITHOUT_REFRESH');
   report.checks.push('CHANGED_OBSERVER_BUILD_RETIRES_PRIOR_WRAPPER_WITHOUT_DUPLICATE_CAPTURE');
+
+  const extraTabs = [];
+  for (let index = 0; index < 32; index++) {
+    const extra = await call('Target.createTarget', { url: 'about:blank' });
+    const session = (await call('Target.attachToTarget', { targetId: extra.targetId, flatten: true })).sessionId;
+    await call('Fetch.enable', { patterns: [{ urlPattern: '*' }] }, session);
+    await call('Page.navigate', { url: 'https://chatgpt.com/' }, session);
+    await wait(() => evaluate(session, 'typeof documentToken === "string"'));
+    extraTabs.push({ targetId: extra.targetId, session });
+  }
+  const recoveringPages = [page, ...extraTabs.map(tab => tab.session)], bulkSends = interceptedSends;
+  assert.equal(await evaluate(workerSession, `chrome.tabs.query({url:'https://chatgpt.com/*'}).then(tabs=>tabs.length)`), 33);
+  for (const session of recoveringPages) await evaluate(session, `
+    globalThis.bulkDocument=documentToken;globalThis.bulkFetch=fetch;
+    globalThis.bulkOrphan=document.createElement('div');bulkOrphan.id='attestamp-recording-status';
+    bulkOrphan.textContent='Attestamp · ON';document.body.append(bulkOrphan)`);
+  // The existing capture inventory contract remains capped at 32; UI recovery
+  // must still restore every document and show its current unavailable state.
+  await reloadExtension({ expectPairing: false });
+  await evaluate(workerSession, 'recoverExistingTabs()');
+  for (const session of recoveringPages) {
+    await wait(() => evaluate(session, `document.querySelectorAll('#attestamp-recording-status').length===1
+      &&document.getElementById('attestamp-recording-status').textContent==='Attestamp · Recording unavailable'
+      &&!bulkOrphan.isConnected`));
+    assert.equal(await evaluate(session, 'documentToken===bulkDocument&&fetch===bulkFetch'), true);
+  }
+  assert.equal(runtime.engine.state().recording, true);
+  assert.equal(runtime.session.receipts.list().length, 18); assert.equal(interceptedSends, bulkSends);
+  report.checks.push('ALL_33_OPEN_TABS_REPLACE_STALE_INDICATORS_AFTER_UPDATE_WITHOUT_REFRESH_OR_CONSENT_CHANGE');
+  await evaluate(workerSession, 'Promise.all([recoverExistingTabs(),recoverExistingTabs(),recoverExistingTabs()])');
+  for (const session of recoveringPages) assert.equal(await evaluate(session, `fetch===bulkFetch
+    &&documentToken===bulkDocument&&document.querySelectorAll('#attestamp-recording-status').length===1`), true);
+  await setRecording(false);
+  await evaluate(workerSession, 'recoverExistingTabs()');
+  assert.equal(runtime.engine.state().recording, false);
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`); await delay(150);
+  assert.equal(runtime.session.receipts.list().length, 18); assert.equal(interceptedSends, bulkSends + 1);
+  for (const extra of extraTabs) await call('Target.closeTarget', { targetId: extra.targetId });
+  await wait(() => runtime.adapter.scopes().some(source => source.tabId === tabId && source.eligibility === 'ELIGIBLE'));
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.hidden===true`));
+  assert.equal(runtime.engine.state().recording, false);
+  await setRecording(true);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 19);
+  assert.equal(interceptedSends, bulkSends + 2);
+  assert.equal(await evaluate(page, `fetch===bulkFetch&&documentToken===bulkDocument
+    &&document.querySelectorAll('#attestamp-recording-status').length===1`), true);
+  report.checks.push('REPEATED_33_TAB_RECOVERY_PRESERVES_OFF_AND_NEXT_AUTHORIZED_SEND_SAVES_ONCE');
   await setRecording(false);
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
   report.syntheticSends = interceptedSends;

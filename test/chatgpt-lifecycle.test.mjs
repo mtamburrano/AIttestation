@@ -23,11 +23,67 @@ test('startup and overlapping update recovery inject only fixed scripts into sup
   }
 });
 
-for (const failure of ['revoked initially', 'revoked after relay', 'too many tabs', 'document disappeared', 'wrong frame', 'missing document']) {
+for (const count of [33, 65]) {
+  test(`recovery reaches all ${count} supported tabs with bounded concurrency and overlapping update events`, async t => {
+    const calls = [], tabs = Array.from({ length: count }, (_, index) => testTab({ id: 17 + index }));
+    let active = 0, peak = 0, release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const f = await workerFixture({ query: async () => tabs,
+      executeScript: async input => {
+        calls.push(structuredClone(input)); active++; peak = Math.max(peak, active);
+        try {
+          await gate; await turn();
+          return [{ frameId: 0, documentId: `document-${input.target.tabId}` }];
+        } finally { active--; }
+      } });
+    t.after(() => { release(); f.close(); });
+    f.chrome.runtime.onInstalled.emit({ reason: 'update' });
+    await turn(); await turn();
+    assert.ok(calls.length > 0, 'recovery must start even above the capture inventory limit');
+    assert.ok(calls.length <= 8, 'only a bounded batch may wait on Chrome at once');
+    release();
+    await until(() => calls.length === count * 2 && active === 0);
+    assert.ok(peak <= 8);
+    for (const tab of tabs) assert.deepEqual(calls.filter(value => value.target.tabId === tab.id), [
+      { target: { tabId: tab.id, frameIds: [0] }, world: 'ISOLATED', files: ['content-script.js'], injectImmediately: true },
+      { target: { tabId: tab.id, documentIds: [`document-${tab.id}`] }, world: 'MAIN', files: ['fetch-observer.js'], injectImmediately: true },
+    ]);
+  });
+}
+
+test('a disappeared document does not prevent recovery of later batches', async t => {
+  const calls = [], tabs = Array.from({ length: 33 }, (_, index) => testTab({ id: 17 + index }));
+  const f = await workerFixture({ query: async () => tabs,
+    executeScript: async input => {
+      calls.push(structuredClone(input));
+      if (input.target.tabId === 17) throw Error('SYNTHETIC_DOCUMENT_GONE');
+      return [{ frameId: 0, documentId: `document-${input.target.tabId}` }];
+    } });
+  t.after(() => f.close());
+  await until(() => calls.length === 65);
+  assert.deepEqual(calls.filter(value => value.world === 'ISOLATED').map(value => value.target.tabId), tabs.map(tab => tab.id));
+  assert.deepEqual(calls.filter(value => value.world === 'MAIN').map(value => value.target.tabId), tabs.slice(1).map(tab => tab.id));
+});
+
+test('revoking permission during a batch prevents further batches and MAIN injection', async t => {
+  const calls = []; let granted = true;
+  const f = await workerFixture({ permission: async () => granted,
+    query: async () => Array.from({ length: 33 }, (_, index) => testTab({ id: 17 + index })),
+    executeScript: async input => {
+      calls.push(structuredClone(input)); granted = false; await turn();
+      return [{ frameId: 0, documentId: `document-${input.target.tabId}` }];
+    } });
+  t.after(() => f.close());
+  for (let i = 0; i < 10; i++) await turn();
+  assert.ok(calls.length > 0 && calls.length <= 8);
+  assert.ok(calls.every(value => value.world === 'ISOLATED'));
+});
+
+for (const failure of ['revoked initially', 'revoked after relay', 'document disappeared', 'wrong frame', 'missing document']) {
   test(`recovery fails closed when ${failure}`, async t => {
     const calls = []; let granted = failure !== 'revoked initially';
     const f = await workerFixture({ permission: async () => granted,
-      query: async () => Array.from({ length: failure === 'too many tabs' ? 33 : 1 }, (_, index) => testTab({ id: 17 + index })),
+      query: async () => [testTab()],
       executeScript: async input => {
         calls.push(structuredClone(input));
         if (failure === 'document disappeared') throw Error('SYNTHETIC_DOCUMENT_GONE');
@@ -36,7 +92,7 @@ for (const failure of ['revoked initially', 'revoked after relay', 'too many tab
       } });
     t.after(() => f.close());
     for (let i = 0; i < 5; i++) await turn();
-    assert.equal(calls.length, ['revoked initially', 'too many tabs'].includes(failure) ? 0 : 1);
+    assert.equal(calls.length, failure === 'revoked initially' ? 0 : 1);
     assert.ok(calls.every(value => value.world === 'ISOLATED'));
   });
 }

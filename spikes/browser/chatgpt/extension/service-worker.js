@@ -614,19 +614,25 @@ function recoverExistingTabs() {
   recovery = (async () => {
     if (await permissionState() !== 'granted') return;
     const tabs = await bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' }));
-    if (tabs.length > 32) return;
-    await Promise.allSettled(tabs.filter(tab => Number.isSafeInteger(tab.id) && tab.id >= 0
-      && !tab.incognito && !tab.discarded && supportedURL(tab.url)).map(async tab => {
-      // Pin the MAIN injection to the document Chrome actually recovered, so a
-      // concurrent navigation cannot join two different document instances.
-      const results = await bounded(chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] },
-        world: 'ISOLATED', files: ['content-script.js'], injectImmediately: true }));
-      if (results?.length !== 1 || results[0].frameId !== 0
-          || typeof results[0].documentId !== 'string' || !results[0].documentId.length
-          || results[0].documentId.length > 128 || await permissionState() !== 'granted') return;
-      await bounded(chrome.scripting.executeScript({ target: { tabId: tab.id, documentIds: [results[0].documentId] },
-        world: 'MAIN', files: ['fetch-observer.js'], injectImmediately: true }));
-    }));
+    const eligible = tabs.filter(tab => Number.isSafeInteger(tab.id) && tab.id >= 0
+      && !tab.incognito && !tab.discarded && supportedURL(tab.url));
+    // Bound concurrent recovery, not the number of documents restored. Even
+    // above the capture inventory limit, every tab needs current, truthful UI.
+    const batchSize = 8;
+    for (let offset = 0; offset < eligible.length; offset += batchSize) {
+      if (await permissionState() !== 'granted') return;
+      await Promise.allSettled(eligible.slice(offset, offset + batchSize).map(async tab => {
+        // Pin the MAIN injection to the document Chrome actually recovered, so a
+        // concurrent navigation cannot join two different document instances.
+        const results = await bounded(chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] },
+          world: 'ISOLATED', files: ['content-script.js'], injectImmediately: true }));
+        if (results?.length !== 1 || results[0].frameId !== 0
+            || typeof results[0].documentId !== 'string' || !results[0].documentId.length
+            || results[0].documentId.length > 128 || await permissionState() !== 'granted') return;
+        await bounded(chrome.scripting.executeScript({ target: { tabId: tab.id, documentIds: [results[0].documentId] },
+          world: 'MAIN', files: ['fetch-observer.js'], injectImmediately: true }));
+      }));
+    }
   })().catch(() => {}).finally(() => { recovery = null; publishState(); });
   return recovery;
 }

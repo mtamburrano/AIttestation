@@ -57,6 +57,9 @@ and never reloads the page. Isolated relay ownership removes orphaned indicators
 the MAIN observer is reused on repeated recovery. The new relay channel retires
 older observer bindings without rearming them. Recording still requires a fresh
 authenticated policy from the engine; recovery does not change ON/OFF preference.
+Recovery processes every eligible tab in batches of eight, including when the
+open-tab count exceeds the capture inventory limit. In that case, current tabs
+show recording unavailable until the inventory returns within its limit.
 The companion app must recognize `scripting` in the extension's permission set;
 older app builds reject the updated extension until the app is updated as well.
 
