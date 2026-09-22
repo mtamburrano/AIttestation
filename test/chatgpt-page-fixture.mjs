@@ -100,7 +100,7 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     addEventListener: (name, callback) => { (windowEvents[name] ??= []).push(callback); },
     removeEventListener: (name, callback) => { windowEvents[name] = (windowEvents[name] ?? []).filter(value => value !== callback); },
     MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} },
-    chrome: { runtime: { id: CHATGPT_EXTENSION_ID, getManifest: () => ({ version: '2.3.4' }),
+    chrome: { runtime: { id: CHATGPT_EXTENSION_ID, getManifest: () => ({ version: '2.3.5' }),
       onMessage: { addListener: callback => { listener = callback; }, removeListener: callback => { if (callback === listener) listener = null; } },
       sendMessage: async message => {
         if (message.kind === 'PAP_SURFACE_CHANGED') { notifications.push(structuredClone(message)); notify(message, page); return; }

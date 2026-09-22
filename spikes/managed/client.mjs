@@ -45,17 +45,17 @@ function boundedRequest(origin, path, token, body) {
 
 /** Account credentials live separately from evidence and never enter exports. */
 export class ManagedAnchoringClient {
-  #origin; #keyStore; #account; #request;
+  #origin; #keyStore; #account; #request; #generation = 0; #credentialWrites = Promise.resolve();
   constructor({ origin, keyStore, request = boundedRequest, allowLoopbackForTests = false }) {
     this.#origin = managedOrigin(origin, allowLoopbackForTests);
     if (!keyStore?.get || !keyStore?.set || !keyStore?.delete) throw Error('Explicit managed credential store required');
     this.#keyStore = keyStore; this.#request = request;
     this.#account = `managed:anchoring:${b64(hash(this.#origin))}`;
   }
-  #token() {
+  async #token() {
     let bytes;
     try {
-      bytes = this.#keyStore.get(this.#account);
+      bytes = await (this.#keyStore.getAsync ?? this.#keyStore.get).call(this.#keyStore, this.#account);
       const token = bytes?.toString('utf8');
       if (!TOKEN_PATTERN.test(token ?? '')) throw managedError('ACCOUNT_REQUIRED');
       return token;
@@ -74,19 +74,42 @@ export class ManagedAnchoringClient {
   }
   async connect(accessCode) {
     if (!TOKEN_PATTERN.test(accessCode ?? '')) throw managedError('ACCOUNT_REQUIRED');
+    const generation = ++this.#generation;
     const status = this.#validateAccount(await this.#request(this.#origin, '/v1/account', accessCode));
     const bytes = Buffer.from(accessCode);
-    try { this.#keyStore.set(this.#account, bytes); } finally { bytes.fill(0); }
+    try { await this.#writeCredentials(async () => {
+      if (generation !== this.#generation) throw managedError('ACCOUNT_REQUIRED');
+      await (this.#keyStore.setAsync ?? this.#keyStore.set).call(this.#keyStore, this.#account, bytes);
+    }); }
+    finally { bytes.fill(0); }
+    if (generation !== this.#generation) throw managedError('ACCOUNT_REQUIRED');
     return status;
   }
-  disconnect() { this.#keyStore.delete(this.#account); return { state: 'ACCOUNT_REQUIRED' }; }
+  #writeCredentials(operation) {
+    const next = this.#credentialWrites.then(operation);
+    this.#credentialWrites = next.catch(() => {}); return next;
+  }
+  async disconnect() {
+    this.#generation++;
+    await this.#writeCredentials(() => (this.#keyStore.deleteAsync ?? this.#keyStore.delete).call(this.#keyStore, this.#account));
+    return { state: 'ACCOUNT_REQUIRED' };
+  }
   async status() {
-    try { return this.#validateAccount(await this.#request(this.#origin, '/v1/account', this.#token())); }
+    const generation = this.#generation;
+    try {
+      const token = await this.#token();
+      if (generation !== this.#generation) throw managedError('ACCOUNT_REQUIRED');
+      const status = this.#validateAccount(await this.#request(this.#origin, '/v1/account', token));
+      if (generation !== this.#generation) throw managedError('ACCOUNT_REQUIRED');
+      return status;
+    }
     catch (error) { return { state: managedError(error.code).code }; }
   }
   async submit(payload, { beforeSubmit = () => {} } = {}) {
     const body = validateAnchorRequest({ profile: MANAGED_PROFILE, payload });
-    const token = this.#token();
+    const generation = this.#generation;
+    const token = await this.#token();
+    if (generation !== this.#generation) throw managedError('ACCOUNT_REQUIRED');
     // Local credential failure is not an external attempt. The caller durably
     // reserves its attempt here, before a request can have an ambiguous outcome.
     beforeSubmit();

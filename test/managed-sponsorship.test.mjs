@@ -190,7 +190,7 @@ test('HTTP client sends only blinded payload and scoped credential; no token is 
   f.service.setSubscription(f.account.accountId, f.now);
   assert.equal((await relaunched.status()).state, 'UNPAID');
   await assert.rejects(relaunched.submit(request().payload), code('UNPAID'));
-  relaunched.disconnect(); assert.equal(keyStore.accounts().length, 0);
+  await relaunched.disconnect(); assert.equal(keyStore.accounts().length, 0);
   assert.equal((await client.status()).state, 'ACCOUNT_REQUIRED');
 });
 

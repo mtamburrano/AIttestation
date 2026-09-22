@@ -73,12 +73,12 @@ test('conversation -> New Chat recovers sidebar/page source state with a stale c
   assert.equal(f.sources[0].destination, 'new-chat');
 });
 
-test('equal-text human Sends stay distinct; retries of one delivery stay idempotent', async t => {
+test('equal-text human Sends stay distinct; a lost reply reconciles without another payload delivery', async t => {
   const f = await fixture(t, { dropAck: true }); await f.recording(true); f.send(exact);
   await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
-  assert.equal(f.deliveries.length, 2); assert.equal(f.deliveries[0].observation.eventId, f.deliveries[1].observation.eventId);
+  assert.equal(f.deliveries.length, 1);
   f.send(exact); await until(() => saved(f).length === 2); await f.runtime.engine.drain();
-  assert.notEqual(f.deliveries[0].observation.eventId, f.deliveries[2].observation.eventId);
+  assert.notEqual(f.deliveries[0].observation.eventId, f.deliveries[1].observation.eventId);
   assert.equal(f.anchorCalls, 2); assert.equal(f.userSends, 2); assert.equal(f.prevention, 0);
 });
 
@@ -120,7 +120,7 @@ test('overlapping tabs and reversed acknowledgements preserve source/event attri
     { acknowledgement: { ...acknowledgement.observation.acknowledgement, conversationId: 'foreign' } }]) {
     const requestId = f.replay({ ...acknowledgement, observation: { ...acknowledgement.observation, ...change } });
     await until(() => f.results.some(v => v.requestId === requestId));
-    assert.equal(f.results.find(v => v.requestId === requestId).result.state, 'RECORDING_UNAVAILABLE');
+    assert.equal(f.results.find(v => v.requestId === requestId).result.state, 'CAPTURE_REJECTED');
   }
   assert.equal(saved(f).length, 2);
 });
@@ -132,7 +132,7 @@ test('OFF/ON and permission loss reject stale observations and acknowledgements;
   const old = f.deliveries[0]; await f.recording(false); await f.recording(true);
   replies[0](handoff()); await tick(); assert.equal(f.runtime.session.status().versions[0].acknowledgement, undefined);
   const requestId = f.replay(old); await until(() => f.results.some(v => v.requestId === requestId));
-  assert.equal(f.results.find(v => v.requestId === requestId).result.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(f.results.find(v => v.requestId === requestId).result.state, 'CAPTURE_REJECTED');
   f.revokePermission(); await until(() => !f.runtime.adapter.scopes().length); f.send('REVOKED'); await tick();
   assert.equal(saved(f).length, 1);
 });
@@ -183,7 +183,7 @@ for (const schedule of ['before worker receipt', 'during browser checks', 'Chrom
     assert.equal(saved(f).length, 1);
     f.replay({ ...original, observation: { ...original.observation, eventId: crypto.randomUUID() } });
     await until(() => f.results.length > before + 1);
-    assert.equal(f.results.at(-1).result.state, 'RECORDING_UNAVAILABLE');
+    assert.equal(f.results.at(-1).result.state, 'CAPTURE_REJECTED');
   });
 }
 
@@ -285,7 +285,7 @@ test('Chrome creation-URL metadata is authenticated for polling while the first 
   const old = f.deliveries[0];
   await f.recording(false); assert.equal(f.pages.get(17).feedback, ''); await f.recording(true);
   const requestId = f.replay(old); await until(() => f.results.some(value => value.requestId === requestId));
-  assert.equal(f.results.find(value => value.requestId === requestId).result.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(f.results.find(value => value.requestId === requestId).result.state, 'CAPTURE_REJECTED');
   f.send('FRESH_CONSENT'); await until(() => saved(f).length === 3);
 });
 
@@ -341,7 +341,13 @@ for (const stage of ['text', 'descriptor', 'metadata']) test(`interruption at ${
     return capture(...args);
   };
   f.send(exact); await until(() => f.results.length > 0);
-  assert.ok(f.results.every(v => v.result.state !== 'PROMPT_SAVED'));
-  assert.doesNotMatch(f.pages.get(17).feedback, /Prompt saved/);
+  if (stage === 'metadata') {
+    assert.equal(f.results[0].result.state, 'PROMPT_SAVED');
+    assert.equal(saved(f).length, 1);
+    assert.equal(f.runtime.engine.state().available, false, 'metadata failure still revokes new capture');
+  } else {
+    assert.ok(f.results.every(v => v.result.state !== 'PROMPT_SAVED'));
+    assert.doesNotMatch(f.pages.get(17).feedback, /Prompt saved/);
+  }
   assert.equal(f.pages.get(17).requests.length, 1); assert.equal(f.prevention, 0);
 });

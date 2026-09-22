@@ -20,6 +20,7 @@ function goodRecord(record, bytes) {
 
 export class Vault {
   #db; #vmk; #signing; #fault; #closed = false; #baselines = new WeakMap();
+  #indexCache = null; #revision = null;
   constructor(directory, vmk, signing = identity(), { create = false, fault = () => {}, vaultId = null,
     readerVersion = CURRENT_SCHEMA } = {}) {
     if (!Buffer.isBuffer(vmk) || vmk.length !== 32) fail('UNRECOVERABLE', 'A separate 32-byte vault key is required');
@@ -82,8 +83,9 @@ export class Vault {
     const usage = this.#db.prepare('SELECT counter FROM usage WHERE key_hash=?').get(meta.key_hash);
     if (!usage || !Number.isSafeInteger(usage.counter) || usage.counter < 1 || usage.counter > MAX_WRAPS) fail('UNRECOVERABLE', 'Nonce reservation state missing');
   }
-  get vaultId() { return this.#meta().vault_id; }
-  get keyId() { return this.#meta().key_hash; }
+  get vaultId() { return this.#db.prepare('SELECT vault_id FROM meta WHERE id=1').get().vault_id; }
+  get keyId() { return this.#db.prepare('SELECT key_hash FROM meta WHERE id=1').get().key_hash; }
+  get revision() { this.#readIndex(); return this.#revision; }
   get signingPublicKey() { return this.#signing ? this.#signing.publicKey.export({ format: 'jwk' }).x : null; }
   schemaInfo() {
     if (!this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vault_schema'").get()) {
@@ -149,7 +151,16 @@ export class Vault {
   #unbox(box, role, objectId, packageId = null, snapshotId = null, key = this.#vmk, max = LIMITS.total) {
     return unbox(box, key, this.vaultId, role, objectId, packageId, snapshotId, max);
   }
-  #readIndex() {
+  #readIndex({ mutable = false, refresh = false } = {}) {
+    if (this.#closed) fail('UNRECOVERABLE', 'Vault closed');
+    const dataVersion = this.#db.prepare('PRAGMA data_version').get().data_version;
+    // Cache only this connection's authenticated snapshot. Other connections'
+    // commits invalidate it even when only a ciphertext or nonce counter changed.
+    // Writers receive detached copies and retain the original conflict baseline.
+    if (!refresh && this.#indexCache?.dataVersion === dataVersion) {
+      const state = mutable ? structuredClone(this.#indexCache.state) : this.#indexCache.state;
+      this.#baselines.set(state, this.#indexCache.baseline); return state;
+    }
     this.#assertKey();
     const baseline = Buffer.from(this.#meta().envelope);
     const envelope = parseCanonical(baseline);
@@ -157,8 +168,10 @@ export class Vault {
     if (unb64(envelope.wrappedKey.nonce, 12).readBigUInt64BE(4) > BigInt(counter)) fail('UNRECOVERABLE', 'Nonce reservation rollback');
     const state = parseCanonical(this.#unbox(envelope, 'index', 'index', null, null, this.#vmk, LIMITS.manifest), LIMITS.manifest);
     validateIndex(state);
-    this.#baselines.set(state, baseline);
-    return state;
+    this.#indexCache = { dataVersion, state, baseline }; this.#revision = Symbol('authenticated-vault-snapshot');
+    const result = mutable ? structuredClone(state) : state;
+    this.#baselines.set(result, baseline);
+    return result;
   }
   #commit(index, additions = [], replacementKey = null) {
     const bytes = wire(index); if (bytes.length > LIMITS.manifest) fail('LIMIT_EXCEEDED', 'Index manifest');
@@ -174,10 +187,11 @@ export class Vault {
       this.#db.exec('COMMIT');
       this.#fault('after-commit');
     } catch (e) { if (this.#db.isTransaction) this.#db.exec('ROLLBACK'); throw e; }
+    finally { this.#indexCache = null; }
   }
   capture(input, options = {}) {
     const bytes = Buffer.from(input); if (bytes.length > LIMITS.object) fail('LIMIT_EXCEEDED', 'Object size');
-    const index = this.#readIndex();
+    const index = this.#readIndex({ mutable: true });
     if (index.records.length >= LIMITS.objects) fail('LIMIT_EXCEEDED', 'Record count');
     const digest = objectDigest(bytes), additions = [];
     if (index.objects.some(o => o.digest === digest)) {
@@ -205,7 +219,7 @@ export class Vault {
     return bytes;
   }
   verifyAll() {
-    const index = this.#readIndex();
+    const index = this.#readIndex({ refresh: true });
     for (const record of index.records) goodRecord(record, this.read(record.manifest.evidence[0].objectDigest));
     return { snapshot: 'COMPLETE', latestState: 'NOT_PROVEN', count: index.records.length };
   }
@@ -277,7 +291,7 @@ export class Vault {
       wrappedVMK, encryptedManifest, blobs }) };
   }
   importRecovered(recovered) {
-    const index = this.#readIndex();
+    const index = this.#readIndex({ mutable: true });
     if (index.records.length) fail('INVALID', 'Restore requires empty destination');
     const additions = [];
     for (const record of recovered.records) goodRecord(record, recovered.objects.get(record.manifest.evidence[0].objectDigest));
@@ -289,7 +303,7 @@ export class Vault {
     index.records = structuredClone(recovered.records); index.checkpoint = recovered.checkpoint;
     validateIndex(index); this.#commit(index, additions);
   }
-  close() { if (!this.#closed) { this.#db.close(); this.#vmk.fill(0); this.#signing = null; this.#closed = true; } }
+  close() { if (!this.#closed) { this.#db.close(); this.#vmk.fill(0); this.#signing = null; this.#indexCache = null; this.#closed = true; } }
 }
 
 export function readVaultHeader(directory) {

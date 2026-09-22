@@ -179,16 +179,16 @@ bytes on the provider branch: these are bounded inspection limits, not a claim
 of zero overhead or control over the browser's chunk allocation.
 There are at most eight active MAIN observations and sixteen isolated pending
 requests per document. A missing request message expires after five seconds;
-accepted relay records expire after 6.5 seconds. New-chat authority expires after
-five seconds. Native deliveries are capped at 32. The page uses a 2.5-second
-local-delivery deadline and at most one IPC retry; the worker deadline is two
-seconds. This retries delivery of an observation, never the provider request.
-Exhausting a response deadline reports **Save not confirmed · Check History**,
-because the local write may already be durable. A correctly correlated late
-success may confirm the original event within its existing 6.5-second lifetime;
-it cannot revive OFF consent or replace a newer event's feedback. Explicit
-rejection and extraction failures remain recording gaps. Deadlines and retry
-counts are unchanged.
+expiry reports uncertainty, not a save failure. New-chat capture authority still
+expires after five seconds. Native deliveries are capped at 32. The page uses a
+2.5-second response deadline and dispatches each observation only once; the worker
+deadline is two seconds. A deadline reports **Save confirmation pending · Check
+History** and starts read-only reconciliation by immutable event ID. The worker
+binds that lookup to the original authenticated source and exact document. A
+late success can confirm the event after the old 6.5-second expiry without
+granting capture authority, reviving OFF consent or replacing newer feedback.
+Pending views are count-bounded, and eviction never establishes a gap. Only
+proven local rejection and explicit extraction failures establish recording gaps.
 Policy polls run each second. The three-second observer readiness indicator is
 advisory and does not expire an otherwise valid request's capture binding.
 
@@ -199,7 +199,10 @@ Reopen rebuilds the index, including historical transport observations. Distinct
 message IDs remain separate even with equal text. Changed text or conflicting
 known conversation identity rejects. Deduplication never rewrites the original
 source, and an acknowledgement from a duplicate fetch is not attached to the
-original event. Exact IPC retries retain their event ID and remain idempotent.
+original event. A signed local association maps each deduplicated event ID to
+the existing evidence, so its receipt can be reconciled after a lost reply or
+restart. Exact IPC replays remain idempotent, though response deadlines no longer
+cause the relay to resend an observation.
 
 An ack cannot create a prompt and must reference its saved event/source/digest/
 signing key. OFF/ON, restart, disconnect or permission loss cannot revive old

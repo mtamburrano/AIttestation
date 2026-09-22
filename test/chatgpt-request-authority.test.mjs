@@ -87,7 +87,7 @@ test('a reused identity with changed bytes is rejected without poisoning a subse
   const f = await fixture(t), page = f.pages.get(17);
   await page.request(exact, { messages: [message('immutable-id')] }); await until(() => receipts(f).length === 1);
   await page.request('changed', { messages: [message('immutable-id', 'changed')] });
-  await until(() => f.results.some(v => v.result.state === 'RECORDING_UNAVAILABLE'));
+  await until(() => f.results.some(v => v.result.state === 'CAPTURE_REJECTED'));
   await page.request(exact, { messages: [message('new-valid-id')] }); await until(() => receipts(f).length === 2);
   assert.equal(f.runtime.engine.state().available, true);
 });
@@ -132,7 +132,7 @@ test('late renewal cannot retain consent when OFF/ON notifications have not reac
   page.send = message => message.kind === 'PAP_CAPTURE_POLICY' ? Promise.resolve(true) : send(message);
   await f.command('SET_RECORDING', { enabled: false }); await f.command('SET_RECORDING', { enabled: true });
   time = 4000;
-  await page.request(exact); await until(() => rejected.length === 2);
+  await page.request(exact); await until(() => rejected.length === 1);
   assert.ok(rejected.every(result => result.state === 'RECORDING_UNAVAILABLE'));
   assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0); assert.equal(page.requests.length, 1);
 });
@@ -172,16 +172,14 @@ for (const fixedSenderURL of [false, true]) test(`admitted request retains its s
 });
 
 for (const fixedSenderURL of [false, true]) for (const destination of ['unchanged', 'conversation', 'New Chat', 'two routes']) {
-  test(`engine-queued request and IPC retry retain their source across ${destination} (creation URL=${fixedSenderURL})`, async t => {
+  test(`engine-queued request and receipt reconciliation retain their source across ${destination} (creation URL=${fixedSenderURL})`, async t => {
     const response = new Response('UNCHANGED_PROVIDER_RESPONSE'), provider = Promise.resolve(response);
     const q = await queuedFixture(t, { fixedSenderURL, fetchResponse: () => provider });
     const { f, admissions } = q, page = f.pages.get(17);
     assert.equal(page.request(exact), provider); assert.equal(await provider, response);
     assert.equal(await response.text(), 'UNCHANGED_PROVIDER_RESPONSE');
-    // Wait for the real worker timeout and the relay's single IPC retry. Both
-    // deliveries must reach the real engine while A is still the active source.
-    await until(() => admissions.length === 2);
-    assert.equal(f.deliveries.length, 2); assert.deepEqual(admissions[0], admissions[1]);
+    await until(() => page.feedback === 'Attestamp · Save confirmation pending · Check History');
+    assert.equal(admissions.length, 1); assert.equal(f.deliveries.length, 1);
     assert.equal(admissions[0].options.requestContinuation, false);
     assert.equal(admissions[0].options.newChatContinuation, false);
     assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0);
@@ -189,8 +187,8 @@ for (const fixedSenderURL of [false, true]) for (const destination of ['unchange
       ? 'https://chatgpt.com/' : 'https://chatgpt.com/c/queued-next');
     if (destination === 'two routes') await route(f, 'https://chatgpt.com/c/queued-third');
     await q.resume(); await f.runtime.engine.drain();
-    await until(() => f.results.length === 2);
-    assert.deepEqual(f.results.map(value => value.result.state), ['PROMPT_SAVED', 'PROMPT_SAVED']);
+    await until(() => f.results.some(value => value.result.state === 'PROMPT_SAVED'));
+    assert.equal(admissions.length, 1, 'receipt reconciliation cannot invoke capture');
     await until(() => page.feedback === 'Attestamp · Prompt saved');
     assert.equal(receipts(f).length, 1); assert.equal(f.anchorCalls, 1);
     const version = f.runtime.session.status().versions[0];
@@ -259,7 +257,7 @@ for (const cutoff of ['OFF', 'OFF/ON', 'reload', 'replacement document', 'window
     await q.resume(); await Promise.all(controls); await f.runtime.engine.drain();
     assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0);
     assert.equal(f.runtime.engine.state().recording, cutoff !== 'OFF');
-    assert.ok(f.results.every(value => value.result.state === 'RECORDING_UNAVAILABLE'));
+    assert.ok(f.results.every(value => value.result.state === 'CAPTURE_REJECTED'));
   });
 }
 
@@ -296,7 +294,7 @@ test('engine-queued admission expires with its retired binding', async t => {
   t.mock.method(performance, 'now', () => expired);
   await q.resume(); await f.runtime.engine.drain();
   await until(() => f.results.length === 1);
-  assert.equal(f.results[0].result.state, 'RECORDING_UNAVAILABLE');
+  assert.equal(f.results[0].result.state, 'CAPTURE_REJECTED');
   assert.equal(receipts(f).length, 0); assert.equal(f.anchorCalls, 0);
 });
 

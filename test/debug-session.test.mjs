@@ -467,7 +467,7 @@ test('dashboard recording/export obey local authentication and cannot change eng
   assert.equal(f.releases.length, 0); assert.equal(f.anchorCalls, 1); assert.equal(f.confirmed, 1);
 });
 
-test('debug recording preserves ON/OFF outcomes, anchor counts and bounded retries', async t => {
+test('debug recording preserves ON/OFF outcomes, anchor counts and single capture delivery', async t => {
   const root = await isolated(t), network = restrictFixtureNetwork(root); t.after(() => network.restore());
   for (const scenario of ['recording-normal-send', 'recording-storage-gap', 'recording-connection-gap', 'panel-recording']) {
     const outcomes = [];

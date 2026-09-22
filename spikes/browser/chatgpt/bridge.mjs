@@ -1,5 +1,5 @@
 import { emit } from '../../diagnostics/local.mjs';
-import { CHATGPT_CAPTURE_PROFILE, CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE, CAPTURE_DIAGNOSTIC_CODES } from './capture.mjs';
+import { CHATGPT_CAPTURE_PROFILE, CHATGPT_CAPTURE_RECEIPT_PROFILE, CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE, CAPTURE_DIAGNOSTIC_CODES } from './capture.mjs';
 import { CHATGPT_PANEL_PROFILE, CHATGPT_PANEL_DIAGNOSTIC_PROFILE, PANEL_REJECTION_CODES, panelRequest, panelError } from './panel.mjs';
 
 export class ChromeBridgeController {
@@ -37,7 +37,8 @@ export class ChromeBridgeController {
       this.#write({ kind: 'PAP_READY', runtimeEpoch, browserSessionId: message.browserSessionId,
         ...(this.#adapter.capabilities.privilegedPanel ? { panelProfile: CHATGPT_PANEL_PROFILE,
           panelDiagnosticProfile: CHATGPT_PANEL_DIAGNOSTIC_PROFILE } : {}),
-        ...(this.#adapter.capabilities.observation ? { captureDiagnosticProfile: CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE } : {}) });
+        ...(this.#adapter.capabilities.observation ? { captureDiagnosticProfile: CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE,
+          ...(this.#engine?.captureReceipt ? { captureReceiptProfile: CHATGPT_CAPTURE_RECEIPT_PROFILE } : {}) } : {}) });
       this.publishCapturePolicy();
       emit(this.#diagnostics, 'BRIDGE_HELLO');
       return;
@@ -72,6 +73,13 @@ export class ChromeBridgeController {
       }).catch(() => {}).finally(() => { this.#panelRequests--; });
       return;
     }
+    if (message.kind === 'PAP_CAPTURE_RECEIPT') {
+      if (!this.#engine || !this.#adapter.capabilities.observation
+          || Object.keys(message).sort().join(',') !== 'kind,query,requestId'
+          || !/^[a-f0-9-]{36}$/.test(message.requestId ?? '')) throw Error('Invalid capture receipt query');
+      this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId,
+        result: this.#engine.captureReceipt(message.query) }); return;
+    }
     if (message.kind === 'PAP_CAPTURE') {
       if (!this.#engine || this.#observations >= 32 || Object.keys(message).sort().join(',') !==
           (message.newChatContinuation === true ? 'kind,newChatContinuation,observation,requestId'
@@ -87,10 +95,12 @@ export class ChromeBridgeController {
       this.#engine.observe(observation, { newChatContinuation: message.newChatContinuation === true,
         requestContinuation: message.requestContinuation === true }).then(result => {
         if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId, result });
-      }).catch(() => {
+      }).catch(error => {
         emit(this.#diagnostics, 'CAPTURE_GAP');
         if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId,
-          result: { profile: CHATGPT_CAPTURE_PROFILE, state: 'RECORDING_UNAVAILABLE' } });
+          result: { profile: CHATGPT_CAPTURE_PROFILE, eventId: observation.eventId, kind: observation.kind,
+            state: error.code === 'UNSUPPORTED_PATH' || ['CAPTURE_NOT_ENABLED', 'CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT',
+              'INVALID_CAPTURE_OBSERVATION'].includes(error.message) ? 'CAPTURE_REJECTED' : 'SAVE_PENDING' } });
       }).catch(() => {}).finally(() => { this.#observations--; });
       return;
     }

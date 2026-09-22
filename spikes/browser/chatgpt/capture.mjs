@@ -2,6 +2,7 @@ import { keys } from '../../vault/format.mjs';
 import { validateText } from '../../vault/text.mjs';
 import { CHATGPT_CAPTURE_PROFILE, isUUID, validateCaptureSource, validateRequest, validateAcknowledgement } from '../../recipient/normal-observation.mjs';
 export { CHATGPT_CAPTURE_PROFILE };
+export const CHATGPT_CAPTURE_RECEIPT_PROFILE = 'pap-chatgpt-capture-receipt/1';
 
 export const CHATGPT_CAPTURE_DIAGNOSTIC_PROFILE = 'pap-chatgpt-capture-diagnostic/4';
 // Fixed stage sightings carry no DOM, prompt or URL data.
@@ -26,5 +27,12 @@ export function validateCapture(input) {
     validateText(input.text); validateRequest(input.request);
     if (!input.text.length || input.inputMethod !== 'provider-request') throw Error('INVALID_CAPTURE_OBSERVATION');
   } else validateAcknowledgement(input.acknowledgement);
+  return structuredClone(input);
+}
+
+export function validateCaptureReceipt(input) {
+  keys(input, ['profile', 'eventId', 'source']);
+  if (input.profile !== CHATGPT_CAPTURE_PROFILE || !isUUID(input.eventId)) throw Error('INVALID_CAPTURE_RECEIPT');
+  validateCaptureSource(input.source);
   return structuredClone(input);
 }

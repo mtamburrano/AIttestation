@@ -140,7 +140,7 @@ for (const newChat of [false, true]) for (const conversation_id of [undefined, n
     assert.equal(f.runtime.session.status().versions[0].request.conversationId, conversation_id ?? null);
     if (conversation_id) {
       await page.request(exact, payload({ conversation_id: 'conflicting-provider' }));
-      await until(() => f.results.some(value => value.result.state === 'RECORDING_UNAVAILABLE'));
+      await until(() => f.results.some(value => value.result.state === 'CAPTURE_REJECTED'));
       assert.equal(receipts().length, 1);
     }
     await f.runtime.engine.drain(); assert.equal(f.anchorCalls, 1);

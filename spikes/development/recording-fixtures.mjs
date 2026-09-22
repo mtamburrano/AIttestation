@@ -23,7 +23,7 @@ export async function recordingProductFixture(directory, scenario, diagnostics, 
       f.send(prompt, { method: 'enter' });
       await until(() => page.feedback === 'Attestamp · Prompt saved');
       const requests = f.deliveries.filter(value => value.observation.kind === 'request-observed');
-      check(requests.length === 2 && requests[0].observation.eventId === requests[1].observation.eventId);
+      check(requests.length === 1);
       operationId = f.deliveries[0].observation.eventId;
       f.appear(prompt); await until(() => f.results.some(value => value.result.kind === 'acknowledgement'));
       f.send(prompt); await until(() => f.runtime.session.receipts.list().length === 2);
@@ -32,7 +32,7 @@ export async function recordingProductFixture(directory, scenario, diagnostics, 
       f.navigate(); await until(() => !f.runtime.adapter.scopes().some(value => value.scope === f.scopes.get(17)));
       const replayId = f.replay(f.deliveries[0]);
       await until(() => f.results.some(value => value.requestId === replayId));
-      check(f.results.find(value => value.requestId === replayId).result.state === 'RECORDING_UNAVAILABLE');
+      check(f.results.find(value => value.requestId === replayId).result.state === 'CAPTURE_REJECTED');
       await f.runtime.engine.drain();
       const receipts = f.runtime.session.receipts.list(), selection = f.runtime.session.receipts.prepare({ ids: [receipts[0].id] });
       check(selection.texts[0].preview === prompt);
@@ -47,12 +47,14 @@ export async function recordingProductFixture(directory, scenario, diagnostics, 
       else if (scenario === 'recording-connection-gap') f.disconnect();
       else check(false);
       f.send(prompt);
-      await until(() => /gap|unavailable/.test(f.pages.get(17).feedback));
       if (scenario === 'recording-connection-gap') {
+        await until(() => /unavailable/.test(f.pages.get(17).feedback));
         await until(() => !f.runtime.browserState()); observed = 'BRIDGE_DISCONNECTED';
       } else {
+        await until(() => /confirmation pending/.test(f.pages.get(17).feedback));
         await until(() => f.results.length > 0);
-        operationId = f.deliveries[0].observation.eventId; observed = 'CAPTURE_GAP';
+        check(f.results[0].result.state === 'SAVE_PENDING' && f.deliveries.length === 1);
+        operationId = f.deliveries[0].observation.eventId; observed = 'SAVE_PENDING';
       }
       check(f.runtime.session.receipts.list().length === 0 && f.anchorCalls === 0 && f.confirmed === 0);
       check(!f.results.some(value => value.result.state === 'PROMPT_SAVED'));

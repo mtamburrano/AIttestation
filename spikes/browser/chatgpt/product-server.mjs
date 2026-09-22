@@ -119,12 +119,15 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
           if (Object.keys(data).length) throw Error('Invalid state request');
           value = runtime.engine.state(); break;
         case '/engine/command': value = await runtime.engine.command(data, { surface: 'development' }); break;
+        case '/capture/receipt':
+          if (Object.keys(data).join(',') !== 'eventId') throw Error('Invalid capture receipt query');
+          value = runtime.session.captureReceipt(data.eventId); break;
         case '/engine/exit':
           if (Object.keys(data).length || !onExit) throw Error('Engine exit unavailable');
           reply(response, 200, { exiting: true }); setImmediate(() => onExit()); return;
         case '/managed/status': value = await runtime.session.managedStatus(); break;
         case '/managed/connect': value = await runtime.session.connectManaged(data); break;
-        case '/managed/disconnect': value = runtime.session.disconnectManaged(); break;
+        case '/managed/disconnect': value = await runtime.session.disconnectManaged(); break;
         case '/managed/anchor': value = await runtime.session.anchorManaged(data); break;
         case '/receipts': value = runtime.session.receipts.list(); break;
         case '/receipts/preview': value = runtime.session.receipts.prepare(data); break;

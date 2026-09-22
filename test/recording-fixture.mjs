@@ -23,12 +23,12 @@ export async function until(check) {
 export async function recordingFixture(directory, { diagnostics, network, tabs = 2, textarea = false, dropAck = false,
   collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
   dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false,
-  fetchResponse = null, afterCapture = null, transport = true, pageClock, verifyFast } = {}) {
+  fetchResponse = null, afterCapture = null, transport = true, pageClock, verifyFast, vault = null, receiptQueries = true } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
   let captureFault = false, keyFault = false;
-  const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, diagnostics, debugSession,
+  const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, vault, diagnostics, debugSession,
     installation, fastTrust: { profile: FAST_CONFIRM_PROFILE }, openBrowser: false,
     managed: managed ?? { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
       beforeSubmit(); anchorCalls++; return { transactionId: 'A'.repeat(52) };
@@ -79,6 +79,7 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
   output.on('data', chunk => {
     try {
       for (const message of decoder.push(chunk)) {
+        if (message.kind === 'PAP_READY' && !receiptQueries) delete message.captureReceiptProfile;
         if (message.kind === 'PAP_RELEASE') releases.push(message);
         if (dropPanelAck && message.kind === 'PAP_PANEL_RESULT' && message.ack) {
           dropPanelAck = false; continue;

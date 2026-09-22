@@ -22,22 +22,30 @@ export function storeAnchor(vault, envelope) {
 }
 
 export class LocalReceipts {
-  #vault; #preview = null;
+  #vault; #preview = null; #cachedHistory = null; #revision = null;
   constructor(vault) { this.#vault = vault; }
 
   #history() {
+    const revision = this.#vault.revision;
+    if (revision !== undefined && revision === this.#revision) return this.#cachedHistory;
     const records = this.#vault.inspect().records;
+    const byId = new Map(records.map(record => [record.manifest.eventId, record]));
     const observations = records.filter(r => r.manifest.type === 'observation').map(record => {
       const bytes = this.#vault.read(record.manifest.evidence[0].objectDigest);
       return { record, value: signedObservation(record, bytes, verifyRecord(record, bytes)) };
     }).filter(entry => entry.value);
+    const byDigest = new Map();
+    for (const entry of observations) {
+      const digest = entry.value.recordDigest;
+      if (!byDigest.has(digest)) byDigest.set(digest, []);
+      byDigest.get(digest).push(entry);
+    }
     const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version'
       || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3', 'pap-chatgpt-observation/4', 'pap-chatgpt-observation/5', 'pap-chatgpt-observation/6'].includes(entry.value.profile)
         && ['normal-send-intent', 'normal-request-observed'].includes(entry.value.kind)).map(({ record, value }) => {
-      const text = records.find(r => r.manifest.eventId === value.textRecord
-        && r.manifest.evidence[0].objectDigest === value.textObject);
-      if (!text) throw Error('Receipt text reference missing');
-      const related = observations.filter(entry => entry.value.recordDigest === record.recordDigest
+      const text = byId.get(value.textRecord);
+      if (!text || text.manifest.evidence[0].objectDigest !== value.textObject) throw Error('Receipt text reference missing');
+      const related = (byDigest.get(record.recordDigest) ?? []).filter(entry => entry.value.recordDigest === record.recordDigest
         && entry.record.manifest.signingPublicKey === record.manifest.signingPublicKey
         && (entry.value.kind !== 'release-cancelled' || linksCancellation(entry.record, entry.value, record, value))
         && (!['normal-message-observed', 'normal-acknowledgement'].includes(entry.value.kind) || linksNormalMessage(entry.record, entry.value, record, value)));
@@ -66,11 +74,12 @@ export class LocalReceipts {
       textRecordId: record.manifest.eventId, recordIds: [record.manifest.eventId], related: [],
       recordDigest: record.recordDigest, derivative: true,
     });
-    return { records, groups };
+    this.#revision = revision; this.#cachedHistory = { records, groups };
+    return this.#cachedHistory;
   }
 
   list() {
-    return this.#history().groups.map(({ related: _related, ...group }) => group);
+    return structuredClone(this.#history().groups.map(({ related: _related, ...group }) => group));
   }
 
   prepare({ ids, includeEvidence = true }) {

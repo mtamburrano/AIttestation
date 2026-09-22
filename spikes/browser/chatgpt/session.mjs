@@ -2,13 +2,14 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { emit } from '../../diagnostics/local.mjs';
 import { Vault } from '../../vault/vault.mjs';
-import { canonical, parseCanonical, b64, unb64 } from '../../vault/format.mjs';
+import { canonical, parseCanonical, b64, unb64, keys } from '../../vault/format.mjs';
+import { verifyRecord } from '../../vault/records.mjs';
 import { inclusion, anchorPayload } from '../../anchor/merkle.mjs';
 import { verifyAnchorAsync } from '../../anchor/verifier.mjs';
 import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verifyFastConfirmationAsync } from '../../anchor/algorand/fast-confirm.mjs';
 import { LocalReceipts, storeAnchor, storePublicProof } from '../../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../../managed/protocol.mjs';
-import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation } from '../../recipient/normal-observation.mjs';
+import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation, validateCaptureSource, validateRequest, isUUID } from '../../recipient/normal-observation.mjs';
 import { STRICT_OBSERVATION_PROFILE, validateStrictObservation } from '../../recipient/strict-observation.mjs';
 import { QUALIFIED_OBSERVATION_PROFILE, validateQualifiedObservation } from '../../recipient/qualified-observation.mjs';
 import { DOM_OBSERVATION_PROFILE, validateDOMObservation } from '../../recipient/dom-observation.mjs';
@@ -19,6 +20,7 @@ const wire = value => Buffer.from(canonical(value));
 
 export class ChatGPTRecordingSession {
   #tails = new Map(); #versions = new Map(); #providerMessages = new Map();
+  #aliases = new Map();
   #fastTrust; #collectFast; #verifyFast; #verifyArchive; #ownsVault;
   #managed; #diagnostics; #closed = false;
 
@@ -67,11 +69,15 @@ export class ChatGPTRecordingSession {
       mode: value.mode, descriptorId: record.manifest.eventId, recordDigest: record.recordDigest,
       state: 'PROMPT_SAVED', anchor: 'PENDING', timestamp: 'INDETERMINATE', anchorAttempts: 0, assuranceHistory: [] };
   }
-  #restoreObservations() {
+  #restoreObservations(preserved = new Map()) {
     const records = this.vault.inspect().records;
+    const byId = new Map(records.map(record => [record.manifest.eventId, record]));
     const observations = [];
     for (const record of records.filter(value => value.manifest.type === 'observation')) {
-      const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
+      const bytes = this.vault.read(record.manifest.evidence[0].objectDigest);
+      const checked = verifyRecord(record, bytes);
+      if (checked.integrity !== 'VALID' || checked.keyAttribution !== 'SIGNATURE_VALID') throw Error('INVALID_CAPTURE_HISTORY');
+      const value = parseCanonical(bytes);
       observations.push({ record, value });
       if (![NORMAL_OBSERVATION_PROFILE, STRICT_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
       (value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation
@@ -79,19 +85,19 @@ export class ChatGPTRecordingSession {
         : value.profile === QUALIFIED_OBSERVATION_PROFILE ? validateQualifiedObservation
         : value.profile === DOM_OBSERVATION_PROFILE ? validateDOMObservation : validateLegacyNormalObservation)(value);
       if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) {
-        const text = records.find(entry => entry.manifest.eventId === value.textRecord
-          && entry.manifest.evidence[0].objectDigest === value.textObject
-          && entry.manifest.signingPublicKey === record.manifest.signingPublicKey);
-        if (!text || this.#versions.has(value.eventId)) throw Error('INVALID_CAPTURE_HISTORY');
+        const text = byId.get(value.textRecord);
+        if (!text || text.manifest.evidence[0].objectDigest !== value.textObject
+            || text.manifest.signingPublicKey !== record.manifest.signingPublicKey
+            || this.#versions.has(value.eventId)) throw Error('INVALID_CAPTURE_HISTORY');
         const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(this.vault.read(value.textObject));
-        const version = this.#observedVersion(record, value, content);
+        const version = Object.assign(preserved.get(value.eventId) ?? {}, this.#observedVersion(record, value, content));
         this.#versions.set(value.eventId, version);
         if (value.request && !this.#providerMessages.has(value.request.messageId)) this.#providerMessages.set(value.request.messageId, version);
       } else {
         const version = this.#versions.get(value.eventId);
         if (!version || value.recordDigest !== version.recordDigest || canonical(value.source) !== canonical(version.source)
             || version.observationProfile !== value.profile
-            || record.manifest.signingPublicKey !== records.find(entry => entry.manifest.eventId === version.descriptorId)?.manifest.signingPublicKey) {
+            || record.manifest.signingPublicKey !== byId.get(version.descriptorId)?.manifest.signingPublicKey) {
           throw Error('INVALID_CAPTURE_HISTORY');
         }
         if (value.kind === 'normal-acknowledgement') {
@@ -102,8 +108,18 @@ export class ChatGPTRecordingSession {
     }
     for (const { record, value } of observations) {
       const version = this.#versions.get(value.version);
-      if (!version?.observation || value.profile !== 'pap-chatgpt-observation/1' || value.recordDigest !== version.recordDigest
-          || record.manifest.signingPublicKey !== records.find(entry => entry.manifest.eventId === version.descriptorId)?.manifest.signingPublicKey) continue;
+      if (!version?.observation || value.profile !== 'pap-chatgpt-observation/1' || value.recordDigest !== version.recordDigest) continue;
+      if (value.kind === 'request-deduplicated') {
+        keys(value, ['profile', 'kind', 'version', 'recordDigest', 'eventId', 'source', 'request', 'inputMethod']);
+        validateCaptureSource(value.source); validateRequest(value.request);
+        if (!isUUID(value.eventId) || this.#aliases.has(value.eventId) || this.#versions.has(value.eventId)
+            || value.inputMethod !== 'provider-request' || value.request.messageId !== version.request?.messageId
+            || value.request.conversationId !== null && version.request.conversationId !== null
+              && value.request.conversationId !== version.request.conversationId) throw Error('INVALID_CAPTURE_HISTORY');
+        this.#aliases.set(value.eventId, { version, source: value.source, request: value.request, inputMethod: value.inputMethod });
+        continue;
+      }
+      if (record.manifest.signingPublicKey !== byId.get(version.descriptorId)?.manifest.signingPublicKey) continue;
       if (value.kind === 'managed-submission' && TRANSACTION_PATTERN.test(value.transactionId ?? '')) {
         version.managed = { state: 'SUBMITTED_OR_UNKNOWN', transactionId: value.transactionId };
       }
@@ -123,12 +139,27 @@ export class ChatGPTRecordingSession {
   }
 
   observeNormal(input) {
+    try { return this.#observeNormal(input); }
+    catch (error) {
+      if (['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT', 'Legacy evidence is read-only'].includes(error.message)) throw error;
+      // A write may have committed before its caller observed an error. Rebuild
+      // the exact-ID receipt index; absence still leaves the caller uncertain.
+      const preserved = new Map(this.#versions);
+      this.#versions.clear(); this.#providerMessages.clear(); this.#aliases.clear();
+      this.#restoreObservations(preserved);
+      throw error;
+    }
+  }
+  #observeNormal(input) {
     const { eventId, source, text } = input;
-    const prior = this.#versions.get(eventId);
-    if (prior && prior.observationProfile !== NORMAL_OBSERVATION_PROFILE) throw Error('Legacy evidence is read-only');
-    if (prior && (!prior.observation || canonical(prior.source) !== canonical(source)
-        || input.kind === 'request-observed' && (prior.payload.text !== text || prior.inputMethod !== input.inputMethod
-          || canonical(prior.request) !== canonical(input.request)))) throw Error('CAPTURE_REPLAY_CONFLICT');
+    const alias = this.#aliases.get(eventId);
+    if (alias && input.kind === 'acknowledgement') throw Error('CAPTURE_CORRELATION_CONFLICT');
+    if (alias && canonical(alias.source) !== canonical(source)) throw Error('CAPTURE_REPLAY_CONFLICT');
+    const prior = alias?.version ?? this.#versions.get(eventId);
+    if (prior && !alias && prior.observationProfile !== NORMAL_OBSERVATION_PROFILE) throw Error('Legacy evidence is read-only');
+    if (prior && (!prior.observation || !alias && canonical(prior.source) !== canonical(source)
+        || input.kind === 'request-observed' && (prior.payload.text !== text || (alias?.inputMethod ?? prior.inputMethod) !== input.inputMethod
+          || canonical(alias?.request ?? prior.request) !== canonical(input.request)))) throw Error('CAPTURE_REPLAY_CONFLICT');
     if (input.kind === 'acknowledgement') {
       if (!prior || prior.request.conversationId !== null && prior.request.conversationId !== input.acknowledgement.conversationId
           || prior.acknowledgement && canonical(prior.acknowledgement) !== canonical(input.acknowledgement)) throw Error('CAPTURE_CORRELATION_CONFLICT');
@@ -149,6 +180,10 @@ export class ChatGPTRecordingSession {
         throw Error('CAPTURE_REPLAY_CONFLICT');
       }
       emit(this.#diagnostics, 'REQUEST_DEDUPLICATED', { operationId: eventId });
+      this.#event({ kind: 'request-deduplicated', version: repeated.id, recordDigest: repeated.recordDigest, eventId, source,
+        request: input.request, inputMethod: input.inputMethod });
+      this.#aliases.set(eventId, { version: repeated, source: structuredClone(source),
+        request: structuredClone(input.request), inputMethod: input.inputMethod });
       return this.#public(repeated);
     }
     const captured = this.vault.capture(Buffer.from(text, 'utf8'));
@@ -167,6 +202,17 @@ export class ChatGPTRecordingSession {
   #public(value) {
     const { payload: _payload, ...visible } = value;
     return structuredClone(visible);
+  }
+  version(id) { const value = this.#versions.get(id); return value ? this.#public(value) : null; }
+  get versionCount() { return this.#versions.size; }
+  captureReceipt(eventId, source = null) {
+    if (!isUUID(eventId)) throw Error('INVALID_CAPTURE_RECEIPT');
+    if (source) validateCaptureSource(source);
+    const alias = this.#aliases.get(eventId), version = alias?.version ?? this.#versions.get(eventId);
+    const saved = version && (!source || canonical(alias?.source ?? version.source) === canonical(source));
+    return { profile: 'pap-chatgpt-capture/5', eventId, kind: 'request-observed',
+      state: saved ? 'PROMPT_SAVED' : 'SAVE_PENDING',
+      ...(saved ? { receiptId: version.descriptorId, ...(alias ? { deduplicated: true } : {}) } : {}) };
   }
 
   anchorRequest(id) {

@@ -85,7 +85,7 @@ function showRecording(state) {
     document.documentElement.append(feedback);
   }
   const labels = { READY: 'Attestamp · ON', SAVING: 'Attestamp · Saving prompt…', PROMPT_SAVED: 'Attestamp · Prompt saved',
-    SAVE_UNCONFIRMED: 'Attestamp · Save not confirmed · Check History',
+    SAVE_PENDING: 'Attestamp · Save confirmation pending · Check History',
     GAP: 'Attestamp · Recording gap', RECORDING_UNAVAILABLE: 'Attestamp · Recording unavailable' };
   feedback.textContent = labels[state] ?? ''; feedback.hidden = !labels[state];
 }
@@ -111,12 +111,18 @@ function pendingCurrent(pending) {
     && policySession === pending.policy.browserSessionId
     && (pending.policy.destination !== 'new-chat' || policyCurrent(pending.policy) || continuationCurrent(pending));
 }
+function confirmationCurrent(pending) {
+  return !stopped && observations.get(pending.eventId) === pending && policyState === 'READY'
+    && policySession === pending.policy.browserSessionId;
+}
 function reportOutcome(pending, state) {
   pending.feedback = state;
   if (pending.sendOrder === sendOrder) render(state);
 }
 function clearObservations(keep = []) {
-  for (const [id, pending] of observations) if (!keep.includes(pending)) { clearTimeout(pending.timer); observations.delete(id); }
+  for (const [id, pending] of observations) if (!keep.includes(pending)) {
+    clearTimeout(pending.timer); clearTimeout(pending.receiptTimer); observations.delete(id);
+  }
 }
 function setCapturePolicy(message) {
   if (message.browserSessionId === policySession && message.revision < policyRevision) return;
@@ -153,7 +159,7 @@ function setCapturePolicy(message) {
     }
     if (!continuing.length) clearTimeout(advisoryTimer);
     if (!next && !bindings.size) transportControl('clear');
-    render(state === 'OFF' ? 'OFF' : latest ? latest.feedback : hadRequest && !next ? 'GAP' : state);
+    render(state === 'OFF' ? 'OFF' : latest ? latest.feedback : hadRequest && !next ? 'SAVE_PENDING' : state);
   } else if (state !== policyState) { policyState = state; render(state); }
   if (capturePolicy && policyCurrent(capturePolicy)) transportControl('arm', activeBinding);
 }
@@ -185,6 +191,9 @@ const runtimeMessage = (message, sender, respond) => {
   }
   if (message.kind === 'PAP_INSPECT') { transportControl('probe'); respond(surface()); return; }
   if (message.kind === 'PAP_CAPTURE_POLICY') { setCapturePolicy(message); respond(true); return; }
+  if (message.kind === 'PAP_CAPTURE_CONFIRMED') {
+    confirmSaved(observations.get(message.eventId), message.result); respond(true); return;
+  }
   if (message.kind === 'PAP_CONFIRM_DOCUMENT') { respond({ nonce: message.nonce, url: location.href, active: !stopped }); return; }
   if (message.kind === 'PAP_CONFIRM_NEW_CHAT') {
     const pending = observations.get(message.eventId);
@@ -223,45 +232,54 @@ function noteSend(event) {
   clearTimeout(advisoryTimer);
   advisoryTimer = setTimeout(() => {
     if (order === sendOrder && capturePolicy && policyCurrent(capturePolicy)) {
-      reportDiagnostic('REQUEST_NOT_OBSERVED'); render('GAP');
+      reportDiagnostic('REQUEST_NOT_OBSERVED'); render('SAVE_PENDING');
     }
   }, 1500);
+}
+function confirmSaved(pending, result) {
+  if (!pending || !confirmationCurrent(pending) || result?.profile !== CAPTURE_PROFILE
+      || result.eventId !== pending.eventId || result.kind !== 'request-observed' || result.state !== 'PROMPT_SAVED') return false;
+  pending.saved = true; pending.deduplicated = result.deduplicated === true;
+  clearTimeout(pending.receiptTimer); reportOutcome(pending, 'PROMPT_SAVED');
+  if (pending.deduplicated) reportDiagnostic('REQUEST_DEDUPLICATED');
+  deliverAck(pending); return true;
+}
+async function reconcile(pending) {
+  if (!confirmationCurrent(pending) || pending.saved) return;
+  let timer;
+  try {
+    const query = chrome.runtime.sendMessage({ kind: 'PAP_CAPTURE_RECEIPT', pageContract: PAGE_CONTRACT, eventId: pending.eventId });
+    const result = await Promise.race([query, new Promise(resolve => { timer = setTimeout(() => resolve(null), 2500); })]);
+    confirmSaved(pending, result);
+  } catch {} finally {
+    clearTimeout(timer);
+    if (confirmationCurrent(pending) && !pending.saved) pending.receiptTimer = setTimeout(() => reconcile(pending), 1500);
+  }
 }
 async function deliver(pending, kind) {
   const message = { kind: 'PAP_CAPTURE', pageContract: PAGE_CONTRACT, token: pending.policy.token,
     eventId: pending.eventId, observationKind: kind,
     ...(kind === 'request-observed' ? { text: pending.text, inputMethod: pending.inputMethod, request: pending.request }
       : { acknowledgement: pending.acknowledgement }) };
-  let uncertain = false;
-  for (let attempt = 0; attempt < 2 && observations.get(pending.eventId) === pending && pendingCurrent(pending); attempt++) {
-    let timer;
-    try {
-      // A local response timeout says nothing about whether the vault committed.
-      // Keep each bounded attempt's late success eligible to confirm this exact
-      // pending event, without reviving consent or replacing a newer outcome.
-      const delivery = chrome.runtime.sendMessage(message).then(result => {
-        if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind
-            && result.state === 'PROMPT_SAVED' && pendingCurrent(pending)) {
-          if (result.deduplicated) pending.deduplicated = true;
-          if (kind === 'request-observed') {
-            pending.saved = true; reportOutcome(pending, 'PROMPT_SAVED');
-            if (pending.deduplicated) reportDiagnostic('REQUEST_DEDUPLICATED');
-            deliverAck(pending);
-          }
-        }
-        return result;
-      });
-      const result = await Promise.race([delivery,
-        new Promise((_, reject) => { timer = setTimeout(() => reject(Error('timeout')), 2500); })]);
-      if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind
-          && result.state === 'PROMPT_SAVED') {
-        if (result.deduplicated) pending.deduplicated = true;
-        return true;
-      }
-      if (result?.state !== 'RECORDING_UNAVAILABLE') uncertain = true;
-    } catch { uncertain = true; } finally { clearTimeout(timer); }
+  let timer;
+  try {
+    // Dispatch once. Deadlines trigger read-only reconciliation, not another
+    // payload delivery. The original promise's exact-ID late success remains valid.
+    const delivery = chrome.runtime.sendMessage(message).then(result => {
+      if (kind === 'request-observed') confirmSaved(pending, result);
+      return result;
+    });
+    const result = await Promise.race([delivery,
+      new Promise(resolve => { timer = setTimeout(() => resolve(null), 2500); })]);
+    if (result?.profile === CAPTURE_PROFILE && result.eventId === pending.eventId && result.kind === kind) {
+      if (result.state === 'PROMPT_SAVED') return true;
+      if (result.state === 'CAPTURE_REJECTED' && !pending.saved) return false;
+    }
+  } catch {} finally { clearTimeout(timer); }
+  if (kind === 'request-observed' && !pending.saved && confirmationCurrent(pending)) {
+    pending.receiptTimer = setTimeout(() => reconcile(pending), 1000);
   }
-  return kind === 'request-observed' && pending.saved ? true : uncertain ? null : false;
+  return pending.saved ? true : null;
 }
 function deliverAck(pending) {
   if (!pending.saved || pending.deduplicated || !pending.acknowledgement || pending.ackSent || !pendingCurrent(pending)) return;
@@ -294,14 +312,18 @@ listen(window, 'message', event => {
       saved: false, sendOrder: ++sendOrder, feedback: 'READY', observedAt: performance.now(),
       firstNewChat: binding.policy.destination === 'new-chat' && newChatToken !== binding.policy.token,
       continuationUrl: binding.continuationUrl };
+    while (observations.size >= 16) {
+      const oldest = observations.values().next().value;
+      clearTimeout(oldest.timer); clearTimeout(oldest.receiptTimer); observations.delete(oldest.eventId);
+    }
     observations.set(message.id, pending);
-    if (!(policyCurrent(pending.policy) || continuationCurrent(pending)) || observations.size > 16) {
+    if (!(policyCurrent(pending.policy) || continuationCurrent(pending))) {
       observations.delete(message.id); reportDiagnostic('REQUEST_MESSAGE_REJECTED'); render('GAP'); return;
     }
     binding.sequence = message.sequence; clearTimeout(advisoryTimer);
     reportDiagnostic('REQUEST_MATCHED'); reportOutcome(pending, 'READY');
     pending.timer = setTimeout(() => {
-      if (!pending.saved && pendingCurrent(pending)) { reportDiagnostic('REQUEST_MESSAGE_MISSING'); reportOutcome(pending, 'GAP'); }
+      if (!pending.saved && pendingCurrent(pending)) { reportDiagnostic('REQUEST_MESSAGE_MISSING'); reportOutcome(pending, 'SAVE_PENDING'); }
       observations.delete(pending.eventId);
     }, 5000);
     return;
@@ -340,13 +362,13 @@ listen(window, 'message', event => {
     }
     pending.request = request; pending.text = message.text;
     if (pending.firstNewChat) newChatToken = pending.policy.token;
-    clearTimeout(pending.timer); pending.timer = setTimeout(() => observations.delete(pending.eventId), 6500);
+    clearTimeout(pending.timer);
     reportDiagnostic('DURABLE_SAVE_DISPATCHED'); reportOutcome(pending, 'SAVING');
     deliver(pending, 'request-observed').then(saved => {
       if (pending.saved) return;
       pending.saved = saved === true;
-      if (observations.get(pending.eventId) !== pending || !pendingCurrent(pending)) return;
-      reportOutcome(pending, saved ? 'PROMPT_SAVED' : saved === null ? 'SAVE_UNCONFIRMED' : 'GAP');
+      if (!confirmationCurrent(pending)) return;
+      reportOutcome(pending, saved ? 'PROMPT_SAVED' : saved === null ? 'SAVE_PENDING' : 'GAP');
       if (pending.deduplicated) reportDiagnostic('REQUEST_DEDUPLICATED');
       if (saved) deliverAck(pending);
     });

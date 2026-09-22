@@ -2,6 +2,7 @@ const ADAPTER_PROFILE = 'pap-chatgpt-chrome/9';
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21.1';
 const NATIVE_HOST = 'ai.provenance.consumer';
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/5';
+const CAPTURE_RECEIPT_PROFILE = 'pap-chatgpt-capture-receipt/1';
 const PANEL_PROFILE = 'pap-chatgpt-panel/2';
 const PANEL_CHANNEL = 'pap-chatgpt-panel-channel/1';
 const panelChannels = new Set();
@@ -27,6 +28,9 @@ const documentRoutes = new Map();
 const routeChecks = new Map();
 const newChats = new Map();
 const retiredPolicies = new Map();
+// Content-free receipt bindings outlive a native reconnect. They grant only
+// exact-event reads, never capture permission or a provider retry.
+const captureReceipts = new Map();
 const sameDocumentPolicy = (a, b) => a && b
   && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch'].every(key => a[key] === b[key]);
 // BEGIN GENERATED CONVERSATION ROUTES
@@ -152,8 +156,9 @@ function scheduleReconnect() {
 function retire(context) {
   if (!current(context)) return;
   context.closed = true; clearTimeout(context.handshakeTimer); connection = undefined;
-  for (const pending of context.captures.values()) pending.resolve({ state: 'RECORDING_UNAVAILABLE' });
+  for (const pending of context.captures.values()) pending.resolve({ state: 'SAVE_PENDING' });
   context.captures.clear(); broadcastCapturePolicy(context, true);
+  context.lateCaptures.clear();
   newChats.clear();
   retiredPolicies.clear();
   documentRoutes.clear();
@@ -194,7 +199,7 @@ function connect() {
   catch { scheduleReconnect(); return; }
   const context = { port, closed: false, ready: false, epoch: null, revision: 0, dirty: false,
     publishing: false,
-    policies: new Map(), states: new Map(), captures: new Map(), panels: new Map(), panelReady: false,
+    policies: new Map(), states: new Map(), captures: new Map(), lateCaptures: new Map(), panels: new Map(), panelReady: false,
     panelDiagnosticsReady: false, panelDiagnostics: new Set(),
     captureDiagnosticsReady: false, captureDiagnostics: new Set() };
   connection = context;
@@ -208,6 +213,7 @@ function connect() {
       context.panelReady = message.panelProfile === PANEL_PROFILE;
       context.panelDiagnosticsReady = message.panelDiagnosticProfile === PANEL_DIAGNOSTIC_PROFILE;
       context.captureDiagnosticsReady = message.captureDiagnosticProfile === CAPTURE_DIAGNOSTIC_PROFILE;
+      context.receiptsReady = message.captureReceiptProfile === CAPTURE_RECEIPT_PROFILE;
       clearTimeout(context.handshakeTimer); reconnectDelay = 1000; publishState(); return;
     }
     if (context.ready && message?.kind === 'PAP_CAPTURE_POLICY') {
@@ -235,7 +241,19 @@ function connect() {
       broadcastCapturePolicy(context); return;
     }
     if (context.ready && message?.kind === 'PAP_CAPTURE_RESULT') {
-      context.captures.get(message.requestId)?.resolve(message.result); return;
+      const pending = context.captures.get(message.requestId) ?? context.lateCaptures.get(message.requestId);
+      if (!pending) return;
+      const result = message.result;
+      if (result?.profile !== CAPTURE_PROFILE || result.eventId !== pending.eventId || result.kind !== pending.kind) return;
+      context.captures.delete(message.requestId); context.lateCaptures.delete(message.requestId);
+      pending.resolve(result);
+      const receipt = captureReceipts.get(pending.eventId);
+      if (pending.kind === 'request-observed' && result.state === 'PROMPT_SAVED' && receipt === pending.receipt) {
+        receipt.result = result;
+        chrome.tabs.sendMessage(receipt.source.tabId, { kind: 'PAP_CAPTURE_CONFIRMED', pageContract: PAGE_CONTRACT,
+          eventId: pending.eventId, result }, { documentId: receipt.source.documentId, frameId: 0 }).catch(() => {});
+      }
+      return;
     }
     if (context.ready && message?.kind === 'PAP_PANEL_RESULT') {
       if (message.profile !== PANEL_PROFILE) return retire(context);
@@ -258,7 +276,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     // still present. Control requests require its own live Port below.
     respond(rejectPanel('PANEL_SENDER_REJECTED')); return;
   }
-  if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message?.kind)) {
+  if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE', 'PAP_CAPTURE_RECEIPT'].includes(message?.kind)) {
     const capture = message.kind === 'PAP_CAPTURE';
     const unavailable = () => { if (capture) reportCaptureDiagnostic('CAPTURE_REJECTED'); };
     captureMessage(message, sender).then(result => { if (result?.state === 'RECORDING_UNAVAILABLE') unavailable(); respond(result); })
@@ -499,6 +517,23 @@ async function captureMessage(message, sender) {
   if (!current(context) || epoch !== tabEpochs.get(sender.tab.id) || permission !== 'granted'
       || tabs.length > 32 || !tab || tab.incognito || tab.windowId !== sender.tab.windowId) return { state: 'RECORDING_UNAVAILABLE' };
   const route = documentRoutes.get(tab.id);
+  if (message.kind === 'PAP_CAPTURE_RECEIPT') {
+    const receipt = captureReceipts.get(message.eventId);
+    if (!exactKeys(message, ['kind', 'pageContract', 'eventId']) || !receipt
+        || receipt.source.documentId !== sender.documentId || receipt.source.tabId !== tab.id
+        || receipt.source.windowId !== tab.windowId || documents.get(tab.id) !== sender.documentId
+        || context.captures.size >= 32) return { state: 'SAVE_PENDING' };
+    if (receipt.result) return receipt.result;
+    if (!context.receiptsReady) return { state: 'SAVE_PENDING' };
+    const requestId = crypto.randomUUID();
+    const result = new Promise(resolve => context.captures.set(requestId,
+      { resolve, eventId: message.eventId, kind: 'request-observed', receipt }));
+    post(context, { kind: 'PAP_CAPTURE_RECEIPT', requestId,
+      query: { profile: CAPTURE_PROFILE, eventId: message.eventId, source: receipt.source } });
+    try { return await bounded(result); }
+    catch { return { state: 'SAVE_PENDING' }; }
+    finally { context.captures.delete(requestId); }
+  }
   let senderURLMatches = tab.url === sender.url || route?.documentId === sender.documentId
     && route.epoch === epoch && route.url === tab.url && sender.url === route.creationUrl;
   if (message.kind === 'PAP_CAPTURE_STATUS') {
@@ -593,19 +628,32 @@ async function captureMessage(message, sender) {
     if (conversationURL(live.url)) documentRoutes.set(tab.id, { documentId: sender.documentId, epoch, url: live.url, creationUrl: sender.url });
   }
   const requestId = crypto.randomUUID();
-  const result = new Promise(resolve => context.captures.set(requestId, { resolve }));
   const { token, scope, runtimeEpoch, browserSessionId: session, tabId, windowId, tabEpoch: documentEpoch, destination } = policy;
   const observation = { profile: CAPTURE_PROFILE, kind, token, eventId: message.eventId,
     source: { adapterProfile: ADAPTER_PROFILE, pageContract: PAGE_CONTRACT, scope, runtimeEpoch,
       browserSessionId: session, tabId, windowId, tabEpoch: documentEpoch, destination, documentId: sender.documentId },
     ...(kind === 'request-observed' ? { textBytes: btoa(Array.from(new TextEncoder().encode(message.text), byte => String.fromCharCode(byte)).join('')),
       inputMethod: message.inputMethod, request: message.request } : { acknowledgement: message.acknowledgement }) };
+  let receipt = captureReceipts.get(message.eventId);
+  if (receipt && JSON.stringify(receipt.source) !== JSON.stringify(observation.source)) return { state: 'RECORDING_UNAVAILABLE' };
+  if (!receipt && kind === 'request-observed') {
+    while (captureReceipts.size >= 512) captureReceipts.delete(captureReceipts.keys().next().value);
+    receipt = { source: observation.source }; captureReceipts.set(message.eventId, receipt);
+  }
+  const result = new Promise(resolve => context.captures.set(requestId, { resolve, eventId: message.eventId, kind, receipt }));
   try {
     post(context, { kind: 'PAP_CAPTURE', requestId, observation, ...(continuing ? { newChatContinuation: true }
       : retired ? { requestContinuation: true } : {}) });
     try { return await bounded(result); }
-    catch { return { state: 'SAVE_UNCONFIRMED' }; }
-  } finally { context.captures.delete(requestId); }
+    catch { return { state: 'SAVE_PENDING' }; }
+  } finally {
+    const pending = context.captures.get(requestId);
+    if (pending && current(context)) {
+      while (context.lateCaptures.size >= 512) context.lateCaptures.delete(context.lateCaptures.keys().next().value);
+      context.lateCaptures.set(requestId, pending);
+    }
+    context.captures.delete(requestId);
+  }
 }
 let recovery;
 function recoverExistingTabs() {

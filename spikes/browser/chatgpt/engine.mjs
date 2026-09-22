@@ -3,7 +3,7 @@ import { canonical, keys } from '../../vault/format.mjs';
 import { emit } from '../../diagnostics/local.mjs';
 import { CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
 import { EngineStateStore, migrateRecordingState } from './engine-store.mjs';
-import { CHATGPT_CAPTURE_PROFILE, validateCapture } from './capture.mjs';
+import { CHATGPT_CAPTURE_PROFILE, validateCapture, validateCaptureReceipt } from './capture.mjs';
 
 export const ENGINE_COMMAND_PROFILE = 'pap-resident-command/2';
 export const ENGINE_EVENT_PROFILE = 'pap-resident-event/2';
@@ -21,6 +21,7 @@ export class ResidentEngine {
   #retiredTokens = new Map();
   #anchorRetries = new Map();
   #anchorCursor = 0; #durableVersions = 0;
+  #anchorScheduled = false;
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
     this.#session = session; this.#adapter = adapter; this.#epoch = runtimeEpoch; this.#diagnostics = diagnostics;
@@ -34,7 +35,7 @@ export class ResidentEngine {
     await this.#commit();
     // Recovery has no engine pointer and stays OFF. Only durable observations,
     // never old Send journals, can contribute bounded pending anchor work.
-    this.#durableVersions = this.#session.status().versions.length;
+    this.#durableVersions = this.#session.versionCount;
     this.#pumpAnchors();
     return this;
   }
@@ -142,7 +143,7 @@ export class ResidentEngine {
       if (source.destination === 'new-chat' && observation.kind === 'request-observed' && !entry.eventId) {
         entry.eventId = eventId; entry.documentId = source.documentId;
       }
-      const prior = this.#session.status().versions.some(value => value.id === eventId);
+      const prior = this.#session.version(eventId);
       let version;
       try {
         version = this.#session.observeNormal(observation);
@@ -151,10 +152,14 @@ export class ResidentEngine {
         if (observation.kind === 'request-observed' && !['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
           this.#failed = true; this.#captureTokens.clear(); this.#publish();
         }
+        if (!['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
+          const receipt = this.#session.captureReceipt(eventId, source);
+          if (receipt.state === 'PROMPT_SAVED') return receipt;
+        }
         emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;
       }
       if (!prior && version.id === eventId) {
-        this.#durableVersions = this.#session.status().versions.length;
+        this.#durableVersions = this.#session.versionCount;
         this.#pumpAnchors();
       }
       this.#publish();
@@ -163,6 +168,17 @@ export class ResidentEngine {
     });
   }
   #pumpAnchors() {
+    if (this.#closed || this.#anchorScheduled) return;
+    this.#anchorScheduled = true;
+    // Even an immediately rejected sponsor must yield between batches so its
+    // durable attempt writes cannot monopolize capture replies and controls.
+    const work = new Promise(resolve => setImmediate(() => {
+      this.#anchorScheduled = false;
+      try { this.#runAnchors(); } finally { resolve(); }
+    }));
+    this.#work.add(work); work.then(() => this.#work.delete(work));
+  }
+  #runAnchors() {
     if (this.#closed) return;
     const versions = this.#session.status().versions;
     // A runtime gets one bounded batch per pending observation, regardless of
@@ -176,7 +192,7 @@ export class ResidentEngine {
     }
     while (!this.#closed && this.#anchoring.size < 2 && this.#anchorQueue.length) {
       const { id, retry } = this.#anchorQueue.shift();
-      const version = this.#session.status().versions.find(value => value.id === id);
+      const version = this.#session.version(id);
       if (!version || version.anchor !== 'PENDING') continue;
       this.#anchoring.add(id);
       if (retry) emit(this.#diagnostics, 'ANCHOR_RETRY_STARTED', { operationId: id });
@@ -194,7 +210,7 @@ export class ResidentEngine {
     }
   }
   #retryAnchor(id, retry) {
-    const version = this.#session.status().versions.find(value => value.id === id);
+    const version = this.#session.version(id);
     if (this.#closed || retry >= 2 || !version || version.anchor !== 'PENDING') return;
     // This job can only invoke Algorand sponsorship/confirmation. The saved
     // transaction and cumulative attempt journal remain owned by the session.
@@ -205,6 +221,10 @@ export class ResidentEngine {
     }, [5000, 30000][retry]);
     timer.unref?.(); this.#anchorRetries.set(id, timer);
     emit(this.#diagnostics, 'ANCHOR_RETRY_SCHEDULED', { operationId: id });
+  }
+  captureReceipt(input) {
+    const query = validateCaptureReceipt(input);
+    return this.#session.captureReceipt(query.eventId, query.source);
   }
   command(input, { surface } = {}) {
     let command;

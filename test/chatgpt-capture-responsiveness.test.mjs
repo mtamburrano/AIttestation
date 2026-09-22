@@ -8,7 +8,7 @@ import { verifyFastConfirmationAsync, FAST_CONFIRM_PROFILE } from '../spikes/anc
 import { OwnerDebugSession } from '../spikes/development/debug-session.mjs';
 import { restrictFixtureNetwork } from '../spikes/development/fixture-network.mjs';
 
-test('a delayed durable-save reply during confirmation work stays uncertain and later confirms', async t => {
+test('a lost script reply during confirmation work receives the exact native save notification', async t => {
   const root = await mkdtemp('/private/tmp/attestamp-capture-response-test-');
   let f, releaseConfirmation, releaseReply, confirmations = 0;
   const confirmation = new Promise(resolve => { releaseConfirmation = resolve; });
@@ -26,8 +26,7 @@ test('a delayed durable-save reply during confirmation work stays uncertain and 
   await until(() => confirmations === 2);
   f.send('DELAYED_DURABLE_REPLY');
   await until(() => f.runtime.session.receipts.list().length === 3);
-  await delay(5100);
-  assert.equal(f.pages.get(17).feedback, 'Attestamp · Save not confirmed · Check History');
+  await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
   assert.equal(f.runtime.session.receipts.list().length, 3);
   releaseReply();
   await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
@@ -87,20 +86,23 @@ process.stdin.resume();process.stdin.on('end',async()=>{
   assert.equal(f.anchorCalls, 16, 'restart must not resubmit corroborated observations');
 });
 
-test('native response timeouts cannot turn an already durable capture into a definite gap', async t => {
+test('a lost native save reply reconciles by exact event ID without resending capture', async t => {
   const root = await mkdtemp('/private/tmp/attestamp-native-response-test-'); let f;
   t.after(async () => { await f?.close(); await rm(root, { recursive: true, force: true }); });
   f = await recordingFixture(root); await f.recording(true);
   const emit = f.port.onMessage.emit, held = [];
-  f.port.onMessage.emit = message => message.kind === 'PAP_CAPTURE_RESULT' ? held.push(message) : emit(message);
+  f.port.onMessage.emit = message => message.kind === 'PAP_CAPTURE_RESULT'
+    && f.deliveries.some(delivery => delivery.requestId === message.requestId) ? held.push(message) : emit(message);
   f.send('SAVED_WITHOUT_NATIVE_REPLY');
-  await until(() => held.length === 2);
-  await until(() => f.pages.get(17).feedback === 'Attestamp · Save not confirmed · Check History');
+  await until(() => held.length === 1);
+  await until(() => f.pages.get(17).feedback === 'Attestamp · Save confirmation pending · Check History');
+  await until(() => f.pages.get(17).feedback === 'Attestamp · Prompt saved');
   assert.equal(f.runtime.session.receipts.list().length, 1);
   for (const message of held) emit(message);
   await delay(20);
   assert.doesNotMatch(f.pages.get(17).feedback, /Recording gap/);
   assert.equal(f.pages.get(17).requests.length, 1); assert.equal(f.anchorCalls, 1);
+  assert.equal(f.deliveries.length, 1);
 });
 
 for (const cutoff of ['OFF', 'OFF/ON', 'newer Send', 'pagehide']) {
@@ -110,10 +112,13 @@ for (const cutoff of ['OFF', 'OFF/ON', 'newer Send', 'pagehide']) {
     t.after(async () => { release(); await f?.close(); await rm(root, { recursive: true, force: true }); });
     f = await recordingFixture(root, {
       pageClock: { performance, clearTimeout, setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds === 2500 ? 30 : milliseconds) },
-      afterCapture: async () => reply,
     });
+    const emit = f.port.onMessage.emit;
+    f.port.onMessage.emit = message => {
+      if (message.kind === 'PAP_CAPTURE_RESULT') reply.then(() => emit(message)); else emit(message);
+    };
     await f.recording(true); f.send('LATE_SAVE');
-    await until(() => f.pages.get(17).feedback === 'Attestamp · Save not confirmed · Check History');
+    await until(() => f.pages.get(17).feedback === 'Attestamp · Save confirmation pending · Check History');
     if (cutoff.startsWith('OFF')) await f.recording(false);
     if (cutoff === 'OFF/ON') await f.recording(true);
     if (cutoff === 'newer Send') {

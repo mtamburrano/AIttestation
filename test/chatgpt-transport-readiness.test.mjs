@@ -65,7 +65,7 @@ test('a reachable relay with a genuinely replaced observer withdraws policy and 
   assert.doesNotMatch(debugSession.export(), /BYPASS_CANARY/);
 });
 
-test('an opaque delegate mutation keeps cached health but an unobserved Send reports a gap', async t => {
+test('an opaque delegate mutation keeps cached health but an unobserved Send stays uncertain', async t => {
   const { f } = await fixture(t); await f.recording(true);
   const page = f.pages.get(17); let delegate, effects = 0;
   page.wrapFetch(observed => {
@@ -79,7 +79,7 @@ test('an opaque delegate mutation keeps cached health but an unobserved Send rep
   f.send('UNOBSERVED_SYNTHETIC_SEND', { request: false });
   assert.equal(page.request('UNOBSERVED_SYNTHETIC_SEND'), promise);
   assert.equal(await promise, response); assert.equal(await response.text(), 'UNCHANGED_PROVIDER_RESPONSE');
-  await until(() => page.feedback === 'Attestamp · Recording gap');
+  await until(() => page.feedback === 'Attestamp · Save confirmation pending · Check History');
   assert.equal((await page.inspect()).observerState, 'wrapped');
   assert.equal(effects, 2, 'one health validation and one user Send, with no periodic wrapper invocation');
   assert.equal(f.deliveries.length, 0); assert.equal(f.runtime.session.receipts.list().length, 0);

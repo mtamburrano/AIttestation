@@ -46,11 +46,34 @@ isolated document's pending event, and the engine checks the retired token again
 the current tab/window/epoch and consent. Retired authority is bounded and grants
 no new admission on the old route.
 
-A save acknowledgement follows the encrypted signed text and observation writes
-and durable engine metadata. Storage uncertainty fails closed and reports a gap.
-A missing local acknowledgement alone reports an unconfirmed save in the page;
-History may already contain the durable evidence. A late valid acknowledgement
-can confirm only its still-current pending event.
+A save acknowledgement follows the encrypted signed text and observation writes.
+The normal path also finishes its engine metadata commit. If that metadata write
+fails after the evidence commits, the engine disables new capture while the exact
+event's local receipt remains saved. A failed or lost response alone is never a
+terminal recording gap. The page shows **Save confirmation pending · Check
+History** until an exact receipt confirms the save or a proven local rejection
+establishes a gap.
+
+The relay dispatches each payload once, then reconciles using only its immutable
+event ID. The authenticated native receipt query also binds the original source,
+including the exact document, tab, window and browser session. Queries cannot
+capture evidence, restore consent or send provider input. `POST /capture/receipt`
+accepts `{eventId}` on the authenticated local dashboard and returns
+`PROMPT_SAVED` with its receipt ID, or non-terminal `SAVE_PENDING`. Absence is
+not a rejection. Signed deduplication associations retain additional event IDs
+for the same stable provider message across restarts without copying its evidence
+or inventing a link from text, time or order.
+
+The native handshake advertises `pap-chatgpt-capture-receipt/1`. A worker paired
+with an older engine retains pending status and late-reply handling without
+sending it an unsupported receipt query.
+
+The worker retains up to 512 content-free receipt bindings and bounded late reply
+correlations. Each document keeps at most 16 pending event views; polling uses
+read-only receipt requests. Expiry or eviction never changes uncertainty into a
+failure. A late exact success updates its receipt and the still-current event's
+feedback. OFF, a replacement document, page exit or a newer Send cannot be
+overwritten by an earlier event's feedback; durable receipt lookup remains separate.
 A capture durably accepted before OFF remains evidence. Workers stop taking text
 snapshots once they receive OFF; stale in-flight buffers cannot become new evidence
 after the engine cutoff. A failed preference write also disables capture until
@@ -66,6 +89,13 @@ attempt journal apply to every retry. Restart resumes pending history in a fresh
 bounded batch, including observations whose earlier batch exhausted its retries;
 invalid proof results, missing configuration and missing credentials do not
 automatically retry. No job can replay a provider request.
+
+Anchor batches yield to the event loop, including immediately rejected service
+requests. Managed credentials use asynchronous, ordered exchanges over the same
+app-bound Keychain broker; no credential cache bypasses subsequent Keychain lock
+checks. Disconnect invalidates pending credential lookups before submission.
+Synchronous vault custody operations fail closed if that broker is already busy,
+so frames from the two paths cannot interleave.
 
 Native fast and archival proof verification use asynchronous child processes in
 the resident runtime, with the same independent proof validators and report
@@ -115,6 +145,15 @@ restored. New signed records use `pap-local-record/2` and normal observations us
 signed transport history so retries return the original receipt across restarts. Legacy schemas remain isolated read compatibility.
 Native framing, bundle identities, cryptographic domains and portable export
 formats retain their established identities.
+
+The vault caches only a validated, decrypted index for its current SQLite
+connection. Any external database commit, local index write, failed index commit,
+key rotation, close or custody reopen invalidates the appropriate snapshot.
+Writers use detached copies with the original optimistic conflict baseline;
+nonce reservation and FULL synchronous commits are unchanged. Receipt summaries
+cache verified observation groups by that opaque snapshot revision. Object reads
+still authenticate ciphertext; explicit export and full verification still read
+and verify the selected evidence or complete retained history.
 
 The private development locator is `pap-private-runtime/2` with only
 `dashboardURL`. After acquiring the resident lock, startup can replace an old

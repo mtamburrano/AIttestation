@@ -132,8 +132,11 @@ for (const profile of [4, 5]) test(`historical transport evidence /${profile} ke
   assert.ok(assertions.some(v => (profile === 4 ? /qualified by human Send/ : /No human-interaction/).test(v.claim)));
   assert.ok(assertions.some(v => v.kind === 'normal-acknowledgement'));
   assert.throws(() => session.observeNormal({ eventId: value.eventId }), /read-only/);
-  const retried = session.observeNormal({ ...value, kind: 'request-observed', eventId: randomUUID(), text: 'HISTORICAL_QUALIFIED_PROMPT' });
-  assert.equal(retried.id, value.eventId); assert.equal(canonical(vault.inspect().records), before);
+  const retried = session.observeNormal({ ...value, kind: 'request-observed', eventId: randomUUID(), text: 'HISTORICAL_QUALIFIED_PROMPT',
+    inputMethod: 'provider-request', request: { ...value.request, profile: 'chatgpt-new-user-text/3' },
+    source: { ...value.source, runtimeEpoch: randomUUID(), adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT } });
+  assert.equal(retried.id, value.eventId); assert.equal(canonical(vault.inspect().records.slice(0, 3)), before);
+  assert.equal(session.receipts.list().length, 1);
 });
 
 test('only known unambiguous global Continuous consent migrates ON; repeated migrations are stable', () => {
@@ -256,6 +259,9 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
       assurance: FAST_CONFIRM_PROFILE, round: 42 }) };
   const session = await new ChatGPTRecordingSession(directory, adapter, options).init();
   const status = session.status.bind(session), anchor = session.anchorManaged.bind(session);
+  const version = session.version.bind(session);
+  Object.defineProperty(session, 'versionCount', { get: () => versions.length + status().versions.length });
+  session.version = id => versions.find(value => value.id === id) ?? version(id);
   session.status = () => ({ versions: [...versions, ...status().versions] });
   session.anchorManaged = async request => {
     jobs.push(request.id); maximum = Math.max(maximum, ++active);
@@ -264,7 +270,7 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
   };
   const engine = await new ResidentEngine(directory, session, adapter, epoch).init();
   t.after(async () => { engine.stop(); finish(); await engine.drain(); });
-  assert.equal(jobs.length, 2); await engine.command(command(engine, true), { surface: 'desktop' });
+  await until(() => jobs.length === 2); await engine.command(command(engine, true), { surface: 'desktop' });
   const policy = engine.capturePolicy()[0], source = { adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
     runtimeEpoch: epoch, browserSessionId: policy.browserSessionId, scope: policy.scope, tabId: policy.tabId,
     windowId: policy.windowId, tabEpoch: policy.tabEpoch, documentId: 'queue-document', destination: policy.destination };

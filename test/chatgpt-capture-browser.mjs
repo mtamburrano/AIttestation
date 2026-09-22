@@ -88,7 +88,7 @@ try {
     const add=chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
     chrome.runtime.onMessage.addListener=listener=>add((message,sender,respond)=>{
       if(message.kind==='PAP_CAPTURE'&&__gate&&!__gate.entered)__gate.armed=true;
-      const reply=message.kind==='PAP_CAPTURE'&&__holdReplies?value=>__lateReplies.push(()=>respond(value)):respond;
+      const reply=['PAP_CAPTURE','PAP_CAPTURE_RECEIPT'].includes(message.kind)&&__holdReplies?value=>__lateReplies.push(()=>respond(value)):respond;
       return listener(message,sender,reply);
     });
     const query=chrome.tabs.query.bind(chrome.tabs);
@@ -102,6 +102,8 @@ try {
     chrome.tabs.onUpdated.addListener((id,change)=>__routes.push({urlChanged:!!change.url,status:change.status??null,hasCandidate:newChats.has(id)}));
     const send=chrome.tabs.sendMessage.bind(chrome.tabs);
     chrome.tabs.sendMessage=async(...args)=>{
+      if(args[1].kind==='PAP_CAPTURE_CONFIRMED'&&__holdReplies)
+        return new Promise(resolve=>__lateReplies.push(()=>send(...args).then(resolve)));
       const result=await send(...args);
       if(args[1].kind==='PAP_CONFIRM_NEW_CHAT')__proofs.push({confirmed:result?.confirmed===true});
       if(args[1].kind==='PAP_CAPTURE_POLICY'&&result===true)__policies.push({url:args[1].policy?.expectedUrl,state:args[1].state});
@@ -120,7 +122,7 @@ try {
     };
   `);
   runtime = await startPackagedChatGPT({ supportDirectory: join(root, 'engine'), keyStore: new MemoryKeyStore(),
-    managed: null, fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' }, openBrowser: false,
+    managed: null, installation: null, fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' }, openBrowser: false,
     collectFast: async () => { throw Error('EXTERNAL_ANCHOR_FORBIDDEN'); },
     attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } }) });
@@ -380,16 +382,19 @@ try {
   await setRecording(true);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
   await evaluate(workerSession, '__holdReplies=true');
+  const captureProbesBeforeDelay = await evaluate(workerSession, '__captureProbes.length');
   await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();
     requestOnlyPayload.messages[0].content={content_type:'text',parts:['SYNTHETIC_DELAYED_SAVE_REPLY']};requestOnly()`);
   await wait(() => runtime.session.receipts.list().length === 14);
-  await wait(() => evaluate(workerSession, '__lateReplies.length===2'));
-  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Save not confirmed · Check History'`));
-  assert.equal(interceptedSends, 18, 'local retries cannot repeat the provider request');
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Save confirmation pending · Check History'`));
+  await delay(4300);
+  assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · Save confirmation pending · Check History');
+  assert.equal(await evaluate(workerSession, '__captureProbes.length'), captureProbesBeforeDelay + 1);
+  assert.equal(interceptedSends, 18, 'receipt reconciliation cannot repeat the provider request');
   await evaluate(workerSession, '__holdReplies=false;for(const reply of __lateReplies.splice(0))reply()');
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · Prompt saved'`));
   assert.equal(runtime.session.receipts.list().length, 14);
-  report.checks.push('DURABLE_SAVE_REPLY_AFTER_BOTH_LOCAL_DEADLINES_STAYS_UNCONFIRMED_THEN_SAVED');
+  report.checks.push('DELAYED_SAVE_BEYOND_OLD_EXPIRY_STAYS_PENDING_THEN_SAVED_WITHOUT_CAPTURE_RETRY');
   const steeringWire = await readFile(new URL('./fixtures/chatgpt-wire/steer-turn.json', import.meta.url), 'utf8');
   const steeringBody = JSON.parse(steeringWire), steeringText = steeringBody.messages[1].content.parts[0];
   report.steeringFixtureSHA256 = createHash('sha256').update(steeringWire).digest('hex');
