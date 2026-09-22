@@ -189,11 +189,11 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
   assert.equal(manifest.name, 'Attestamp for ChatGPT');
   assert.equal(manifest.short_name, 'Attestamp');
-  assert.equal(manifest.version, '2.3.3');
+  assert.equal(manifest.version, '2.3.4');
   assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
   assert.match(manifest.description, /Attestamp desktop app/);
   assert.match(manifest.description, /supported ChatGPT tabs/);
-  assert.deepEqual(manifest.permissions.slice().sort(), ['nativeMessaging', 'sidePanel']);
+  assert.deepEqual(manifest.permissions.slice().sort(), ['nativeMessaging', 'scripting', 'sidePanel']);
   assert.equal(manifest.incognito, 'not_allowed');
   assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);

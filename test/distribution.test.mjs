@@ -201,7 +201,7 @@ test('Chrome Web Store upload strips only the development key and includes valid
   assert.equal(typeof sourceManifest.key, 'string');
   assert.equal(uploadManifest.key, undefined);
   assert.deepEqual(uploadManifest.icons, sourceManifest.icons);
-  assert.deepEqual(uploadManifest.permissions, ['nativeMessaging', 'sidePanel']);
+  assert.deepEqual(uploadManifest.permissions, ['nativeMessaging', 'sidePanel', 'scripting']);
   for (const file of ['sidepanel.html', 'sidepanel.js', 'sidepanel-model.js', 'sidepanel-channel.js', 'sidepanel.css']) {
     const uploaded = spawnSync('/usr/bin/unzip', ['-p', archive, file]);
     assert.equal(uploaded.status, 0);

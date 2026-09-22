@@ -48,12 +48,12 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     }
     const migrated = structuredClone(expected);
     if (file === 'spikes/browser/chatgpt/extension/manifest.json') {
-      migrated.version = '2.3.0';
+      migrated.version = '2.3.4';
       migrated.content_scripts = [
         { matches: ['https://chatgpt.com/*'], js: ['content-script.js'], run_at: 'document_start', world: 'ISOLATED' },
         { matches: ['https://chatgpt.com/*'], js: ['fetch-observer.js'], run_at: 'document_start', world: 'MAIN' },
       ];
-      migrated.permissions = ['nativeMessaging', 'sidePanel'];
+      migrated.permissions = ['nativeMessaging', 'sidePanel', 'scripting'];
       migrated.action = { default_title: 'Open Attestamp' };
       migrated.side_panel = { default_path: 'sidepanel.html' };
       migrated.content_security_policy = { extension_pages: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" };

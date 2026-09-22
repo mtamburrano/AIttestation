@@ -81,6 +81,7 @@ export class ChatGPTChromeAdapter {
         || !Array.isArray(connection.permissions)
         || connection.panelProfile !== undefined && connection.panelProfile !== CHATGPT_PANEL_PROFILE
         || connection.permissions.slice().sort().join(',') !== [...requiredPermissions,
+          ...(connection.permissions.includes('scripting') ? ['scripting'] : []),
           ...(connection.panelProfile === CHATGPT_PANEL_PROFILE ? ['sidePanel'] : [])].sort().join(',')
         || connection.hostPermission !== `${CHATGPT_ORIGIN}/*`
         || typeof connection.browserSessionId !== 'string' || connection.browserSessionId.length < 16

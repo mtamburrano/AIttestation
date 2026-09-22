@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Attestamp for ChatGPT",
   "short_name": "Attestamp",
-  "version": "2.3.3",
+  "version": "2.3.4",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAru1f1wdcIRFxvLi0Vx0iuuU8WoX5eVUimIqFb48sT673ULWn8+xP+Ua8FRWyLn1uK5oC9Hc6ddo8tzKyyNz7NVUXx8bzUF8Z2Oi5WsUYoAlwHr8KLRGuTk5CM9rZF4rLyGATGPHeyk9xmie+TyBFeH6LjVxijaW/TeZm8EB5cxf5MFiZEHFxaxBYSHsKP9YD70qLpaOo4vtcjdpcTHdAjMIqd3qsAlm9x/K4wMvUOui+pmSieD0y4TTDKPs9T9Y7YgqV/tx3vXJ5dMOshrtV8jw/QDOv/QpWB0oy3mMTFDrQ+VMHM8OVTiixNlvI+7Wptc42tcIUu2gVArKKHNhoEQIDAQAB",
   "minimum_chrome_version": "153",
   "description": "Connect supported ChatGPT tabs to the Attestamp desktop app for ON/OFF best-effort prompt recording and private local evidence.",
@@ -14,7 +14,8 @@
   },
   "permissions": [
     "nativeMessaging",
-    "sidePanel"
+    "sidePanel",
+    "scripting"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"

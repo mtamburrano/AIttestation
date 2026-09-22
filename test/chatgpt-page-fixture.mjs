@@ -33,7 +33,11 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     set textContent(value) { this.childNodes = [{ nodeType: 3, data: value }]; }
     get firstChild() { return this.childNodes[0]; }
     replaceChildren(...nodes) { this.childNodes = nodes; }
-    append(...nodes) { this.childNodes.push(...nodes); }
+    append(...nodes) { for (const node of nodes) node.parentNode = this; this.childNodes.push(...nodes); }
+    remove() {
+      if (this.parentNode) this.parentNode.childNodes = this.parentNode.childNodes.filter(node => node !== this);
+      this.parentNode = null;
+    }
     setAttribute(name, value) { this.attributes[name] = value; }
     getAttribute(name) { return this.attributes[name] ?? null; }
     contains(node) { return node === this || this.childNodes.some(value => value === node || value.contains?.(node)); }
@@ -52,6 +56,7 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
   };
   const document = { documentElement: new Element(), visibilityState: 'visible',
     querySelectorAll(selector) {
+      if (selector === '#attestamp-recording-status') return document.documentElement.childNodes.filter(node => node.id === 'attestamp-recording-status');
       if (selector === '#prompt-textarea') return page.editors;
       if (selector === 'button[data-testid="send-button"]') return page.buttons;
       if (selector === 'input[type=file]') return page.files;
@@ -62,6 +67,7 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     createTextNode: value => ({ nodeType: 3, data: value }),
     createElement: name => new Element(name.toUpperCase()),
     addEventListener: (name, callback) => { (events[name] ??= []).push(callback); },
+    removeEventListener: (name, callback) => { events[name] = (events[name] ?? []).filter(value => value !== callback); },
   };
   const page = { editor, button, document, location: new URL(url), editors: supported ? [editor] : [],
     buttons: sendState === 'absent' ? [] : sendState === 'ambiguous' ? [button, button] : [button],
@@ -92,8 +98,10 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
     clearTimeout(timer) { timers.delete(timer); clock.clearTimeout(timer); },
     getComputedStyle: node => ({ visibility: node.visible ? 'visible' : 'hidden', display: node.style?.display ?? 'block' }),
     addEventListener: (name, callback) => { (windowEvents[name] ??= []).push(callback); },
+    removeEventListener: (name, callback) => { windowEvents[name] = (windowEvents[name] ?? []).filter(value => value !== callback); },
     MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} },
-    chrome: { runtime: { id: CHATGPT_EXTENSION_ID, onMessage: { addListener: callback => { listener = callback; } },
+    chrome: { runtime: { id: CHATGPT_EXTENSION_ID, getManifest: () => ({ version: '2.3.4' }),
+      onMessage: { addListener: callback => { listener = callback; }, removeListener: callback => { if (callback === listener) listener = null; } },
       sendMessage: async message => {
         if (message.kind === 'PAP_SURFACE_CHANGED') { notifications.push(structuredClone(message)); notify(message, page); return; }
         if (['PAP_CAPTURE_STATUS', 'PAP_CAPTURE'].includes(message.kind)) return capture(message, page);
@@ -131,11 +139,13 @@ export function pageFixture({ draft = '', textarea = false, supported = true, se
   page.bypassObserver = () => { sandbox.fetch = originalFetch; };
   const context = createContext(sandbox);
   runInContext(source, context); if (transport) runInContext(observerSource, context);
+  page.reinject = () => { runInContext(source, context); runInContext(observerSource, context); };
+  page.invalidateExtension = () => { sandbox.chrome.runtime.id = undefined; };
   page.fetch = (...args) => sandbox.fetch(...args);
   page.request = (text, overrides = {}) => page.fetch('/backend-api/f/conversation', { method: 'POST',
     body: JSON.stringify({ action: 'next', messages: [{ id: webcrypto.randomUUID(), author: { role: 'user' },
       content: { content_type: 'text', parts: [text] } }], parent_message_id: webcrypto.randomUUID(),
     conversation_id: page.location.pathname === '/' ? null : page.location.pathname.split('/')[2], ...overrides }) });
-  page.transportMessage = data => sandbox.postMessage({ channel: 'pap-chatgpt-transport/2', ...data }, 'https://chatgpt.com');
+  page.transportMessage = data => sandbox.postMessage({ channel: 'pap-chatgpt-transport/3', ...data }, 'https://chatgpt.com');
   return page;
 }

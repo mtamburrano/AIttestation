@@ -198,7 +198,7 @@ The verifier checks these independent relationships:
   that origin, and the upload ZIP contains the same extension bytes with only
   the manifest's development key removed. Store packaging omits resource forks,
   extended attributes, quarantine and ACL metadata. Archive inspection occurs in memory.
-  The panel-enabled extension uses exactly `nativeMessaging` and `sidePanel`,
+  The extension uses exactly `nativeMessaging`, `sidePanel` and `scripting`,
   only the ChatGPT host permission, packaged panel resources, and a fixed CSP.
   External messaging, web-accessible panel resources and extra permissions reject.
   The [sidebar contract](../browser/chatgpt/DASHBOARD.md) documents its control boundary
@@ -360,8 +360,8 @@ they do not satisfy signing, store publication or installed-provider release gat
    **Attestamp for ChatGPT** extension and intentionally has no `key`, so the Web
    Store can assign the listing identity. The assigned draft
    Item ID is `medilhopfckldjgdnchfkpmfmfnkadca`, and its public key is pinned in
-   the keyed development manifest. The package must retain only `nativeMessaging`
-   and `https://chatgpt.com/*`, with the declared icon assets; a successful upload
+   the keyed development manifest. The package must retain only `nativeMessaging`,
+   `sidePanel`, `scripting` and the `https://chatgpt.com/*` host grant, with the declared icon assets; a successful upload
    is not identity approval.
 5. Under review, compare the assigned identity with the intended release. The
    keyed development manifest, native-messaging allowed origin, adapter extension

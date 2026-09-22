@@ -18,6 +18,16 @@ spikes/browser/chatgpt/build-observer.mjs --check` verifies the shipped bundle.
 There is no XHR, WebSocket, webRequest, debugger, proxy, iframe or prototype hook,
 remote executable adapter, CSP change, secondary recorder or provider refetch.
 
+The worker also injects these fixed packaged scripts into already-open supported
+top-level tabs after installation/update or worker startup. Chrome's `scripting`
+permission uses only the existing ChatGPT host grant. The isolated injection's
+document ID pins the MAIN injection; revoked permission or a replaced document
+ends recovery. Idempotent per-document instances avoid duplicate listeners and
+observers. A new relay removes old indicators, retires old pending work and claims
+a fresh observer owner; a retired relay cannot clear its successor's binding.
+An invalid extension context removes its own indicator and listeners. The page
+and provider requests continue without refresh, replay or a consent change.
+
 Supported requests are authenticated POSTs to exactly `/backend-api/conversation`,
 `/backend-api/f/conversation` or `/backend-api/f/steer_turn` on the provider origin, without URL query/fragment
 or credentials in the URL. Extraction selects the latest entry whose

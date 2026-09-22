@@ -1,3 +1,31 @@
+(() => {
+if (location.origin !== 'https://chatgpt.com' || window !== window.top) return;
+const extensionId = chrome.runtime.id, extensionVersion = chrome.runtime.getManifest().version;
+const former = globalThis.__attestampChatGPTContent;
+if (former?.active()) return;
+former?.dispose();
+for (const node of document.querySelectorAll('#attestamp-recording-status')) node.remove();
+const contentInstance = crypto.randomUUID(), listeners = [];
+let disposed = false, refreshTimer;
+function extensionAlive() {
+  try { return chrome.runtime.id === extensionId && chrome.runtime.getManifest().version === extensionVersion; }
+  catch { return false; }
+}
+function listen(target, name, listener, options) {
+  target.addEventListener(name, listener, options); listeners.push([target, name, listener, options]);
+}
+function dispose() {
+  if (disposed) return;
+  disposed = true; stopped = true; capturePolicy = null; bindings.clear(); clearObservations();
+  clearTimeout(refreshTimer); clearTimeout(advisoryTimer); transportControl('clear'); feedback?.remove();
+  for (const args of listeners) args[0].removeEventListener(...args.slice(1));
+  try { chrome.runtime.onMessage.removeListener(runtimeMessage); } catch {}
+  if (globalThis.__attestampChatGPTContent?.dispose === dispose) delete globalThis.__attestampChatGPTContent;
+}
+function notifyWorker(message) {
+  try { chrome.runtime.sendMessage(message).catch(() => { if (!extensionAlive()) dispose(); }); }
+  catch { if (!extensionAlive()) dispose(); }
+}
 // BEGIN GENERATED CONVERSATION ROUTES
 // Edit recipient/chatgpt-route.mjs, then run build-observer.mjs.
 // Preserve the existing signed destination bound (256 including its prefix).
@@ -20,7 +48,7 @@ const isChatGPTDestination = value => value === 'new-chat' || typeof value === '
 // END GENERATED CONVERSATION ROUTES
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21.1';
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/5';
-const CHANNEL = 'pap-chatgpt-transport/2';
+const CHANNEL = 'pap-chatgpt-transport/3';
 const REQUEST_GAPS = new Set(['REQUEST_BODY_READ_FAILED', 'REQUEST_BODY_LIMIT', 'REQUEST_JSON_INVALID',
   'REQUEST_OPERATION_UNSUPPORTED', 'REQUEST_MEDIA_ONLY', 'REQUEST_PROMPT_MISSING', 'REQUEST_IDENTITY_MISSING', 'REQUEST_PROMPT_INVALID']);
 const REQUEST_NOTICES = new Set(['REQUEST_MEDIA_IGNORED', 'REQUEST_CONVERSATION_UNAVAILABLE', 'REQUEST_CONVERSATION_DIFFERENT']);
@@ -36,7 +64,7 @@ function destination() {
   return chatGPTDestinationForURL(location.href);
 }
 function transportControl(kind, id) {
-  dispatchEvent(new CustomEvent('pap-chatgpt-transport-control', { detail: JSON.stringify({ kind,
+  dispatchEvent(new CustomEvent('pap-chatgpt-transport-control-v3', { detail: JSON.stringify({ kind, owner: contentInstance,
     ...(id ? { id, conversationId: capturePolicy.destination === 'new-chat' ? null : capturePolicy.destination.slice(13) } : {}) }) }));
 }
 function surface() {
@@ -45,10 +73,10 @@ function surface() {
     && transportAvailable && fresh, attachmentsPresent: false, observerState: fresh ? observerState : 'unavailable' };
 }
 function surfaceChanged() {
-  chrome.runtime.sendMessage({ kind: 'PAP_SURFACE_CHANGED' }).catch(() => {});
+  notifyWorker({ kind: 'PAP_SURFACE_CHANGED' });
 }
 function showRecording(state) {
-  if (!document.documentElement) return;
+  if (disposed || !document.documentElement) return;
   if (!feedback) {
     feedback = document.createElement('div'); feedback.id = 'attestamp-recording-status';
     feedback.setAttribute('role', 'status'); feedback.setAttribute('aria-live', 'polite');
@@ -130,7 +158,9 @@ function setCapturePolicy(message) {
   if (capturePolicy && policyCurrent(capturePolicy)) transportControl('arm', activeBinding);
 }
 async function refreshCapturePolicy() {
+  if (!extensionAlive()) { dispose(); return; }
   if (stopped) return;
+  clearTimeout(refreshTimer);
   const update = policyUpdate; let timer;
   try {
     transportControl('probe');
@@ -140,14 +170,16 @@ async function refreshCapturePolicy() {
     if (status?.kind !== 'PAP_CAPTURE_POLICY') throw Error('unavailable');
     setCapturePolicy(status); render();
   } catch {
+    if (!extensionAlive()) { dispose(); return; }
     if (update !== policyUpdate || stopped) return;
     // A missed poll is not consent revocation. Keep bounded observations under
     // their original binding; authenticated policy updates and the engine's
     // ordered cutoff still reject OFF, replaced documents and lost permission.
     render('RECORDING_UNAVAILABLE');
-  } finally { clearTimeout(timer); if (!stopped) setTimeout(refreshCapturePolicy, 1000); }
+  } finally { clearTimeout(timer); if (!stopped) refreshTimer = setTimeout(refreshCapturePolicy, 1000); }
 }
-chrome.runtime.onMessage.addListener((message, sender, respond) => {
+const runtimeMessage = (message, sender, respond) => {
+  if (disposed) return;
   if (sender.id !== chrome.runtime.id || sender.tab || message?.pageContract !== PAGE_CONTRACT) {
     respond({ surfaceSupported: false, destination: '', attachmentsPresent: false }); return;
   }
@@ -173,12 +205,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
           && JSON.stringify(pending.request) === JSON.stringify(message.request))) }); return;
   }
   respond({ error: 'UNSUPPORTED_PAGE_COMMAND' });
-});
+};
+chrome.runtime.onMessage.addListener(runtimeMessage);
 const diagnosticCodes = new Set();
 function reportDiagnostic(code) {
   if (diagnosticCodes.has(code)) return;
   diagnosticCodes.add(code);
-  chrome.runtime.sendMessage({ kind: 'PAP_PAGE_DIAGNOSTIC', pageContract: PAGE_CONTRACT, code }).catch(() => {});
+  notifyWorker({ kind: 'PAP_PAGE_DIAGNOSTIC', pageContract: PAGE_CONTRACT, code });
 }
 // Optional UI evidence only: a missed transport observation is diagnosable even
 // when an opaque page wrapper bypasses fetch. This timer grants/revokes nothing.
@@ -237,7 +270,7 @@ function deliverAck(pending) {
 const exactKeys = (value, names) => value && Object.keys(value).sort().join(',') === names.sort().join(',');
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-addEventListener('message', event => {
+listen(window, 'message', event => {
   if (stopped || event.source !== window || event.origin !== 'https://chatgpt.com' || event.data?.channel !== CHANNEL) return;
   const message = event.data;
   if (message.kind === 'ready' && exactKeys(message, ['channel', 'kind', 'available', 'observerState'])
@@ -326,13 +359,18 @@ addEventListener('message', event => {
     pending.acknowledgement = ack; deliverAck(pending);
   }
 });
-document.addEventListener('keydown', event => {
+listen(document, 'keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
       && !event.repeat && !event.isComposing && event.keyCode !== 229) noteSend(event);
 }, true);
-document.addEventListener('click', event => { if (event.button === 0) noteSend(event); }, true);
-addEventListener('pagehide', () => { stopped = true; capturePolicy = null; activeBinding = null; bindings.clear();
-  clearTimeout(advisoryTimer); transportControl('clear'); clearObservations(); });
-addEventListener('pageshow', () => { if (stopped) { stopped = false; refreshCapturePolicy(); } });
-document.addEventListener('DOMContentLoaded', () => { render(); surfaceChanged(); });
+listen(document, 'click', event => { if (event.button === 0) noteSend(event); }, true);
+listen(window, 'pagehide', () => { stopped = true; capturePolicy = null; activeBinding = null; bindings.clear();
+  clearTimeout(refreshTimer); clearTimeout(advisoryTimer); transportControl('clear'); clearObservations(); });
+listen(window, 'pageshow', () => { if (stopped && !disposed) { stopped = false; refreshCapturePolicy(); } });
+listen(document, 'DOMContentLoaded', () => { render(); surfaceChanged(); });
+globalThis.__attestampChatGPTContent = { active: () => !disposed && extensionAlive(), dispose };
+// Retire the pre-lifecycle observer without granting its old channel new policy.
+dispatchEvent(new CustomEvent('pap-chatgpt-transport-control', { detail: '{"kind":"clear"}' }));
+transportControl('claim');
 refreshCapturePolicy();
+})();

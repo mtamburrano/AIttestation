@@ -15,10 +15,11 @@ const event = () => {
 };
 
 export async function workerFixture({ onConnect = () => {}, inspect = async () => testTab(),
-  query = async () => [testTab()], permission = async () => true, clock = null, contexts = async () => [] } = {}) {
+  query = async () => [testTab()], permission = async () => true, clock = null, contexts = async () => [], executeScript = null } = {}) {
   const ports = [], panelPorts = [], timers = new Set();
   const chrome = {
     runtime: { id: CHATGPT_EXTENSION_ID, lastError: undefined, onMessage: event(), onConnect: event(),
+      onInstalled: event(),
       getContexts: contexts,
       getPlatformInfo: async () => ({ os: 'mac', arch: 'arm64' }),
       connectNative() {
@@ -30,6 +31,7 @@ export async function workerFixture({ onConnect = () => {}, inspect = async () =
       } },
     permissions: { contains: permission, onRemoved: event() },
     sidePanel: { setPanelBehavior: async () => {} },
+    scripting: executeScript ? { executeScript } : undefined,
     tabs: { query, sendMessage: inspect, onActivated: event(), onCreated: event(), onRemoved: event(), onUpdated: event() },
   };
   runInNewContext(await readFile(new URL('../spikes/browser/chatgpt/extension/service-worker.js', import.meta.url), 'utf8'), {

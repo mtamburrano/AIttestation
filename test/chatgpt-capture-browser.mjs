@@ -15,7 +15,8 @@ import { MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 const root = await mkdtemp('/private/tmp/attestamp-capture-browser-test-');
 const reportDirectory = await mkdtemp('/private/tmp/attestamp-capture-browser-report-');
 let runtime, browser, socket, native, pump, failure;
-const input = new PassThrough(), output = new PassThrough(), decoder = new NativeFrameDecoder(), incoming = [];
+let input = new PassThrough(), output = new PassThrough(), decoder = new NativeFrameDecoder();
+const incoming = [];
 const pending = new Map(), report = { evidence: 'REAL_CHROME_WITH_SYNTHETIC_PAGE_AND_NATIVE_PEER', checks: [] };
 let sequence = 0, interceptedSends = 0;
 const providerConversationId = '11111111-2222-4333-8444-555555555555';
@@ -50,7 +51,7 @@ window.fetch=function o(){wrapperEffects++;return delegate.apply(this,arguments)
 globalThis.lateFetch=window.fetch;globalThis.documentToken=crypto.randomUUID();
 const routePostMessage=window.postMessage,routeMessages=[];
 window.postMessage=function(message,...args){
-  if(location.pathname==='/'&&message?.channel==='pap-chatgpt-transport/2'
+  if(location.pathname==='/'&&message?.channel==='pap-chatgpt-transport/3'
       &&['matched','request','ack','notice','gap'].includes(message.kind)){routeMessages.push([message,...args]);return;}
   return Reflect.apply(routePostMessage,this,[message,...args]);
 };
@@ -78,6 +79,7 @@ try {
     globalThis.__writes=[];globalThis.__gate=null;globalThis.__captureProbes=[];globalThis.__routes=[];globalThis.__proofs=[];globalThis.__policies=[];
     globalThis.__holdReplies=false;globalThis.__lateReplies=[];
     globalThis.__updateListeners=[];
+    globalThis.__installReasons=[];chrome.runtime.onInstalled.addListener(details=>__installReasons.push(details.reason));
     const updated=chrome.tabs.onUpdated.addListener.bind(chrome.tabs.onUpdated);
     chrome.tabs.onUpdated.addListener=listener=>{__updateListeners.push(listener);updated(listener)};
     globalThis.__update=(id,change)=>{for(const listener of __updateListeners)listener(id,change)};
@@ -157,25 +159,28 @@ try {
   let target;
   await wait(async () => { target = (await call('Target.getTargets')).targetInfos.find(value => value.type === 'service_worker'
     && value.url === `chrome-extension://${CHATGPT_EXTENSION_ID}/service-worker.js`); return target; });
-  const workerSession = (await call('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
+  let workerSession = (await call('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
   await call('Runtime.enable', {}, workerSession);
   try { await wait(() => evaluate(workerSession, 'typeof __native !== "undefined"')); }
   catch (error) {
     console.error(await evaluate(workerSession, `({shim:typeof __writes,sidePanel:typeof chrome.sidePanel,native:typeof chrome.runtime.connectNative,worker:typeof connect})`));
     throw error;
   }
-  output.on('data', bytes => incoming.push(...decoder.push(bytes)));
-  native = await runNativeHost({ extensionOrigin: `chrome-extension://${CHATGPT_EXTENSION_ID}/`, rendezvousPath: runtime.rendezvousPath, input, output });
-  native.on('error', error => { failure = error; });
   let pumping = false;
-  pump = setInterval(async () => {
-    if (pumping) return; pumping = true;
-    try {
-      const writes = await evaluate(workerSession, `(()=>{for(const m of ${JSON.stringify(incoming.splice(0))})__native.onMessage.emit(m);return __writes.splice(0)})()`);
-      for (const value of writes) input.write(encodeNativeFrame(value));
-    } catch (error) { failure = error; }
-    finally { pumping = false; }
-  }, 20);
+  const pairWorker = async () => {
+    output.on('data', bytes => incoming.push(...decoder.push(bytes)));
+    native = await runNativeHost({ extensionOrigin: `chrome-extension://${CHATGPT_EXTENSION_ID}/`, rendezvousPath: runtime.rendezvousPath, input, output });
+    native.on('error', error => { failure = error; });
+    pump = setInterval(async () => {
+      if (pumping) return; pumping = true;
+      try {
+        const writes = await evaluate(workerSession, `(()=>{for(const m of ${JSON.stringify(incoming.splice(0))})__native.onMessage.emit(m);return __writes.splice(0)})()`);
+        for (const value of writes) input.write(encodeNativeFrame(value));
+      } catch (error) { failure = error; }
+      finally { pumping = false; }
+    }, 20);
+  };
+  await pairWorker();
   await wait(() => runtime.browserState());
   const setRecording = enabled => {
     const state = runtime.engine.state();
@@ -264,7 +269,7 @@ try {
   const policyStart = await evaluate(workerSession, '__policies.length');
   await evaluate(page, `globalThis.heldTransport=[];globalThis.originalPostMessage=window.postMessage;
     window.postMessage=function(message,...args){
-      if(message?.channel==='pap-chatgpt-transport/2'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
+      if(message?.channel==='pap-chatgpt-transport/3'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
       else return Reflect.apply(originalPostMessage,this,[message,...args]);
     }`);
   await send();
@@ -314,7 +319,7 @@ try {
   const routePolicyStart = await evaluate(workerSession, '__policies.length');
   await evaluate(page, `globalThis.heldTransport=[];globalThis.originalPostMessage=window.postMessage;
     window.postMessage=function(message,...args){
-      if(message?.channel==='pap-chatgpt-transport/2'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
+      if(message?.channel==='pap-chatgpt-transport/3'&&['request','ack'].includes(message.kind))heldTransport.push([message,...args]);
       else return Reflect.apply(originalPostMessage,this,[message,...args]);
     };requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
   await wait(() => evaluate(page, `heldTransport.some(message=>message[0].kind==='request')
@@ -415,6 +420,83 @@ try {
   await wait(() => evaluate(page, 'steeringResponse'));
   assert.equal(runtime.session.receipts.list().length, 15); assert.equal(interceptedSends, 19);
   report.checks.push('OWNER_DERIVED_STEERING_SEND_SAVES_EXACTLY_BEFORE_RESPONSE_WITHOUT_ADVISORY_GAP');
+  const reloadExtension = async () => {
+    clearInterval(pump); await wait(() => !pumping);
+    native.destroy(); input.destroy(); output.destroy(); incoming.length = 0;
+    await wait(() => !runtime.browserState());
+    const oldTarget = target.targetId;
+    await call('Target.detachFromTarget', { sessionId: workerSession });
+    assert.equal((await call('Extensions.loadUnpacked', { path: extension })).id, CHATGPT_EXTENSION_ID);
+    await wait(async () => {
+      target = (await call('Target.getTargets')).targetInfos.find(value => value.type === 'service_worker'
+        && value.url === `chrome-extension://${CHATGPT_EXTENSION_ID}/service-worker.js` && value.targetId !== oldTarget);
+      return target;
+    });
+    workerSession = (await call('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
+    await wait(() => evaluate(workerSession, 'typeof __native !== "undefined"'));
+    input = new PassThrough(); output = new PassThrough(); decoder = new NativeFrameDecoder();
+    await pairWorker(); await wait(() => runtime.browserState());
+    assert.ok((await evaluate(workerSession, '__installReasons')).includes('update'));
+  };
+  const lifecycleDocument = await evaluate(page, 'documentToken');
+  await evaluate(page, `globalThis.beforeReloadFetch=fetch;globalThis.orphan=document.createElement('div');
+    orphan.id='attestamp-recording-status';orphan.textContent='Attestamp · ON';document.body.append(orphan);
+    window.addEventListener('pap-chatgpt-transport-control-v3',event=>{globalThis.lastOwner=JSON.parse(event.detail).owner});
+    globalThis.preUpdateMessages=[];globalThis.lifecyclePost=window.postMessage;
+    window.postMessage=function(message,...args){
+      if(message?.channel==='pap-chatgpt-transport/3'&&['matched','request','ack','notice'].includes(message.kind))preUpdateMessages.push([message,...args]);
+      else return Reflect.apply(lifecyclePost,this,[message,...args]);
+    };requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => evaluate(page, `preUpdateMessages.some(args=>args[0].kind==='request')&&typeof lastOwner==='string'`));
+  await evaluate(page, 'window.postMessage=lifecyclePost;globalThis.preUpdateOwner=lastOwner');
+  assert.equal(runtime.session.receipts.list().length, 15);
+  const lifecycleSends = interceptedSends;
+  await reloadExtension();
+  await wait(() => runtime.adapter.scopes().some(source => source.tabId === tabId && source.eligibility === 'ELIGIBLE'));
+  await wait(() => evaluate(page, `document.querySelectorAll('#attestamp-recording-status').length===1
+    &&document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'&&!orphan.isConnected`));
+  assert.equal(await evaluate(page, 'documentToken'), lifecycleDocument);
+  assert.equal(await evaluate(page, 'fetch===beforeReloadFetch'), true);
+  assert.equal(interceptedSends, lifecycleSends); assert.equal(runtime.session.receipts.list().length, 15);
+  await evaluate(page, `for(const args of preUpdateMessages)Reflect.apply(lifecyclePost,window,args);
+    dispatchEvent(new CustomEvent('pap-chatgpt-transport-control-v3',{detail:JSON.stringify({kind:'clear',owner:preUpdateOwner})}))`);
+  await delay(150);
+  assert.equal(runtime.session.receipts.list().length, 15);
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 16);
+  assert.equal(interceptedSends, lifecycleSends + 1);
+  report.checks.push('EXISTING_TAB_RECOVERS_AFTER_ACTUAL_EXTENSION_RELOAD_WITHOUT_PAGE_REFRESH_OR_PROVIDER_ACTION');
+  report.checks.push('ORPHANED_INDICATORS_REPLACED_AND_NEXT_SEND_CAPTURED_ONCE');
+  report.checks.push('PRE_UPDATE_MESSAGES_AND_RETIRED_OWNER_CANNOT_CAPTURE_OR_CLEAR_CURRENT_BINDING');
+  await evaluate(workerSession, 'Promise.all([recoverExistingTabs(),recoverExistingTabs(),recoverExistingTabs()])');
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 17);
+  assert.equal(await evaluate(page, 'fetch===beforeReloadFetch'), true);
+  assert.equal(await evaluate(page, `document.querySelectorAll('#attestamp-recording-status').length`), 1);
+  assert.equal(interceptedSends, lifecycleSends + 2);
+  report.checks.push('REPEATED_RECOVERY_REUSES_OBSERVER_AND_SAVES_EXACTLY_ONCE');
+  await setRecording(false);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.hidden===true`));
+  const priorObserver = await readFile(join(extension, 'fetch-observer.js'), 'utf8');
+  const updatedObserver = priorObserver.replace(/const OBSERVER_REVISION = '[a-f0-9]{64}'/,
+    `const OBSERVER_REVISION = '${'f'.repeat(64)}'`);
+  assert.notEqual(updatedObserver, priorObserver);
+  await writeFile(join(extension, 'fetch-observer.js'), updatedObserver);
+  await reloadExtension();
+  await wait(() => runtime.adapter.scopes().some(source => source.tabId === tabId && source.eligibility === 'ELIGIBLE'));
+  await wait(() => evaluate(page, `document.querySelectorAll('#attestamp-recording-status').length===1
+    &&document.getElementById('attestamp-recording-status').hidden===true`));
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`); await delay(150);
+  assert.equal(runtime.engine.state().recording, false); assert.equal(runtime.session.receipts.list().length, 17);
+  assert.equal(interceptedSends, lifecycleSends + 3); assert.equal(await evaluate(page, 'documentToken'), lifecycleDocument);
+  assert.equal(await evaluate(page, 'fetch===beforeReloadFetch'), false);
+  await setRecording(true);
+  await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
+  await evaluate(page, `requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
+  await wait(() => runtime.session.receipts.list().length === 18);
+  assert.equal(interceptedSends, lifecycleSends + 4);
+  report.checks.push('OFF_SURVIVES_RELOAD_AND_LATER_ON_CAPTURES_WITHOUT_REFRESH');
+  report.checks.push('CHANGED_OBSERVER_BUILD_RETIRES_PRIOR_WRAPPER_WITHOUT_DUPLICATE_CAPTURE');
   await setRecording(false);
   report.totalWrapperEffects = await evaluate(page, 'wrapperEffects');
   report.syntheticSends = interceptedSends;

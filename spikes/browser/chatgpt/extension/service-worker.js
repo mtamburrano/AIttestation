@@ -122,7 +122,7 @@ async function inspectTabs() {
 }
 
 async function permissionState() {
-  const granted = await bounded(chrome.permissions.contains({ permissions: ['nativeMessaging', 'sidePanel'], origins: ['https://chatgpt.com/*'] }));
+  const granted = await bounded(chrome.permissions.contains({ permissions: ['nativeMessaging', 'sidePanel', 'scripting'], origins: ['https://chatgpt.com/*'] }));
   return granted ? 'granted' : 'revoked';
 }
 
@@ -138,7 +138,7 @@ async function stateMessage(kind) {
     // verified Chrome Stable identity before adapter pairing.
     browser: { product: 'UNVERIFIED', channel: 'UNVERIFIED', major: 0 },
     platform: { product: 'UNVERIFIED', arch: 'UNVERIFIED', version: '' },
-    permissions: ['nativeMessaging', 'sidePanel'], hostPermission: 'https://chatgpt.com/*',
+    permissions: ['nativeMessaging', 'sidePanel', 'scripting'], hostPermission: 'https://chatgpt.com/*',
     permissionState: permissions, tabs,
   };
 }
@@ -607,4 +607,29 @@ async function captureMessage(message, sender) {
     catch { return { state: 'SAVE_UNCONFIRMED' }; }
   } finally { context.captures.delete(requestId); }
 }
+let recovery;
+function recoverExistingTabs() {
+  if (!chrome.scripting?.executeScript) return Promise.resolve();
+  if (recovery) return recovery;
+  recovery = (async () => {
+    if (await permissionState() !== 'granted') return;
+    const tabs = await bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' }));
+    if (tabs.length > 32) return;
+    await Promise.allSettled(tabs.filter(tab => Number.isSafeInteger(tab.id) && tab.id >= 0
+      && !tab.incognito && !tab.discarded && supportedURL(tab.url)).map(async tab => {
+      // Pin the MAIN injection to the document Chrome actually recovered, so a
+      // concurrent navigation cannot join two different document instances.
+      const results = await bounded(chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] },
+        world: 'ISOLATED', files: ['content-script.js'], injectImmediately: true }));
+      if (results?.length !== 1 || results[0].frameId !== 0
+          || typeof results[0].documentId !== 'string' || !results[0].documentId.length
+          || results[0].documentId.length > 128 || await permissionState() !== 'granted') return;
+      await bounded(chrome.scripting.executeScript({ target: { tabId: tab.id, documentIds: [results[0].documentId] },
+        world: 'MAIN', files: ['fetch-observer.js'], injectImmediately: true }));
+    }));
+  })().catch(() => {}).finally(() => { recovery = null; publishState(); });
+  return recovery;
+}
+chrome.runtime.onInstalled.addListener(() => { void recoverExistingTabs(); });
 connect();
+void recoverExistingTabs();

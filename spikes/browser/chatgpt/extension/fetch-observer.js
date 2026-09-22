@@ -385,28 +385,44 @@ function installFetchObserver(target, { emit, baseURL = () => target.location.hr
 
 // transport/main.mjs
 
-const TRANSPORT_CHANNEL = 'pap-chatgpt-transport/2';
-const CONTROL_EVENT = 'pap-chatgpt-transport-control';
+const TRANSPORT_CHANNEL = 'pap-chatgpt-transport/3';
+const CONTROL_EVENT = 'pap-chatgpt-transport-control-v3';
+// Filled from the bundle's module bytes; changed code must replace old observers.
+const OBSERVER_REVISION = '497218fac54ea6ceb30b40c54496bdced0d6382b71734b99cc3b3349d8fe0ec2';
 const origin = 'https://chatgpt.com';
-if (location.origin === origin && window === window.top) {
+function startObserver() {
+  const previous = globalThis.__attestampChatGPTTransport;
+  if (previous?.revision === OBSERVER_REVISION) { previous.ready(); return; }
+  previous?.stop();
+  dispatchEvent(new CustomEvent('pap-chatgpt-transport-control', { detail: '{"kind":"clear"}' }));
   const observer = installFetchObserver(window, { emit: message => window.postMessage({ channel: TRANSPORT_CHANNEL, ...message }, origin) });
+  let owner = null;
   const ready = () => {
     const observerState = observer.state();
     window.postMessage({ channel: TRANSPORT_CHANNEL, kind: 'ready', observerState,
       available: observerState === 'ready' || observerState === 'wrapped' }, origin);
   };
-  addEventListener(CONTROL_EVENT, event => {
-    if (typeof event.detail !== 'string' || event.detail.length > 400) return;
+  const control = event => {
+    if (typeof event.detail !== 'string' || event.detail.length > 512) return;
     try {
       const message = JSON.parse(event.detail);
+      if (!/^[a-f0-9-]{36}$/.test(message.owner)) return;
       if (message.kind === 'arm' && /^[a-f0-9-]{36}$/.test(message.id)
-          && (message.conversationId === null || isChatGPTRouteIdentifier(message.conversationId))) observer.arm(message.id, message.conversationId);
-      else if (message.kind === 'clear') observer.clear();
+          && (message.conversationId === null || isChatGPTRouteIdentifier(message.conversationId))) {
+        owner = message.owner; observer.arm(message.id, message.conversationId);
+      } else if (message.kind === 'claim') { owner = message.owner; observer.clear(); }
+      else if (message.kind === 'clear' && message.owner === owner) observer.clear();
       else if (message.kind === 'probe') ready();
     } catch {}
-  });
-  addEventListener('pagehide', () => observer.clear());
+  };
+  const pagehide = () => observer.clear();
+  addEventListener(CONTROL_EVENT, control);
+  addEventListener('pagehide', pagehide);
+  globalThis.__attestampChatGPTTransport = { revision: OBSERVER_REVISION, ready, stop() {
+    removeEventListener(CONTROL_EVENT, control); removeEventListener('pagehide', pagehide); observer.stop();
+  } };
   ready();
 }
+if (location.origin === origin && window === window.top) startObserver();
 
 })();

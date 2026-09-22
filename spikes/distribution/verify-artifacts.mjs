@@ -205,7 +205,7 @@ function validateStore(snapshot, bytes) {
   const decoded = Buffer.from(manifest.key, 'base64'); require(decoded.toString('base64') === manifest.key);
   const id = sha256(decoded).slice(0, 32).replace(/[0-9a-f]/g, nibble => String.fromCharCode(97 + parseInt(nibble, 16)));
   require(id === STORE_ID && manifest.manifest_version === 3 && manifest.incognito === 'not_allowed');
-  same(manifest.permissions, ['nativeMessaging', 'sidePanel']); same(manifest.host_permissions, ['https://chatgpt.com/*']);
+  same(manifest.permissions, ['nativeMessaging', 'sidePanel', 'scripting']); same(manifest.host_permissions, ['https://chatgpt.com/*']);
   same(manifest.side_panel, { default_path: 'sidepanel.html' });
   same(manifest.action, { default_title: 'Open Attestamp' });
   same(manifest.content_security_policy, { extension_pages: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });

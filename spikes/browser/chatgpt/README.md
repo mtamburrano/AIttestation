@@ -28,7 +28,7 @@ See [ENGINE.md](ENGINE.md) for control, migration and OFF ordering,
 
 ## Authenticated Chrome transport
 
-Extension 2.3.3 negotiates adapter `pap-chatgpt-chrome/9`, page contract
+Extension 2.3.4 negotiates adapter `pap-chatgpt-chrome/9`, page contract
 `chatgpt-web-text/2026-09-21.1`, capture `pap-chatgpt-capture/5` and sidebar
 `pap-chatgpt-panel/2`. Old active contracts reject. Native bridge profile 3,
 bundle identities and cryptographic domains are unchanged.
@@ -40,7 +40,7 @@ route identifier; provider request conversation metadata remains independent.
 The first captured New Chat request keeps its original `new-chat` source even
 when the same document creates a conversation route before relay delivery.
 
-The extension has only `nativeMessaging`, `sidePanel` and
+The extension has only `nativeMessaging`, `sidePanel`, `scripting` and
 `https://chatgpt.com/*` host permission. Its manifest key pins Store item
 `medilhopfckldjgdnchfkpmfmfnkadca`; the upload omits the key. Incognito is disabled.
 The sidebar uses a document-owned request channel and a fresh confirmation after
@@ -49,6 +49,16 @@ including popups that copy a sidebar URL and then depart or change their URL.
 Origin, permissions, incognito exclusion and native
 authentication remain required. Rejection diagnostics separately negotiate
 `pap-chatgpt-panel-diagnostic/1`. See [sidebar trust and evidence](SIDEBAR.md).
+
+Extension install/update and worker startup recover existing supported tabs with
+the packaged relay and observer. Recovery targets only the top document on the
+existing ChatGPT host permission, pins both injections to Chrome's document ID,
+and never reloads the page. Isolated relay ownership removes orphaned indicators;
+the MAIN observer is reused on repeated recovery. The new relay channel retires
+older observer bindings without rearming them. Recording still requires a fresh
+authenticated policy from the engine; recovery does not change ON/OFF preference.
+The companion app must recognize `scripting` in the extension's permission set;
+older app builds reject the updated extension until the app is updated as well.
 
 Browser JavaScript reports identity as UNVERIFIED. The fixed native host verifies
 its live Google-signed Chrome Stable parent. The app's peer validator independently
