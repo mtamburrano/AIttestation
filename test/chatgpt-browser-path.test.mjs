@@ -15,6 +15,8 @@ import { identity as signingIdentity } from '../spikes/vault/records.mjs';
 import { signedLogFixture } from '../spikes/anchor/fixture.mjs';
 import { verifyAnchor } from '../spikes/anchor/verifier.mjs';
 import { verifyPortable } from '../spikes/recipient/portable.mjs';
+import { chatGPTDestinationForURL, isChatGPTRouteIdentifier, isChatGPTDestination } from '../spikes/recipient/chatgpt-route.mjs';
+import { validateCaptureSource } from '../spikes/recipient/normal-observation.mjs';
 
 const fastTrust = {
   profile: FAST_CONFIRM_PROFILE, network: 'testnet-v1.0', genesis: 'test-genesis',
@@ -31,6 +33,42 @@ const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
   adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/5',
   pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser-session', ...identity,
   permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [testTab()] });
+test('bounded route grammar agrees across adapter destinations and signed capture sources', () => {
+  const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID }); adapter.pair(hello());
+  const uuid = '11111111-2222-4333-8444-555555555555';
+  const source = destination => ({ adapterProfile: CHATGPT_ADAPTER_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
+    runtimeEpoch: 'synthetic-runtime', browserSessionId: 'synthetic-session', scope: randomUUID(),
+    tabId: 17, windowId: 1, tabEpoch: 'synthetic-epoch', documentId: 'synthetic-document', destination });
+  for (const identifier of ['a', 'a_Z-09', 'a'.repeat(243), `WEB:${uuid}`, `WEB:${uuid.toUpperCase()}`]) {
+    assert.equal(isChatGPTRouteIdentifier(identifier), true);
+    for (const ending of ['', '/']) {
+      const url = `https://chatgpt.com/c/${identifier}${ending}`, destination = `conversation:${identifier}`;
+      assert.equal(chatGPTDestinationForURL(url), destination);
+      adapter.synchronize({ ...hello(), tabs: [testTab({ url, destination })] });
+      assert.equal(adapter.scopes()[0]?.destination, destination);
+      assert.doesNotThrow(() => validateCaptureSource(source(destination)));
+    }
+  }
+  for (const identifier of ['', 'a'.repeat(244), 'WEB:', 'WEB:not-a-uuid', `web:${uuid}`, `OTHER:${uuid}`,
+    `WEB:${uuid}:extra`, 'a/b', 'a?b', 'a#b', 'a b', 'a\nb', 'a\n', 'a\r', 'a\t', 'a%2Fb', `WEB%3A${uuid}`, 'https://example.com', 'a\\b']) {
+    assert.equal(isChatGPTRouteIdentifier(identifier), false, JSON.stringify(identifier));
+    const destination = `conversation:${identifier}`, url = `https://chatgpt.com/c/${identifier}`;
+    assert.equal(chatGPTDestinationForURL(url), null, JSON.stringify(url));
+    assert.equal(isChatGPTDestination(destination), false);
+    assert.throws(() => validateCaptureSource(source(destination)), /INVALID_CAPTURE_OBSERVATION/);
+    adapter.synchronize({ ...hello(), tabs: [testTab({ url, destination: '' })] });
+    assert.equal(adapter.scopes().length, 0);
+  }
+  for (const url of ['http://chatgpt.com/c/a', 'https://chatgpt.com.evil/c/a', 'https://user@chatgpt.com/c/a',
+    'https://chatgpt.com:443/c/a', 'https://chatgpt.com/c/a//', 'https://chatgpt.com/c/a/?x',
+    'https://chatgpt.com/c/a/#x', 'https://chatgpt.com/?x', 'https://chatgpt.com/#x']) {
+    assert.equal(chatGPTDestinationForURL(url), null, url);
+    adapter.synchronize({ ...hello(), tabs: [testTab({ url, destination: 'conversation:a' })] });
+    assert.equal(adapter.scopes().length, 0);
+  }
+  assert.equal(chatGPTDestinationForURL('https://chatgpt.com/'), 'new-chat');
+  assert.doesNotThrow(() => validateCaptureSource(source('new-chat')));
+});
 async function fixture(t, options) {
   const directory = await mkdtemp('/private/tmp/attestamp-boundary-test-'); const f = await recordingFixture(directory, options);
   t.after(async () => { await f.close(); await rm(directory, { recursive: true, force: true }); }); return f;
@@ -151,7 +189,7 @@ test('extension manifest is limited to the supported ChatGPT surface and exposes
   const manifest = JSON.parse(await readFile(new URL('manifest.json', root), 'utf8'));
   assert.equal(manifest.name, 'Attestamp for ChatGPT');
   assert.equal(manifest.short_name, 'Attestamp');
-  assert.equal(manifest.version, '2.3.2');
+  assert.equal(manifest.version, '2.3.3');
   assert.ok(manifest.description.length <= 132, 'Chrome Web Store short description limit');
   assert.match(manifest.description, /Attestamp desktop app/);
   assert.match(manifest.description, /supported ChatGPT tabs/);

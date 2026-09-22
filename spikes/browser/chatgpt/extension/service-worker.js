@@ -29,8 +29,28 @@ const newChats = new Map();
 const retiredPolicies = new Map();
 const sameDocumentPolicy = (a, b) => a && b
   && ['runtimeEpoch', 'browserSessionId', 'tabId', 'windowId', 'tabEpoch'].every(key => a[key] === b[key]);
-const conversationURL = url => typeof url === 'string' && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(url);
-const supportedURL = url => url === 'https://chatgpt.com/' || conversationURL(url);
+// BEGIN GENERATED CONVERSATION ROUTES
+// Edit recipient/chatgpt-route.mjs, then run build-observer.mjs.
+// Preserve the existing signed destination bound (256 including its prefix).
+// WEB is the observed route namespace; provider wire IDs remain independent.
+const chatGPTRouteIdentifierPattern = /^(?:[A-Za-z0-9_-]{1,243}|WEB:[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12})$/;
+const isChatGPTRouteIdentifier = value => typeof value === 'string' && value.length <= 243
+  && chatGPTRouteIdentifierPattern.exec(value)?.[0] === value;
+
+function chatGPTDestinationForURL(value) {
+  if (value === 'https://chatgpt.com/') return 'new-chat';
+  const prefix = 'https://chatgpt.com/c/';
+  if (typeof value !== 'string' || !value.startsWith(prefix)) return null;
+  const identifier = value.slice(prefix.length, value.endsWith('/') ? -1 : undefined);
+  return isChatGPTRouteIdentifier(identifier) ? `conversation:${identifier}` : null;
+}
+
+const isChatGPTConversationURL = value => chatGPTDestinationForURL(value)?.startsWith('conversation:') === true;
+const isChatGPTDestination = value => value === 'new-chat' || typeof value === 'string'
+  && value.startsWith('conversation:') && isChatGPTRouteIdentifier(value.slice(13));
+// END GENERATED CONVERSATION ROUTES
+const conversationURL = isChatGPTConversationURL;
+const supportedURL = url => chatGPTDestinationForURL(url) !== null;
 const exactKeys = (value, keys) => value && Object.keys(value).sort().join(',') === keys.sort().join(',');
 const wireId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 function validRequest(value) {
@@ -527,9 +547,8 @@ async function captureMessage(message, sender) {
         || !message.text.isWellFormed() || new TextEncoder().encode(message.text).length > 256 * 1024
         || message.inputMethod !== 'provider-request' || !validRequest(message.request))
       || kind === 'acknowledgement' && !validAcknowledgement(message.acknowledgement)) return { state: 'RECORDING_UNAVAILABLE' };
-  const acknowledgementURL = retired ? policy.expectedUrl : tab.url;
-  if (kind === 'acknowledgement' && conversationURL(acknowledgementURL)
-      && message.acknowledgement.conversationId !== new URL(acknowledgementURL).pathname.split('/')[2]) return { state: 'RECORDING_UNAVAILABLE' };
+  // A route namespace is not provider request metadata. The isolated relay and
+  // engine correlate acknowledgements with the saved request and exact event.
   if (retired) {
     const valid = () => retiredPolicies.get(message.token) === retired && retired.expires > performance.now()
       && retired.documentId === sender.documentId && context.states.get(tab.id) === 'READY'

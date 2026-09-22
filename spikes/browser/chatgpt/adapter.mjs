@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { emit } from '../../diagnostics/local.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from './capture.mjs';
 import { CHATGPT_PANEL_PROFILE } from './panel.mjs';
+import { chatGPTDestinationForURL } from '../../recipient/chatgpt-route.mjs';
 
 export const CHATGPT_ADAPTER_PROFILE = 'pap-chatgpt-chrome/9';
 export const CHATGPT_PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21.1';
@@ -19,10 +20,7 @@ function fail(message) {
 }
 
 function supportedURL(value) {
-  try {
-    const url = new URL(value);
-    return url.origin === CHATGPT_ORIGIN && (url.pathname === '/' || /^\/c\/[A-Za-z0-9_-]+\/?$/.test(url.pathname));
-  } catch { return false; }
+  return chatGPTDestinationForURL(value) !== null;
 }
 
 function chatGPTURL(value) {
@@ -158,8 +156,7 @@ export class ChatGPTChromeAdapter {
 
   #chatGPTTabs() { return this.#tabs.filter(tab => chatGPTURL(tab.url)); }
   #expectedDestination(url) {
-    const pathname = new URL(url).pathname;
-    return pathname === '/' ? 'new-chat' : `conversation:${pathname.split('/')[2]}`;
+    return chatGPTDestinationForURL(url);
   }
   #observableTabs() {
     return this.capabilities.observation ? this.#chatGPTTabs().filter(tab => supportedURL(tab.url)

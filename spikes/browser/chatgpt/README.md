@@ -28,10 +28,17 @@ See [ENGINE.md](ENGINE.md) for control, migration and OFF ordering,
 
 ## Authenticated Chrome transport
 
-Extension 2.3.2 negotiates adapter `pap-chatgpt-chrome/9`, page contract
+Extension 2.3.3 negotiates adapter `pap-chatgpt-chrome/9`, page contract
 `chatgpt-web-text/2026-09-21.1`, capture `pap-chatgpt-capture/5` and sidebar
 `pap-chatgpt-panel/2`. Old active contracts reject. Native bridge profile 3,
 bundle identities and cryptographic domains are unchanged.
+
+Supported conversation routes use a bounded plain identifier or the observed
+`WEB:<uuid>` form. The shared route grammar rejects query strings, fragments,
+encoded separators and unrelated namespaces. Source destinations retain the
+route identifier; provider request conversation metadata remains independent.
+The first captured New Chat request keeps its original `new-chat` source even
+when the same document creates a conversation route before relay delivery.
 
 The extension has only `nativeMessaging`, `sidePanel` and
 `https://chatgpt.com/*` host permission. Its manifest key pins Store item

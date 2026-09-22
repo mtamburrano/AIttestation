@@ -18,6 +18,8 @@ let runtime, browser, socket, native, pump, failure;
 const input = new PassThrough(), output = new PassThrough(), decoder = new NativeFrameDecoder(), incoming = [];
 const pending = new Map(), report = { evidence: 'REAL_CHROME_WITH_SYNTHETIC_PAGE_AND_NATIVE_PEER', checks: [] };
 let sequence = 0, interceptedSends = 0;
+const providerConversationId = '11111111-2222-4333-8444-555555555555';
+const routeIdentifier = `WEB:${providerConversationId}`;
 const heldSteering = [];
 function call(method, params = {}, sessionId) {
   return new Promise((resolve, reject) => {
@@ -46,15 +48,24 @@ globalThis.observerInstalled=delegate.name==='fetchObserved';
 globalThis.wrapperEffects=0;
 window.fetch=function o(){wrapperEffects++;return delegate.apply(this,arguments)};
 globalThis.lateFetch=window.fetch;globalThis.documentToken=crypto.randomUUID();
+const routePostMessage=window.postMessage,routeMessages=[];
+window.postMessage=function(message,...args){
+  if(location.pathname==='/'&&message?.channel==='pap-chatgpt-transport/2'
+      &&['matched','request','ack','notice','gap'].includes(message.kind)){routeMessages.push([message,...args]);return;}
+  return Reflect.apply(routePostMessage,this,[message,...args]);
+};
 globalThis.providerSends=0;document.querySelector('button').onclick=()=>{
 providerSends++;
 const payload={action:'next',parent_message_id:crypto.randomUUID(),
-  conversation_id:location.pathname==='/'?null:location.pathname.split('/')[2],
+  conversation_id:location.pathname==='/'?null:'${providerConversationId}',
   messages:[{id:crypto.randomUUID(),author:{role:'user'},content:{content_type:'text',parts:[document.querySelector('textarea').value]}}]};
 fetch(new Request('https://chatgpt.com/backend-api/f/conversation',{method:'POST',body:JSON.stringify(payload)}))
   .then(response=>response.text()).then(()=>globalThis.providerResponses=(globalThis.providerResponses??0)+1);
 document.querySelector('textarea').value='';
-if(location.pathname==='/')setTimeout(()=>history.pushState(null,'','/c/synthetic-conversation'),25);
+if(location.pathname==='/')setTimeout(()=>{
+  history.pushState(null,'','/c/${routeIdentifier}');
+  for(const args of routeMessages.splice(0))Reflect.apply(routePostMessage,window,args);
+},25);
 };</script>`;
 try {
   const extension = join(root, 'extension');
@@ -131,7 +142,7 @@ try {
       if (isSend) interceptedSends++;
       if (isSteering) { heldSteering.push(value); return; }
       const responseBody = isPage ? html : isSend ? 'data: ' + JSON.stringify({ type: 'stream_handoff',
-        conversation_id: 'synthetic-conversation', turn_exchange_id: 'synthetic-' + randomUUID() }) + '\n\n' : '';
+        conversation_id: providerConversationId, turn_exchange_id: 'synthetic-' + randomUUID() }) + '\n\n' : '';
       void call('Fetch.fulfillRequest', { requestId: value.params.requestId, responseCode: isPage || isSend ? 200 : 404,
         responseHeaders: [{ name: 'Content-Type', value: isSend ? 'text/event-stream' : 'text/html; charset=utf-8' }],
         body: Buffer.from(responseBody).toString('base64') }, value.sessionId).catch(error => { failure = error; });
@@ -217,7 +228,7 @@ try {
   };
   await evaluate(workerSession, '__gate={armed:false,entered:false}');
   await send();
-  await wait(() => runtime.adapter.scopes().some(source => source.destination === 'conversation:synthetic-conversation'));
+  await wait(() => runtime.adapter.scopes().some(source => source.destination === `conversation:${routeIdentifier}`));
   await wait(() => evaluate(workerSession, 'typeof __gate.release === "function"'));
   await evaluate(workerSession, `__update(${tabId},{status:'loading'});__update(${tabId},{status:'loading'})`);
   await delay(100);
@@ -236,8 +247,11 @@ try {
   assert.equal(await evaluate(page, 'providerSends'), 1);
   report.checks.push('FIRST_GENUINE_SEND_DURABLE_ONCE_AFTER_REAL_SAME_DOCUMENT_NAVIGATION_WITH_HELD_BROWSER_CHECK');
   report.checks.push('FRESH_TAB_FIRST_SEND_SURVIVES_INJECTED_REPEATED_LOADING_WITH_REAL_DOCUMENT_PROOFS');
+  report.checks.push('LIVE_SHAPED_WEB_ROUTE_PRECEDES_MATCHED_EVENT_DELIVERY');
   await send(); await wait(() => runtime.session.receipts.list().length === 2);
   assert.equal(await evaluate(page, 'providerSends'), 2);
+  assert.equal(runtime.session.status().versions[1].source.destination, `conversation:${routeIdentifier}`);
+  assert.equal(runtime.session.status().versions[1].request.conversationId, providerConversationId);
   report.checks.push('LATER_EQUAL_TEXT_SEND_HAS_DISTINCT_RECEIPT_ON_CURRENT_CONVERSATION');
   await wait(() => runtime.session.status().versions.every(version => version.acknowledgement?.kind === 'stream-handoff'));
   report.checks.push('EARLY_HANDOFF_BINDS_TO_BOTH_DURABLE_EVENTS');
@@ -255,9 +269,9 @@ try {
     }`);
   await send();
   await wait(() => evaluate(page, `heldTransport.some(message=>message[0].kind==='request')&&providerResponses===3`));
-  await wait(() => evaluate(workerSession, `__policies.slice(${policyStart}).some(value=>value.state==='READY'&&value.url==='https://chatgpt.com/c/synthetic-conversation')`));
+  await wait(() => evaluate(workerSession, `__policies.slice(${policyStart}).some(value=>value.state==='READY'&&value.url==='https://chatgpt.com/c/${routeIdentifier}')`));
   await evaluate(workerSession, `__update(${tabId},{status:'loading'});__update(${tabId},{status:'loading'});
-    __update(${tabId},{url:'https://chatgpt.com/c/synthetic-conversation',status:'loading'});__update(${tabId},{status:'complete'})`);
+    __update(${tabId},{url:'https://chatgpt.com/c/${routeIdentifier}',status:'loading'});__update(${tabId},{status:'complete'})`);
   await delay(100);
   assert.equal(runtime.session.receipts.list().length, 2);
   assert.equal(await evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent`), 'Attestamp · ON');
@@ -283,7 +297,7 @@ try {
   await setRecording(true);
   await wait(() => evaluate(page, `document.getElementById('attestamp-recording-status')?.textContent==='Attestamp · ON'`));
   await evaluate(page, `document.querySelector('textarea').remove();document.querySelector('button').remove();
-    globalThis.requestOnlyPayload={action:'next',parent_message_id:'synthetic-parent',conversation_id:'synthetic-conversation',
+    globalThis.requestOnlyPayload={action:'next',parent_message_id:'synthetic-parent',conversation_id:'${providerConversationId}',
       messages:[{id:crypto.randomUUID(),author:{role:'user'},content:{content_type:'text',parts:['  REQUEST_ONLY_e\\u0301\\r\\n☕  ']}}]};
     globalThis.requestOnly=()=>fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify(requestOnlyPayload)}).then(response=>response.text());
     requestOnly()`);
@@ -310,8 +324,8 @@ try {
   assert.equal(runtime.session.receipts.list().length, 5);
   await evaluate(page, `window.postMessage=originalPostMessage;for(const args of heldTransport)Reflect.apply(originalPostMessage,window,args);heldTransport=[]`);
   await wait(() => runtime.session.receipts.list().length === 6);
-  await wait(() => runtime.session.status().versions[5].acknowledgement?.conversationId === 'synthetic-conversation');
-  assert.equal(runtime.session.status().versions[5].source.destination, 'conversation:synthetic-conversation');
+  await wait(() => runtime.session.status().versions[5].acknowledgement?.conversationId === providerConversationId);
+  assert.equal(runtime.session.status().versions[5].source.destination, `conversation:${routeIdentifier}`);
   await evaluate(page, `requestOnlyPayload.conversation_id='next-conversation';requestOnlyPayload.messages[0].id=crypto.randomUUID();requestOnly()`);
   await wait(() => runtime.session.receipts.list().length === 7);
   assert.equal(runtime.session.status().versions[6].source.destination, 'conversation:next-conversation');

@@ -1,4 +1,5 @@
 import { keys, unb64 } from '../vault/format.mjs';
+import { isChatGPTDestination } from './chatgpt-route.mjs';
 
 export const CHATGPT_CAPTURE_PROFILE = 'pap-chatgpt-capture/5';
 export const NORMAL_OBSERVATION_PROFILE = 'pap-chatgpt-observation/6';
@@ -16,7 +17,7 @@ export function validateCaptureSource(source) {
       || !Number.isSafeInteger(source.tabId) || source.tabId < 0
       || !Number.isSafeInteger(source.windowId) || source.windowId < 0
       || !bounded(source.tabEpoch, 128) || !bounded(source.documentId, 128)
-      || !bounded(source.destination, 256) || !/^(new-chat|conversation:[A-Za-z0-9_-]+)$/.test(source.destination)) invalid();
+      || !isChatGPTDestination(source.destination)) invalid();
 }
 
 export function validateRequest(request) {

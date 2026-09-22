@@ -1,4 +1,5 @@
 import { installFetchObserver } from './fetch-observer.mjs';
+import { isChatGPTRouteIdentifier } from '../../../recipient/chatgpt-route.mjs';
 
 const TRANSPORT_CHANNEL = 'pap-chatgpt-transport/2';
 const CONTROL_EVENT = 'pap-chatgpt-transport-control';
@@ -15,7 +16,7 @@ if (location.origin === origin && window === window.top) {
     try {
       const message = JSON.parse(event.detail);
       if (message.kind === 'arm' && /^[a-f0-9-]{36}$/.test(message.id)
-          && (message.conversationId === null || /^[A-Za-z0-9_-]{1,128}$/.test(message.conversationId))) observer.arm(message.id, message.conversationId);
+          && (message.conversationId === null || isChatGPTRouteIdentifier(message.conversationId))) observer.arm(message.id, message.conversationId);
       else if (message.kind === 'clear') observer.clear();
       else if (message.kind === 'probe') ready();
     } catch {}

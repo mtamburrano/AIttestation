@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { recordingFixture, until } from './recording-fixture.mjs';
+import { verifyPortable } from '../spikes/recipient/portable.mjs';
 
 const tick = () => new Promise(setImmediate);
 const saved = f => f.runtime.session.receipts.list();
@@ -27,6 +28,50 @@ async function assertFeedback(f, state) {
   assert.equal(f.pages.get(17).feedback, state);
 }
 
+// Owner-observed route shape; identifiers and prompt bytes are synthetic.
+const liveRouteId = 'WEB:11111111-2222-4333-8444-555555555555';
+for (const newChat of [true, false]) {
+  test(`live-shaped first New Chat matched event survives route creation (${newChat ? 'fresh tab' : 'same-tab return'})`, async t => {
+    const providerId = '11111111-2222-4333-8444-555555555555';
+    const f = await fixture(t, { newChat, fixedSenderURL: true,
+      fetchResponse: async () => new Response(`data: ${JSON.stringify({ type: 'stream_handoff',
+        conversation_id: providerId, turn_exchange_id: 'synthetic-turn' })}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } }) });
+    if (!newChat) await conversationPolicy(f, 'https://chatgpt.com/');
+    const page = f.pages.get(17), matched = page.holdTransport('matched'), request = page.holdTransport('request'), ack = page.holdTransport('ack');
+    const originalPolicy = (await f.refresh()).policy;
+    f.send('LIVE_SHAPED_FIRST_e\u0301\r\n  ☕');
+    await until(() => matched.messages.length === 1 && request.messages.length === 1);
+    // The live breakpoint saw the created route before the matched event was
+    // admitted, with the old new-chat policy still installed in this document.
+    page.location.href = `https://chatgpt.com/c/${liveRouteId}`;
+    matched.release(); await tick(); await tick();
+    assert.equal(page.checks.some(value => value.code === 'REQUEST_MESSAGE_REJECTED'), false,
+      'the matched event must survive the observed WEB route before request delivery');
+    assert.ok(page.checks.some(value => value.code === 'REQUEST_MATCHED'));
+    request.release(); ack.release(); await until(() => page.feedback === 'Attestamp · Prompt saved');
+    page.transportMessage(matched.messages[0].data); page.transportMessage(request.messages[0].data);
+    await tick(); await f.runtime.engine.drain();
+    await until(() => f.runtime.session.status().versions[0].acknowledgement);
+    assert.equal(saved(f).length, 1);
+    assert.equal(f.deliveries.filter(value => value.observation.kind === 'request-observed').length, 1);
+    assert.equal(f.sources[0].destination, 'new-chat');
+    assert.equal(f.sources[0].scope, originalPolicy.scope);
+    assert.equal(f.deliveries[0].observation.request.conversationId, null);
+    await conversationPolicy(f, page.location.href);
+    await page.request('ESTABLISHED_PREFIXED_ROUTE', { conversation_id: providerId });
+    await until(() => saved(f).length === 2 && f.runtime.session.status().versions[1].acknowledgement);
+    const established = f.runtime.session.status().versions[1];
+    assert.equal(established.source.destination, `conversation:${liveRouteId}`);
+    assert.equal(established.request.conversationId, providerId);
+    assert.equal(established.acknowledgement.conversationId, providerId);
+    const preview = f.runtime.session.receipts.prepare({ ids: saved(f).map(value => value.id) });
+    assert.ok(preview.texts.some(value => value.preview === 'LIVE_SHAPED_FIRST_e\u0301\r\n  ☕'));
+    assert.doesNotThrow(() => verifyPortable(f.runtime.session.receipts.export(preview.previewId)));
+    assert.equal(page.requests.length, 2); assert.equal(f.prevention, 0); assert.equal(f.releases.length, 0);
+  });
+}
+
 for (const newChat of [true, false]) {
   test(`first New Chat Send survives repeated loading updates (${newChat ? 'fresh tab' : 'same-tab return'})`, async t => {
     const f = await fixture(t, { newChat, fixedSenderURL: true });
@@ -39,7 +84,7 @@ for (const newChat of [true, false]) {
       f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
       await tick(); await f.refresh();
     }
-    await conversationPolicy(f);
+    await conversationPolicy(f, `https://chatgpt.com/c/${liveRouteId}`);
     f.worker.chrome.tabs.onUpdated.emit(17, { status: 'loading' });
     await tick();
     f.worker.chrome.tabs.onUpdated.emit(17, { url: page.location.href, status: 'loading' });
@@ -108,7 +153,7 @@ for (const change of ['OFF', 'OFF/ON', 'reload', 'full navigation', 'replacement
     f.send('DELAYED_FIRST_REQUEST', { request: false });
     assert.equal(page.request('DELAYED_FIRST_REQUEST'), provider);
     await until(() => relay.messages.length === 1);
-    await conversationPolicy(f);
+    await conversationPolicy(f, `https://chatgpt.com/c/${liveRouteId}`);
     if (change === 'OFF' || change === 'OFF/ON') await f.recording(false);
     if (change === 'OFF/ON') await f.recording(true);
     if (change === 'reload' || change === 'full navigation') page.event('pagehide');

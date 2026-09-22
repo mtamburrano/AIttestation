@@ -1,3 +1,23 @@
+// BEGIN GENERATED CONVERSATION ROUTES
+// Edit recipient/chatgpt-route.mjs, then run build-observer.mjs.
+// Preserve the existing signed destination bound (256 including its prefix).
+// WEB is the observed route namespace; provider wire IDs remain independent.
+const chatGPTRouteIdentifierPattern = /^(?:[A-Za-z0-9_-]{1,243}|WEB:[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12})$/;
+const isChatGPTRouteIdentifier = value => typeof value === 'string' && value.length <= 243
+  && chatGPTRouteIdentifierPattern.exec(value)?.[0] === value;
+
+function chatGPTDestinationForURL(value) {
+  if (value === 'https://chatgpt.com/') return 'new-chat';
+  const prefix = 'https://chatgpt.com/c/';
+  if (typeof value !== 'string' || !value.startsWith(prefix)) return null;
+  const identifier = value.slice(prefix.length, value.endsWith('/') ? -1 : undefined);
+  return isChatGPTRouteIdentifier(identifier) ? `conversation:${identifier}` : null;
+}
+
+const isChatGPTConversationURL = value => chatGPTDestinationForURL(value)?.startsWith('conversation:') === true;
+const isChatGPTDestination = value => value === 'new-chat' || typeof value === 'string'
+  && value.startsWith('conversation:') && isChatGPTRouteIdentifier(value.slice(13));
+// END GENERATED CONVERSATION ROUTES
 const PAGE_CONTRACT = 'chatgpt-web-text/2026-09-21.1';
 const CAPTURE_PROFILE = 'pap-chatgpt-capture/5';
 const CHANNEL = 'pap-chatgpt-transport/2';
@@ -13,10 +33,7 @@ let transportSeen = -Infinity, transportAvailable = false, lastReported = null, 
 let observerState = 'unavailable';
 
 function destination() {
-  if (location.origin !== 'https://chatgpt.com') return null;
-  if (location.pathname === '/') return 'new-chat';
-  const match = /^\/c\/([A-Za-z0-9_-]+)\/?$/.exec(location.pathname);
-  return match ? `conversation:${match[1]}` : null;
+  return chatGPTDestinationForURL(location.href);
 }
 function transportControl(kind, id) {
   dispatchEvent(new CustomEvent('pap-chatgpt-transport-control', { detail: JSON.stringify({ kind,
@@ -59,7 +76,7 @@ function continuationCurrent(pending) {
     && performance.now() - pending.observedAt < 5000
     && policySession === pending.policy.browserSessionId
     && (!pending.continuationUrl || pending.continuationUrl === location.href)
-    && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href);
+    && isChatGPTConversationURL(location.href);
 }
 function pendingCurrent(pending) {
   return !stopped && observations.get(pending.eventId) === pending && policyState === 'READY'
@@ -89,7 +106,7 @@ function setCapturePolicy(message) {
     for (const [id, binding] of bindings) {
       const sameSource = state === 'READY' && sameDocumentPolicy(policy, binding.policy);
       const firstRoute = binding.policy.destination === 'new-chat' && sameSource
-        && /^https:\/\/chatgpt\.com\/c\/[A-Za-z0-9_-]+\/?$/.test(location.href)
+        && isChatGPTConversationURL(location.href)
         && (!binding.continuationUrl || binding.continuationUrl === location.href)
         && (!binding.expires || performance.now() < binding.expires);
       if (!firstRoute) { bindings.delete(id); continue; }
