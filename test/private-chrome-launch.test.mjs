@@ -85,6 +85,7 @@ test('real direct launch runs the selected bundle executable when duplicate bund
   let launched;
   t.after(async () => {
     if (launched && launched.exitCode === null && launched.signalCode === null) {
+      launched.ref();
       launched.kill(); await once(launched, 'exit');
     }
     await rm(root, { recursive: true, force: true });
