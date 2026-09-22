@@ -299,16 +299,27 @@ The vault and Keychain namespace belong to the separate OS account; no productio
 account is read or modified. The browser is launched with that explicit user-data
 directory, without inherited Node/TLS/proxy options or a debug port.
 
-Chrome opens through LaunchServices using the validated application path, so
-macOS can attribute Chrome's own activity to Chrome. The earlier direct executable
-launch attributed Chrome's signed-app clone maintenance to Attestamp and caused an
-[App Management](https://support.apple.com/en-mide/guide/mac-help/mchl211c911f/mac)
-notification. Updating or deleting other apps is not an
-Attestamp test prerequisite. Keep Attestamp disabled in **System Settings → Privacy
-& Security → App Management**; stop and investigate if this notification returns.
-This permission is separate from signing-key access and the test user's login
-Keychain. Installed startup, native pairing, restart and cleanup checks pass with
-App Management disabled; see the readiness record for their scope.
+Chrome starts by executing the exact validated bundle's
+`Contents/MacOS/Google Chrome`; LaunchServices may resolve `open -a PATH` to a
+different installed copy. The launcher checks this user's running Chrome main
+processes before and after launch and confirms the effective executable path.
+`CLOSE_OTHER_CHROME_COPY` means another copy is running: quit it normally before
+retrying. The launcher never kills another browser or deletes profile locks. A
+running instance of the selected copy may receive a Dashboard request normally.
+`CHROME_LAUNCH_NOT_CONFIRMED` means no matching process was observed; startup is
+not reported as successful. Raw process listings and browser errors are not logged.
+
+The dedicated test user's normal Chrome user-data directory remains supported;
+no additional profile is required. Native origin, signatures, parent/ancestry,
+rendezvous/token, epoch and socket authentication remain unchanged.
+
+Direct launching can attribute Chrome's signed-app clone maintenance to Attestamp.
+Keep Attestamp disabled in **System Settings → Privacy & Security → App Management**;
+if that notification returns, stop the installed check and investigate separately.
+Do not grant app-management permission or weaken native authentication to make
+pairing pass. Earlier LaunchServices results in the historical readiness record
+do not validate this launcher. Fresh installed pairing and permission attribution
+still require their own checkpoint after independent review.
 
 ## Local sponsorship, with real TestNet confirmation
 
