@@ -1,4 +1,5 @@
-import { RUNTIME_STATE_PROFILE } from './runtime-state.mjs';
+import { validateRuntimeState } from './runtime-state.mjs';
+import { requestPrivateExit } from './stop.mjs';
 import { readFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -16,36 +17,55 @@ const run = (command, args) => execFileSync(command, args, {
 import { registerNativeHost, removeNativeHost } from './integration.mjs';
 export { registerNativeHost, removeNativeHost };
 
-export async function stopDevelopment() {
-  const paths = await validateAccount(), state = join(paths.control, 'runtime.json');
-  if (await exists(state)) {
-    const entry = await privateJSON(state), url = new URL(entry.dashboardURL);
-    if (entry.profile !== RUNTIME_STATE_PROFILE || url.protocol !== 'http:' || url.hostname !== '127.0.0.1'
-        || url.pathname !== '/dashboard' || url.search || url.username || url.password || !/^#[A-Za-z0-9_-]{43}$/.test(url.hash)) {
-      throw Error('INVALID_PRIVATE_RUNTIME_STATE');
+async function stopStage(label, action) {
+  try { return await action(); } catch { throw Error(`PRIVATE_STOP_${label}`); }
+}
+
+export async function stopDevelopment(accountPaths, { requestExit = requestPrivateExit, wait = delay } = {}) {
+  const paths = await stopStage('ACCOUNT_INVALID', () => validateAccount(accountPaths));
+  const state = join(paths.control, 'runtime.json');
+  const present = () => stopStage('RUNTIME_UNREADABLE', () => exists(state));
+  const readState = async () => {
+    let entry;
+    try { entry = await privateJSON(state); }
+    catch (error) {
+      // The engine removes the locator after drain; it can disappear between
+      // exists() and the guarded read without indicating an unsafe file.
+      if (error.code === 'ENOENT' && !await present()) return null;
+      throw Error('PRIVATE_STOP_RUNTIME_UNREADABLE');
     }
-    let alreadyExited = false;
-    try {
-      const response = await fetch(new URL('/engine/exit', url), { method: 'POST', redirect: 'error',
-        signal: AbortSignal.timeout(5000), headers: { Origin: url.origin,
-          Authorization: `Bearer ${url.hash.slice(1)}`, 'Content-Type': 'application/json' }, body: '{}' });
-      if (!response.ok) throw Error('PRIVATE_RUNTIME_STOP_REJECTED');
-    } catch (error) {
-      // A dead runtime has no authority; never signal a stored PID or another app.
-      if (error.cause?.code !== 'ECONNREFUSED') throw error;
-      alreadyExited = true;
-    }
-    if (alreadyExited) await unlink(state);
-    else {
-      // The HTTP acknowledgment precedes draining admitted work. Wait for the
-      // runtime's exit marker before removing registration or starting again.
-      for (let i = 0; i < 300 && await exists(state); i++) await delay(100);
-      if (await exists(state)) throw Error('PRIVATE_RUNTIME_STILL_DRAINING');
+    return stopStage('RUNTIME_INVALID', () => validateRuntimeState(entry));
+  };
+  const entry = await present() ? await readState() : null;
+  if (entry) {
+    const sameState = async () => {
+      if (!await present()) return false;
+      const current = await readState();
+      if (!current) return false;
+      if (current.dashboardURL !== entry.dashboardURL) throw Error('PRIVATE_STOP_RUNTIME_CHANGED');
+      return true;
+    };
+    const result = await requestExit(new URL(entry.dashboardURL));
+    if (result === 'ALREADY_EXITED') {
+      if (await sameState()) await stopStage('RUNTIME_CLEANUP_FAILED', () => unlink(state));
+    } else if (result === 'ACCEPTED') {
+      // The acknowledgment precedes drain. Never remove registration while
+      // evidence work is pending, or clean up a replacement runtime's locator.
+      for (let i = 0; i < 300 && await sameState(); i++) await wait(100);
+      if (await sameState()) throw Error('PRIVATE_STOP_STILL_DRAINING');
+    } else throw Error('PRIVATE_STOP_EXIT_INVALID_RESPONSE');
+  }
+  if (await present()) throw Error('PRIVATE_STOP_RUNTIME_CHANGED');
+  const launch = join(paths.control, 'launch.json');
+  const hasLaunch = await stopStage('LAUNCH_UNREADABLE', () => exists(launch));
+  if (hasLaunch) {
+    const entry = await stopStage('LAUNCH_UNREADABLE', () => privateJSON(launch));
+    if (entry?.profile !== DEVELOPMENT_PROFILE || !['live-chatgpt-testnet', 'backup', 'restore'].includes(entry.mode)) {
+      throw Error('PRIVATE_STOP_LAUNCH_INVALID');
     }
   }
-  await removeNativeHost(paths);
-  const launch = join(paths.control, 'launch.json');
-  if (await exists(launch)) await unlink(launch);
+  await stopStage('REGISTRATION_CLEANUP_FAILED', () => removeNativeHost(paths));
+  if (hasLaunch) await stopStage('LAUNCH_CLEANUP_FAILED', () => unlink(launch));
   return { stopped: true, evidence: 'RETAINED', browser: 'CLOSE_TEST_CHROME_MANUALLY' };
 }
 

@@ -461,6 +461,36 @@ read from disk, closes other browser sessions or deletes evidence. Close test Ch
 manually, and use Ctrl-C in the sponsor terminal. If startup was interrupted, use
 `stop` before retrying. A changed registration fails cleanup and needs inspection.
 
+The exit request uses a dedicated direct HTTP connection to the validated numeric
+loopback address, with the existing Origin and bearer checks, a five-second
+deadline, no redirects, and a bounded `{ "exiting": true }` acknowledgment. It does
+not inherit the CLI's global `fetch` dispatcher or environment proxy. Modern Node
+can [apply environment proxies to fetch](https://nodejs.org/api/http.html#built-in-proxy-support);
+an isolated proxy-reset fixture reproduces the old generic failure with an otherwise
+valid runtime locator. This establishes a request-path failure mode, not the exact
+environmental cause of an earlier installed failure.
+
+After acknowledgment, stop waits up to 30 seconds for the engine to remove its
+locator after drain. A replacement locator prevents cleanup. Only a direct
+connection refusal permits already-exited cleanup; timeouts, resets, denied
+networking and rejected replies leave control state in place. File ownership,
+permissions, hard-link/symlink, canonical-path and runtime-schema guards stay active.
+
+| Fixed stop label | Next action |
+| --- | --- |
+| `PRIVATE_STOP_ACCOUNT_INVALID` | Inspect the dedicated account's directory and account-marker guards. |
+| `PRIVATE_STOP_RUNTIME_UNREADABLE` / `PRIVATE_STOP_RUNTIME_INVALID` | Inspect locator file safety or its versioned shape; do not rewrite it to bypass checks. |
+| `PRIVATE_STOP_EXIT_NETWORK_DENIED` | Check the CLI's local-network execution permissions. |
+| `PRIVATE_STOP_EXIT_CONNECTION_FAILED` / `PRIVATE_STOP_EXIT_TIMED_OUT` | Inspect runtime availability; cleanup has not been authorized. |
+| `PRIVATE_STOP_EXIT_REJECTED` / `PRIVATE_STOP_EXIT_INVALID_RESPONSE` | Inspect endpoint/authentication mismatch; do not remove state manually. |
+| `PRIVATE_STOP_STILL_DRAINING` / `PRIVATE_STOP_RUNTIME_CHANGED` | Let pending work finish, or inspect the replacement runtime before retrying. |
+| `PRIVATE_STOP_REGISTRATION_CLEANUP_FAILED` | Inspect the ownership journal and installed registration for conflict or unsafe files. |
+| `PRIVATE_STOP_LAUNCH_UNREADABLE` / `PRIVATE_STOP_LAUNCH_INVALID` / `PRIVATE_STOP_LAUNCH_CLEANUP_FAILED` / `PRIVATE_STOP_RUNTIME_CLEANUP_FAILED` | Inspect the named control-state category's safety and permissions. |
+
+Labels contain no paths, tokens, response bodies or raw errors. Focused regression
+coverage is `node --test test/private-stop.test.mjs`; it uses fresh temporary files,
+loopback fixtures and a separate real engine with memory-only test keys.
+
 After stopping, use the private app's fixed native host to back up its actual vault:
 
 ```sh
