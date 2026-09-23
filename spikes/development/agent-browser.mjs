@@ -73,23 +73,40 @@ export async function agentExtensionReady(paths, stage) {
 // There is no debugging listener, credential export, UI automation permission,
 // or user-gesture/Send command. Only a boolean leaves the session evaluation.
 export async function probeAgentLogin(chrome, paths, { spawnProcess = spawn, timeoutMs = 20000 } = {}) {
-  let child, timer, sequence = 0, buffer = '', failed = false;
+  let child, timer, sequence = 0, buffer = '', failed = false, closing = false, hasExited = false, ready = false;
   const pending = new Map();
   let exited;
-  const fail = () => {
-    failed = true;
+  const rejectPending = () => {
     for (const { reject } of pending.values()) reject(Error('PROVIDER_LOGIN_REQUIRED'));
     pending.clear();
-    child?.kill('SIGKILL');
+  };
+  const fail = () => {
+    failed = true;
+    rejectPending();
+    if (!hasExited) child?.kill('SIGKILL');
+  };
+  const waitForExit = async () => {
+    let cleanupTimer;
+    try { await Promise.race([exited, new Promise(resolve => { cleanupTimer = setTimeout(resolve, 1500); })]); }
+    finally { clearTimeout(cleanupTimer); }
   };
   try {
-    child = spawnProcess(chrome.executable, [`--user-data-dir=${paths.chrome}`, '--headless=new', '--remote-debugging-pipe',
+    if (chrome.application !== paths.chromeApplication || paths.chrome !== join(paths.root, 'chrome')
+        || chrome.executable !== join(chrome.application, 'Contents/MacOS/Google Chrome')) return false;
+    // Chrome 153 can reject a valid session in headless mode. Use the same
+    // headed browser and Default profile validated during owner bootstrap.
+    child = spawnProcess(chrome.executable, [`--user-data-dir=${paths.chrome}`, '--profile-directory=Default', '--remote-debugging-pipe',
       '--no-first-run', '--disable-sync', '--disable-background-networking', '--disable-component-update',
       '--disable-updater-scheduler', 'about:blank'],
     { env: { HOME: paths.home, PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-    child.once('error', fail); child.once('exit', fail);
-    exited = new Promise(resolve => child.once('exit', resolve));
+    child.once('error', fail);
+    exited = new Promise(resolve => child.once('exit', (code, signal) => {
+      hasExited = true;
+      if (!closing || code !== 0 || signal) failed = true;
+      rejectPending(); resolve();
+    }));
     child.stdio[3].on('error', fail); child.stdio[4].on('error', fail);
+    child.stdio[4].once('end', () => { if (closing) rejectPending(); else fail(); });
     timer = setTimeout(fail, timeoutMs);
     child.stdio[4].on('data', chunk => {
       buffer += chunk.toString('utf8');
@@ -98,7 +115,10 @@ export async function probeAgentLogin(chrome, paths, { spawnProcess = spawn, tim
         const end = buffer.indexOf('\0'); if (end < 0) break;
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
         let message;
-        try { message = JSON.parse(line); } catch { fail(); return; }
+        try {
+          message = JSON.parse(line);
+          if (!message || typeof message !== 'object' || Array.isArray(message)) throw Error();
+        } catch { fail(); return; }
         const waiting = pending.get(message.id);
         if (!waiting) continue;
         pending.delete(message.id);
@@ -107,31 +127,39 @@ export async function probeAgentLogin(chrome, paths, { spawnProcess = spawn, tim
       }
     });
     const call = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
-      if (failed) { reject(Error('PROVIDER_LOGIN_REQUIRED')); return; }
+      if (failed || hasExited) { reject(Error('PROVIDER_LOGIN_REQUIRED')); return; }
       const id = ++sequence; pending.set(id, { resolve, reject });
       child.stdio[3].write(`${JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })}\0`);
     });
     const { targetId } = await call('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
-    await call('Page.navigate', { url: 'https://chatgpt.com/' }, sessionId);
-    let ready = false;
+    const navigation = await call('Page.navigate', { url: 'https://chatgpt.com/' }, sessionId);
+    if (!navigation || navigation.errorText || navigation.isDownload) throw Error('PROVIDER_LOGIN_REQUIRED');
     for (let attempt = 0; attempt < 12 && !ready && !failed; attempt++) {
       const result = await call('Runtime.evaluate', {
-        expression: `location.origin === 'https://chatgpt.com' && fetch('/api/auth/session', { credentials: 'same-origin', redirect: 'error', signal: AbortSignal.timeout(4000) }).then(async response => { if (!response.ok) return false; const session = await response.json(); return typeof session?.user?.id === 'string' && session.user.id.length > 0 && Date.parse(session.expires) > Date.now() + 60000; }).catch(() => false)`,
+        expression: `location.href === 'https://chatgpt.com/' && fetch('/api/auth/session', { credentials: 'same-origin', redirect: 'error', signal: AbortSignal.timeout(4000) }).then(async response => {
+          if (response.status !== 200 || response.redirected || response.url !== 'https://chatgpt.com/api/auth/session'
+              || response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') return false;
+          const session = await response.json();
+          return location.href === 'https://chatgpt.com/' && typeof session?.user?.id === 'string' && session.user.id.length > 0
+            && typeof session.expires === 'string' && Date.parse(session.expires) > Date.now() + 60000;
+        }).catch(() => false)`,
         awaitPromise: true, returnByValue: true,
       }, sessionId).catch(() => null);
-      ready = result?.result?.type === 'boolean' && result.result.value === true;
-      if (!ready) await delay(250);
+      ready = !result?.exceptionDetails && result?.result?.type === 'boolean' && result.result.value === true;
+      if (!ready && !failed) await delay(250);
     }
+    closing = true;
     await call('Browser.close').catch(() => {});
-    await Promise.race([exited, delay(1500)]);
-    return ready;
-  } catch { return false; }
+    if (!hasExited) await waitForExit();
+    if (!hasExited) failed = true;
+  } catch { failed = true; }
   finally {
     clearTimeout(timer);
     // This handle belongs only to the process created by this probe.
-    child?.kill('SIGKILL');
+    if (!hasExited) child?.kill('SIGKILL');
     child?.stdio[3]?.destroy(); child?.stdio[4]?.destroy();
-    if (exited) await Promise.race([exited, delay(1500)]);
+    if (exited && !hasExited) await waitForExit();
   }
+  return ready && !failed && hasExited;
 }

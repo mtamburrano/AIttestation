@@ -95,7 +95,8 @@ An interrupted initialization requires a fresh namespace as well.
    `~/.attestamp-agent-codex01/browser/Google Chrome.app`. Use the existing
    [private Chrome setup guidance](README.md) to resolve Gatekeeper/first-open
    setup. Never ad hoc sign Chrome or reuse its normal profile. Open that exact
-   executable with `--user-data-dir=/Users/YOUR_SIGNING_ACCOUNT/.attestamp-agent-codex01/chrome`.
+   executable with `--user-data-dir=/Users/YOUR_SIGNING_ACCOUNT/.attestamp-agent-codex01/chrome`
+   and `--profile-directory=Default` in normal headed mode.
    Load the unpacked extension from `extension/current`, enable it, and sign in
    to the dedicated synthetic-content provider account. Resolve Chrome's own
    initial Keychain/login prompts, then quit Chrome normally.
@@ -107,7 +108,10 @@ An interrupted initialization requires a fresh namespace as well.
    ```
 
    This records readiness for the Chrome version after a
-   bounded, read-only provider-login probe. It performs no provider Send. A
+   bounded, read-only provider-login probe. The probe opens a normal Chrome
+   window using that exact validated executable, user-data directory and
+   `Default` profile, checks the authenticated session through a private CDP
+   pipe, then closes only its own browser process. It performs no provider Send. A
    replaced browser requires bootstrap again. Every preflight checks the
    selected signed build's exact inventory against the current extension stage;
    a normal stopped-stage update needs no manual extension reload or new login.
@@ -118,8 +122,33 @@ An interrupted initialization requires a fresh namespace as well.
    Permission probes only inspect readiness and never request consent or capture
    the screen. Choose `automation: "local-api"` explicitly for sessions that use
    only local APIs and need neither permission. Login preflight itself uses a
-   private CDP pipe. Full Disk Access, Apple Events, Fast User Switching and
+   private CDP pipe and needs neither Accessibility nor Screen Recording,
+   even though its browser window may be visible. Full Disk Access, Apple Events, Fast User Switching and
    administrator permission are not required.
+
+### Chrome login readiness
+
+Chrome 153 was observed returning HTTP 403 from `/api/auth/session` in
+headless mode while the same dedicated, logged-in profile and Chrome copy
+returned HTTP 200 in normal headed mode, with a nonempty user ID and a future
+session expiry. Headless rejection alone does not establish that the stored
+login expired. Bootstrap and unattended preflight therefore use normal headed
+Chrome; unattended execution requires no interaction after setup, but may open
+a visible window. This behavior also applies to Chrome 153+ setups.
+
+Cookie presence is never login evidence. The probe requires HTTP 200 JSON from
+the exact session endpoint, a nonempty user ID and an expiry more than one minute
+in the future. Only the resulting boolean crosses CDP; session bodies, cookies,
+tokens, user IDs and email addresses are never emitted or decrypted by the
+runner. Redirects, challenges, 401/403 responses, malformed or expired sessions,
+and mismatched browser/profile paths fail closed. Resolve a real login or
+challenge failure interactively in the dedicated profile, quit Chrome normally,
+then rerun bootstrap or preflight.
+
+CDP/network metadata and bounded machine-readable state are the primary
+unattended diagnostics. Screenshots are optional, bounded fallback evidence
+when useful; they are not part of successful login preflight. Use CDP capture
+where sufficient without adding a screen-capture permission requirement.
 
 ### Chrome extension readiness preferences
 
@@ -301,7 +330,10 @@ or malformed output terminates only that invocation's process group.
 Signing access inspection never prompts and the existing signing watchdog
 bounds each codesign operation. Native Keychain requests have an eight-second
 watchdog; native preflight has a fifteen-second process limit. Login preflight
-has a twenty-second deadline plus bounded child-process cleanup. Startup waits
+has a twenty-second deadline plus bounded child-process cleanup. It requests
+`Browser.close` over its inherited CDP pipe and terminates only its own child
+if graceful shutdown fails; a timeout or failed browser exit cannot report
+login readiness. Startup waits
 at most fifteen seconds and reports failure instead of displaying a modal
 alert. File schemas, inventories and traversal counts are bounded. After a
 successful bootstrap, ordinary sessions require no predictable password/GUI

@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { AGENT_PROFILE, AGENT_OPT_IN, agentAccount, agentBuildPath, initializeAgent,
   validateAgent, validateAgentLaunch, validateAgentState } from '../spikes/development/agent-environment.mjs';
 import { agentNativeSources, replaceAgentInput } from '../spikes/development/agent-artifact.mjs';
@@ -234,11 +235,18 @@ test('preflight gates every predictable prerequisite and never probes the provid
   const f = await fixture(t), calls = [], stage = join(f.paths.extension, 'current'); await mkdir(stage, { mode: 0o700 });
   const chromeInfo = join(f.home, 'Chrome-Info.plist'); await writeFile(chromeInfo, 'synthetic Chrome version');
   const build = { app: '/unused-synthetic-app', digest: 'test-build', extensionInventory: [] };
+  const chrome = { application: f.paths.chromeApplication,
+    executable: join(f.paths.chromeApplication, 'Contents/MacOS/Google Chrome'), infoPlist: chromeInfo };
   const deps = { info: f.info, consoleUID: async () => f.info.uid,
     signingInputs: async () => ({ config: f.config }), signing: async () => ({ status: 'READY' }), ipc: async () => true,
     build: async () => build, keychain: () => ({ status: 'READY' }),
-    chrome: async () => ({ infoPlist: chromeInfo }), processes: () => [], extension: async () => true,
-    login: async () => { calls.push('login'); return true; } };
+    permissions: async () => assert.fail('local-api preflight must not inspect GUI automation permissions'),
+    chrome: async (application, paths) => {
+      assert.equal(application, f.paths.chromeApplication); assert.deepEqual(paths, f.paths); return chrome;
+    }, processes: () => [], extension: async () => true,
+    login: async (selected, paths) => {
+      assert.equal(selected, chrome); assert.deepEqual(paths, f.paths); calls.push('login'); return true;
+    } };
   const preflight = (live = false, patch = {}) => preflightAgent(f.agent.namespace, 'one', AGENT_OPT_IN, live, { ...deps, ...patch });
   assert.equal((await preflight()).status, 'READY'); assert.deepEqual(calls, []);
   assert.deepEqual((await preflight()).providerSend, false);
@@ -348,36 +356,162 @@ test('computer-use readiness checks permissions without prompts and fails closed
   }), 'AUTOMATION_PERMISSION_CHECK_UNAVAILABLE');
 });
 
-test('browser login probe uses only its owned process and bounded CDP, returning no credentials or Send authority', async () => {
-  const calls = [], killed = [], launches = [];
-  const fakeSpawn = (executable, args, options) => {
-    launches.push({ executable, args, options });
+const loginPaths = { home: '/synthetic', root: '/synthetic/agent', chrome: '/synthetic/agent/chrome',
+  chromeApplication: '/synthetic/agent/browser/Google Chrome.app' };
+const loginChrome = { application: loginPaths.chromeApplication,
+  executable: `${loginPaths.chromeApplication}/Contents/MacOS/Google Chrome` };
+const sessionURL = 'https://chatgpt.com/api/auth/session';
+
+function evaluateLogin(expression, { href = 'https://chatgpt.com/', status = 200, redirected = false,
+  url = sessionURL, contentType = 'application/json; charset=utf-8',
+  session = { user: { id: 'synthetic-user-id', email: 'synthetic@example.invalid' },
+    accessToken: 'synthetic-token', expires: new Date(Date.now() + 3600000).toISOString() },
+  json = async () => session, fetchError = false, requests = [], afterFetch,
+} = {}) {
+  const location = { href };
+  return runInNewContext(expression, { location, AbortSignal, fetch: async (path, options) => {
+    requests.push({ path, options, status });
+    if (fetchError) throw Error('synthetic network/redirect error');
+    afterFetch?.(location);
+    return { status, redirected, url, headers: new Headers({ 'content-type': contentType }), json };
+  } }, { timeout: 1000 });
+}
+
+function loginBrowser(onCall = () => false) {
+  const launches = [], calls = [], replies = [], requests = [], killed = [];
+  const spawnProcess = (executable, args, options) => {
     const child = new EventEmitter(), output = new PassThrough(); let exited = false;
-    child.kill = signal => { killed.push(signal); if (!exited) { exited = true; queueMicrotask(() => child.emit('exit', 0)); } };
+    const exit = (code = 0) => { if (!exited) { exited = true; queueMicrotask(() => child.emit('exit', code)); } };
+    child.kill = signal => { killed.push({ child, signal }); exit(1); };
     const input = new Writable({ write(chunk, encoding, callback) {
       const request = JSON.parse(chunk.toString().slice(0, -1)); calls.push(request);
-      const result = request.method === 'Target.createTarget' ? { targetId: 'target' }
-        : request.method === 'Target.attachToTarget' ? { sessionId: 'session' }
-          : request.method === 'Runtime.evaluate' ? { result: { type: 'boolean', value: true } } : {};
-      queueMicrotask(() => { output.write(`${JSON.stringify({ id: request.id, result })}\0`);
-        if (request.method === 'Browser.close') child.kill('GRACEFUL'); });
+      const reply = result => {
+        replies.push(result);
+        output.write(`${JSON.stringify({ id: request.id, result })}\0`);
+      };
+      queueMicrotask(async () => {
+        if (onCall(request, { child, output, reply, exit })) return;
+        const result = request.method === 'Target.createTarget' ? { targetId: 'target' }
+          : request.method === 'Target.attachToTarget' ? { sessionId: 'session' }
+            : request.method === 'Runtime.evaluate' ? { result: { type: 'boolean', value:
+              await evaluateLogin(request.params.expression, { requests,
+                status: args.some(arg => arg.startsWith('--headless')) ? 403 : 200 }) } } : {};
+        reply(result);
+        if (request.method === 'Browser.close') exit();
+      });
       callback();
     } });
-    child.stdio = [null, null, null, input, output]; return child;
+    child.stdio = [null, null, null, input, output];
+    launches.push({ executable, args, options, child }); return child;
   };
-  const chrome = { executable: '/synthetic/Chrome.app/Contents/MacOS/Google Chrome' }, paths = { home: '/synthetic', chrome: '/synthetic/isolated-profile' };
-  assert.equal(await probeAgentLogin(chrome, paths, { spawnProcess: fakeSpawn, timeoutMs: 1000 }), true);
-  assert.deepEqual(launches[0].options.env, { HOME: paths.home, PATH: '/usr/bin:/bin' });
-  assert.ok(launches[0].args.includes(`--user-data-dir=${paths.chrome}`));
-  assert.ok(launches[0].args.includes('--remote-debugging-pipe'));
-  assert.ok(!calls.some(call => /Input\.|Network\.|Storage\./.test(call.method)));
-  assert.ok(calls.every(call => !call.params.userGesture));
-  assert.ok(killed.includes('GRACEFUL'));
-  const stalled = () => {
-    const child = new EventEmitter(); child.stdio = [null, null, null, new PassThrough(), new PassThrough()];
-    child.kill = () => queueMicrotask(() => child.emit('exit', 1)); return child;
-  };
-  assert.equal(await probeAgentLogin(chrome, paths, { spawnProcess: stalled, timeoutMs: 10 }), false);
+  return { spawnProcess, launches, calls, replies, requests, killed };
+}
+
+test('browser login probe uses the exact headed Default profile, a private CDP pipe and content-free session evidence', async () => {
+  const browser = loginBrowser();
+  assert.equal(await probeAgentLogin(loginChrome, loginPaths, { ...browser, timeoutMs: 1000 }), true);
+  const { args, executable, options, child } = browser.launches[0];
+  assert.equal(executable, loginChrome.executable);
+  assert.deepEqual(options.env, { HOME: loginPaths.home, PATH: '/usr/bin:/bin' });
+  assert.deepEqual(options.stdio, ['ignore', 'ignore', 'ignore', 'pipe', 'pipe']);
+  assert.ok(args.includes(`--user-data-dir=${loginPaths.chrome}`));
+  assert.ok(args.includes('--profile-directory=Default'));
+  assert.ok(args.includes('--remote-debugging-pipe'));
+  assert.ok(!args.some(arg => /headless|remote-debugging-port/.test(arg)));
+  assert.deepEqual(browser.calls.map(call => call.method), ['Target.createTarget', 'Target.attachToTarget',
+    'Page.navigate', 'Runtime.evaluate', 'Browser.close']);
+  assert.ok(browser.calls.every(call => !call.params.userGesture));
+  for (const call of browser.calls.filter(call => ['Page.navigate', 'Runtime.evaluate'].includes(call.method))) {
+    assert.equal(call.sessionId, 'session');
+  }
+  const evaluation = browser.calls.find(call => call.method === 'Runtime.evaluate');
+  assert.equal(evaluation.params.awaitPromise, true); assert.equal(evaluation.params.returnByValue, true);
+  assert.equal(browser.requests.length, 1);
+  assert.equal(browser.requests[0].path, '/api/auth/session');
+  assert.equal(browser.requests[0].options.credentials, 'same-origin');
+  assert.equal(browser.requests[0].options.redirect, 'error');
+  assert.equal(browser.requests[0].options.method, undefined);
+  assert.doesNotMatch(JSON.stringify(browser.replies), /synthetic-user-id|synthetic@example|synthetic-token/);
+  assert.deepEqual(browser.killed, []);
+  assert.ok(child.stdio[3].destroyed && child.stdio[4].destroyed);
+});
+
+test('Chrome 153 owner regression: the same valid profile gets headless 403 and headed CDP 200', async () => {
+  // Replay the recorded HTTP outcomes; this fixture never contacts the provider.
+  const headless = loginBrowser(), headed = loginBrowser();
+  assert.equal(await probeAgentLogin(loginChrome, loginPaths, { timeoutMs: 20,
+    spawnProcess: (command, args, options) => headless.spawnProcess(command, [...args, '--headless=new'], options) }), false);
+  assert.equal(await probeAgentLogin(loginChrome, loginPaths, { ...headed, timeoutMs: 1000 }), true);
+  assert.deepEqual(headless.requests.map(request => request.status), [403]);
+  assert.deepEqual(headed.requests.map(request => request.status), [200]);
+  assert.equal(headless.launches[0].executable, headed.launches[0].executable);
+  assert.equal(headless.launches[0].args[0], headed.launches[0].args[0]);
+});
+
+test('login evaluation rejects redirects, challenges, invalid or expired sessions without reading cookies', async () => {
+  const browser = loginBrowser();
+  await probeAgentLogin(loginChrome, loginPaths, { ...browser, timeoutMs: 1000 });
+  const { expression } = browser.calls.find(call => call.method === 'Runtime.evaluate').params;
+  const future = new Date(Date.now() + 3600000).toISOString();
+  const cases = [
+    { href: 'https://accounts.example.invalid/' }, { href: 'https://chatgpt.com/auth/login' },
+    { href: 'https://chatgpt.com/?challenge=1' }, { status: 401 }, { status: 403 }, { status: 302 }, { status: 204 },
+    { redirected: true }, { url: 'https://chatgpt.com/login' }, { contentType: 'text/html' }, { contentType: '' },
+    { fetchError: true }, { json: async () => { throw SyntaxError('synthetic malformed JSON'); } },
+    { session: null }, { session: {} }, { session: { user: { id: '' }, expires: future } },
+    { session: { user: { id: 1 }, expires: future } }, { session: { user: { id: 'synthetic' }, expires: 'invalid' } },
+    { session: { user: { id: 'synthetic' }, expires: new Date(Date.now() - 1000).toISOString() } },
+    { session: { user: { id: 'synthetic' }, expires: new Date(Date.now() + 30000).toISOString() } },
+    { session: { user: { id: 'synthetic' }, expires: Date.now() + 3600000 } },
+    { afterFetch: location => { location.href = 'https://chatgpt.com/auth/login'; } },
+  ];
+  for (const [index, scenario] of cases.entries()) assert.equal(await evaluateLogin(expression, scenario), false, `case ${index}`);
+  assert.equal(await evaluateLogin(expression), true);
+  const requests = [];
+  assert.equal(await evaluateLogin(expression, { href: 'https://other.invalid/', requests }), false);
+  assert.deepEqual(requests, []);
+  assert.doesNotMatch(expression, /document\.cookie|localStorage|sessionStorage/);
+});
+
+test('login probe refuses browser or profile mismatch before spawning', async () => {
+  const spawnProcess = () => assert.fail('mismatched inputs must not launch');
+  for (const [chrome, paths] of [
+    [{ ...loginChrome, executable: '/other/Google Chrome' }, loginPaths],
+    [{ ...loginChrome, application: '/other/Google Chrome.app' }, loginPaths],
+    [loginChrome, { ...loginPaths, chrome: '/other/chrome' }],
+  ]) assert.equal(await probeAgentLogin(chrome, paths, { spawnProcess }), false);
+});
+
+test('login probe fails closed and cleans up only its child on CDP failure, pipe loss, crash and timeout', async t => {
+  for (const failure of ['stall-start', 'stall-evaluate', 'stall-close', 'pipe-error', 'pipe-end', 'crash',
+    'malformed', 'null-message', 'oversized', 'cdp-error', 'exception', 'non-boolean', 'navigation-error', 'spawn-error']) {
+    await t.test(failure, async () => {
+      const at = failure === 'stall-close' ? 'Browser.close' : failure === 'navigation-error' ? 'Page.navigate'
+        : failure === 'stall-start' || failure === 'spawn-error' ? 'Target.createTarget' : 'Runtime.evaluate';
+      const browser = loginBrowser((request, { child, output, reply, exit }) => {
+        if (request.method !== at) return false;
+        if (failure.startsWith('stall-')) return true;
+        if (failure === 'pipe-error') output.emit('error', Error('synthetic private error'));
+        if (failure === 'pipe-end') output.end();
+        if (failure === 'crash') exit(1);
+        if (failure === 'spawn-error') child.emit('error', Error('synthetic private path'));
+        if (failure === 'malformed') output.write('{bad\0');
+        if (failure === 'null-message') output.write('null\0');
+        if (failure === 'oversized') output.write('x'.repeat(256 * 1024 + 1));
+        if (failure === 'cdp-error') output.write(`${JSON.stringify({ id: request.id, error: { message: 'synthetic private error' } })}\0`);
+        if (failure === 'exception') reply({ result: { type: 'boolean', value: true }, exceptionDetails: { text: 'synthetic private error' } });
+        if (failure === 'non-boolean') reply({ result: { type: 'string', value: 'true' } });
+        if (failure === 'navigation-error') reply({ errorText: 'synthetic navigation error' });
+        return true;
+      });
+      assert.equal(await probeAgentLogin(loginChrome, loginPaths, { ...browser, timeoutMs: 20 }), false);
+      const child = browser.launches[0].child;
+      assert.ok(browser.killed.every(entry => entry.child === child && entry.signal === 'SIGKILL'));
+      if (failure !== 'crash') assert.ok(browser.killed.length > 0);
+      assert.ok(child.stdio[3].destroyed && child.stdio[4].destroyed);
+    });
+  }
+  assert.equal(await probeAgentLogin(loginChrome, loginPaths, { spawnProcess: () => { throw Error('synthetic private path'); } }), false);
 });
 
 test('normal shutdown waits for its owned browser and escalates only that child if graceful exit stalls', async () => {
