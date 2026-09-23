@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { readReleaseFile } from '../distribution/release-inputs.mjs';
 import { CHATGPT_EXTENSION_ID } from '../browser/chatgpt/adapter.mjs';
+import { waitForAgentBrowserCleanup } from './agent-process.mjs';
 
 const ACTIVE_BLOCKLIST_PREFS = ['blacklist_state', 'omaha_blocklist_state',
   'extension_telemetry_service_blocklist_state'];
@@ -72,7 +73,9 @@ export async function agentExtensionReady(paths, stage) {
 // CDP uses inherited pipes to the exact validated, isolated browser process.
 // There is no debugging listener, credential export, UI automation permission,
 // or user-gesture/Send command. Only a boolean leaves the session evaluation.
-export async function probeAgentLogin(chrome, paths, { spawnProcess = spawn, timeoutMs = 20000 } = {}) {
+export async function probeAgentLogin(chrome, paths, {
+  spawnProcess = spawn, timeoutMs = 20000, waitForCleanup = waitForAgentBrowserCleanup,
+} = {}) {
   let child, timer, sequence = 0, buffer = '', failed = false, closing = false, hasExited = false, ready = false;
   const pending = new Map();
   let exited;
@@ -160,6 +163,9 @@ export async function probeAgentLogin(chrome, paths, { spawnProcess = spawn, tim
     if (!hasExited) child?.kill('SIGKILL');
     child?.stdio[3]?.destroy(); child?.stdio[4]?.destroy();
     if (exited && !hasExited) await waitForExit();
+    if (child) {
+      try { await waitForCleanup(paths); } catch { failed = true; }
+    }
   }
   return ready && !failed && hasExited;
 }

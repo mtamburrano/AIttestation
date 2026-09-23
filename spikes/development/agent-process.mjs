@@ -1,3 +1,23 @@
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { exists, ownerDirectory } from './environment.mjs';
+
+export async function waitForAgentBrowserCleanup(paths, { timeoutMs = 2000, wait = delay, now = () => performance.now() } = {}) {
+  if (paths.chrome !== join(paths.root, 'chrome')) throw Error('AGENT_STATE_UNSAFE');
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    await ownerDirectory(paths.root); await ownerDirectory(paths.chrome);
+    // lstat checks existence without following even dangling runtime links.
+    // Only Chrome removes them; a stale marker must remain available to inspect.
+    const markers = await Promise.all(['RunningChromeVersion', 'SingletonLock', 'SingletonCookie', 'SingletonSocket']
+      .map(name => exists(join(paths.chrome, name))));
+    if (!markers.some(Boolean)) return;
+    const remaining = deadline - now();
+    if (remaining <= 0) throw Error('AGENT_BROWSER_CLOSE_TIMED_OUT');
+    await wait(Math.min(50, remaining));
+  }
+}
+
 export async function closeAgentBrowser(child, timeoutMs = 8000) {
   if (!child || child.exitCode !== null && child.exitCode !== undefined || child.signalCode) return;
   await new Promise((resolve, reject) => {

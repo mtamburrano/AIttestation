@@ -20,10 +20,10 @@ try {
       || config.profile !== DEVELOPMENT_PROFILE || config.sponsorOrigin !== null || config.updaterEnabled !== false
       || config.assurance !== 'PRIVATE_TESTNET_ONLY' || config.browserPolicy !== 'EXPLICIT_TEST_USER_COPY') throw Error('INVALID_PRIVATE_BUILD');
   const paths = await validateAgent(config.agent, AGENT_OPT_IN);
-  await validateAgentState(paths);
   const launchPath = join(paths.control, 'launch.json');
   const request = validateAgentLaunch(await privateJSON(launchPath), config.build);
   const live = request.mode === 'live-provider-send';
+  await validateAgentState(paths, { requireStoppedBrowser: live });
   const chrome = live ? await checkPlatform(paths.chromeApplication, paths) : null;
   const keyStore = new MacOSKeychainStore();
   if (!keyStore.get('agent:readiness')?.equals(Buffer.from('agent-readiness-v1'))) throw Error('AGENT_KEYCHAIN_NOT_READY');

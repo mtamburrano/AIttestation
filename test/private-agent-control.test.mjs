@@ -10,6 +10,7 @@ import { agentRequest } from '../spikes/development/agent-http.mjs';
 import { launchAgentChrome, connectAgentCDP, validateAgentCDP } from '../spikes/development/agent-cdp.mjs';
 import { updateAgentStage } from '../spikes/development/agent-stage.mjs';
 import { withAgentAwake } from '../spikes/development/agent-awake.mjs';
+import { waitForAgentBrowserCleanup } from '../spikes/development/agent-process.mjs';
 import { agentDoctor } from '../spikes/development/agent-doctor.mjs';
 import { fileInventory } from '../spikes/distribution/inventory.mjs';
 import { writeNewJSON } from '../spikes/development/environment.mjs';
@@ -164,6 +165,40 @@ test('agent Chrome launches the exact process with loopback CDP and private conn
   for (const endpoint of ['ws://outside.invalid:1234/devtools/browser/a', 'ws://localhost:1234/devtools/browser/a',
     'wss://127.0.0.1:1234/devtools/browser/a', 'ws://127.0.0.1:1234/devtools/browser/a?token=x']) {
     assert.throws(() => validateAgentCDP({ ...cdpValue, webSocketDebuggerUrl: endpoint }), /AGENT_CDP_INVALID/);
+  }
+});
+
+test('owned Chrome keeps its locator until runtime markers disappear and retains stale state on timeout', async t => {
+  for (const stale of [false, true]) {
+    const { paths, sentinel } = await fixture(t), marker = join(paths.chrome, 'RunningChromeVersion');
+    const chrome = { application: paths.chromeApplication, executable: join(paths.chromeApplication, 'Contents/MacOS/Google Chrome') };
+    let owned, elapsed = 0;
+    const browser = await launchAgentChrome(chrome, paths, { processes: () => [],
+      spawnProcess: () => { owned = child(); return owned; },
+      launch: async (_chrome, _paths, _url, options) => {
+        options.spawnProcess(chrome.executable, ['about:blank'], {});
+        await symlink('153.0.0.0', marker);
+        await writeFile(join(paths.chrome, 'DevToolsActivePort'), '43210\n/devtools/browser/synthetic-browser\n');
+        return { pid: owned.pid };
+      },
+      waitForCleanup: async paths => {
+        assert.equal(owned.exitCode, 0);
+        await waitForAgentBrowserCleanup(paths, { timeoutMs: 100, now: () => elapsed,
+          wait: async ms => {
+            assert.equal((await lstat(join(paths.control, 'cdp.json'))).isFile(), true);
+            elapsed += ms;
+            if (!stale) await rm(marker);
+          } });
+      } });
+    if (stale) {
+      await assert.rejects(browser.close(), /AGENT_BROWSER_CLOSE_TIMED_OUT/);
+      assert.equal((await lstat(marker)).isSymbolicLink(), true);
+      assert.equal((await lstat(browser.metadata)).isFile(), true);
+    } else {
+      await browser.close();
+      await assert.rejects(lstat(browser.metadata), { code: 'ENOENT' });
+    }
+    assert.equal(await readFile(sentinel, 'utf8'), 'synthetic retained evidence');
   }
 });
 

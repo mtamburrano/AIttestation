@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { readReleaseFile } from '../distribution/release-inputs.mjs';
 import { exists, ownerDirectory, privateJSON, writeNewJSON } from './environment.mjs';
 import { launchDevelopmentChrome, runningChromeProcesses } from './chrome.mjs';
-import { closeAgentBrowser } from './agent-process.mjs';
+import { closeAgentBrowser, waitForAgentBrowserCleanup } from './agent-process.mjs';
 
 const CDP_PROFILE = 'pap-agent-cdp/1';
 export function validateAgentCDP(value) {
@@ -21,6 +21,7 @@ export function validateAgentCDP(value) {
 
 export async function launchAgentChrome(chrome, paths, {
   spawnProcess = spawn, processes = runningChromeProcesses, launch = launchDevelopmentChrome, wait = delay,
+  waitForCleanup = waitForAgentBrowserCleanup,
 } = {}) {
   await ownerDirectory(paths.root); await ownerDirectory(paths.chrome); await ownerDirectory(paths.control);
   if (paths.chrome !== join(paths.root, 'chrome') || chrome.application !== paths.chromeApplication
@@ -51,6 +52,7 @@ export async function launchAgentChrome(chrome, paths, {
         await writeNewJSON(metadata, value);
         return { child, metadata, value, async close() {
           await closeAgentBrowser(child);
+          await waitForCleanup(paths);
           if (await exists(metadata)) {
             const current = validateAgentCDP(await privateJSON(metadata));
             if (JSON.stringify(current) !== JSON.stringify(value)) throw Error('AGENT_CDP_CHANGED');
@@ -63,6 +65,7 @@ export async function launchAgentChrome(chrome, paths, {
     throw Error('AGENT_CDP_TIMED_OUT');
   } catch (error) {
     await closeAgentBrowser(child).catch(() => {});
+    if (child) await waitForCleanup(paths).catch(() => {});
     throw error;
   }
 }

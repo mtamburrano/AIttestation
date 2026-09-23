@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { userInfo } from 'node:os';
 import { canonical } from '../vault/format.mjs';
 import { DEVELOPMENT_PROFILE, TEST_USER, newDirectory, ownerDirectory, privateJSON, writeNewJSON } from './environment.mjs';
+import { runningChromeProcesses } from './chrome.mjs';
 
 export const AGENT_PROFILE = 'pap-private-agent/1';
 export const AGENT_OPT_IN = '--agent-mode';
@@ -68,12 +69,18 @@ export async function validateAgent(agent, optIn, info) {
 
 // Reject redirected descendants before any stateful component is started.
 // Chrome's own singleton links are the only exceptions and are never followed.
-export async function validateAgentState(paths) {
+export async function validateAgentState(paths, { processes = runningChromeProcesses, requireStoppedBrowser = false } = {}) {
+  if (requireStoppedBrowser && processes().length) throw Error('CLOSE_OTHER_CHROME_COPY');
   let entries = 0;
   const visit = async (directory, chrome = false) => {
     for (const name of await readdir(directory)) {
       if (++entries > 100000) throw Error('AGENT_STATE_LIMIT');
       const path = join(directory, name), info = await lstat(path);
+      // macOS app shims publish this runtime link. It is never safe idle state,
+      // and must not be followed or added to the singleton-link exceptions.
+      if (chrome && directory === paths.chrome && name === 'RunningChromeVersion') {
+        throw Error(processes().length ? 'CLOSE_OTHER_CHROME_COPY' : 'AGENT_STATE_UNSAFE');
+      }
       if (chrome && directory === paths.chrome && ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].includes(name)) continue;
       if (info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022)
           || !info.isDirectory() && (!info.isFile() || info.nlink !== 1) || await realpath(path) !== path) {

@@ -171,7 +171,7 @@ export async function preflightAgent(namespace, name, optIn, live = false, depen
     if (await exists(join(paths.control, 'runtime.json')) || await exists(join(paths.control, 'launch.json'))
         || await exists(join(paths.control, 'registration.json'))) return agentOwnerAction('STOP_PREVIOUS_AGENT_SESSION');
     if (await exists(join(paths.control, 'cdp.json'))) return agentOwnerAction('AGENT_CDP_STALE');
-    await validateAgentState(paths);
+    await validateAgentState(paths, { processes: deps.processes, requireStoppedBrowser: live });
     if (await deps.consoleUID() !== config.agent.account.uid) return agentOwnerAction('GUI_SESSION_REQUIRED');
     if (!await deps.ipc(paths)) return agentOwnerAction('LOCAL_IPC_PERMISSION_REQUIRED');
     if (config.agent.automation === 'computer-use') {
@@ -213,20 +213,23 @@ export async function preflightAgent(namespace, name, optIn, live = false, depen
   } catch (error) { return agentOwnerAction(error.message); }
 }
 
-async function bootstrapAgent(config, paths, name, live) {
-  const build = await inspectAgentBuild(config, paths, name);
+export async function bootstrapAgent(config, paths, name, live, {
+  build: inspectBuild = inspectAgentBuild, keychain = probeAgentKeychain, chrome: checkChrome = checkPlatform,
+  processes = runningChromeProcesses, extension = agentExtensionReady, login = probeAgentLogin,
+} = {}) {
   if (await exists(join(paths.control, 'runtime.json')) || await exists(join(paths.control, 'launch.json'))) {
     return agentOwnerAction('STOP_PREVIOUS_AGENT_SESSION');
   }
-  await validateAgentState(paths);
-  const keychain = probeAgentKeychain(build.app, true);
-  if (keychain.status !== 'READY' || !live) return keychain;
-  const chrome = await checkPlatform(paths.chromeApplication, paths);
-  if (runningChromeProcesses().length) return agentOwnerAction('CLOSE_OTHER_CHROME_COPY');
+  await validateAgentState(paths, { processes, requireStoppedBrowser: live });
+  const build = await inspectBuild(config, paths, name);
+  const report = keychain(build.app, true);
+  if (report.status !== 'READY' || !live) return report;
+  const chrome = await checkChrome(paths.chromeApplication, paths);
+  if (processes().length) return agentOwnerAction('CLOSE_OTHER_CHROME_COPY');
   const stage = agentStagePath(paths);
   if (canonical(await fileInventory(stage)) !== canonical(build.extensionInventory)
-      || !await agentExtensionReady(paths, stage)) return agentOwnerAction('EXTENSION_SETUP_REQUIRED');
-  if (!await probeAgentLogin(chrome, paths)) return agentOwnerAction('PROVIDER_LOGIN_REQUIRED');
+      || !await extension(paths, stage)) return agentOwnerAction('EXTENSION_SETUP_REQUIRED');
+  if (!await login(chrome, paths)) return agentOwnerAction('PROVIDER_LOGIN_REQUIRED');
   const receipt = join(paths.control, 'browser.json');
   if (await exists(receipt)) {
     const previous = await privateJSON(receipt);
