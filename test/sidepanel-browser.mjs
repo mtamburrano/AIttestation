@@ -277,6 +277,9 @@ try {
     await screenshot(panel, 'baseline-rejection.png');
   } else {
     assert.equal(state.state.recording, false); assert.equal((await visible(panel)).disabled, false);
+    assert.deepEqual(await evaluate(panel, `Array.from(document.querySelectorAll('button'), button => button.id).sort()`),
+      ['dashboard', 'recording']);
+    report.checks.push('MINIMAL_SIDEBAR_HAS_NO_MANUAL_REFRESH_CONTROL');
     await evaluate(panel, `globalThis.__stableControl = document.getElementById('recording'); globalThis.__controlChanges = [];
       globalThis.__controlObserver = new MutationObserver(records => __controlChanges.push(...records.map(record => record.type)));
       __controlObserver.observe(__stableControl, {attributes:true,childList:true,subtree:true,characterData:true});`);

@@ -28,7 +28,7 @@ export class SidePanelModel {
       if (result?.error || action !== 'OPEN_DASHBOARD' && result?.state?.profile !== PROFILE) throw Error('unavailable');
       if (result.state) this.state = result.state;
       this.error = '';
-    } catch { if (sequence === this.sequence) { this.state = null; this.error = 'Recording control is unavailable. Open Attestamp and refresh.'; } }
+    } catch { if (sequence === this.sequence) { this.state = null; this.error = 'Recording control is unavailable. Open Attestamp to reconnect.'; } }
     finally { if (sequence === this.sequence) { if (foreground) this.busy = false; this.render(); } }
   }
   refresh() {

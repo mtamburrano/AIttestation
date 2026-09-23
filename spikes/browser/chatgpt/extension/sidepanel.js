@@ -33,7 +33,6 @@ function identifyDocument() {
 if (identifyDocument()) {
   $('recording').addEventListener('click', () => model.toggle());
   $('dashboard').addEventListener('click', () => model.dashboard());
-  $('refresh').addEventListener('click', () => model.refresh());
   await model.refresh();
   setInterval(() => model.refresh(), 1000);
 }
