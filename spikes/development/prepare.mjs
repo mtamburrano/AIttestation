@@ -12,6 +12,8 @@ import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { assertNoPackagedLeaks } from '../distribution/artifact-files.mjs';
 import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, writeNewJSON } from './environment.mjs';
 import { withSigningAccess } from './signing.mjs';
+import { AGENT_OPT_IN, agentBuildPath, validateAgent } from './agent-environment.mjs';
+import { specializeAgentArtifact } from './agent-artifact.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const run = (command, args, options = {}) => {
@@ -36,13 +38,14 @@ const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1
   .join('')}</dict></plist>`;
 
 export function validateDevelopmentConfig(config) {
-  if (!config || Object.keys(config).filter(key => key !== 'signingKeychain').sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
+  if (!config || Object.keys(config).filter(key => !['signingKeychain', 'agent'].includes(key)).sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
       || config.profile !== DEVELOPMENT_PROFILE || !/^[A-Z0-9]{10}$/.test(config.teamId)
       || typeof config.signingIdentity !== 'string' || !/^[A-F0-9]{40}$/.test(config.signingIdentity)
       || typeof config.helperProvisioningProfile !== 'string' || !config.helperProvisioningProfile.startsWith('/')
       || ('signingKeychain' in config && (typeof config.signingKeychain !== 'string' || !config.signingKeychain.startsWith('/')))) {
     throw Error('INVALID_PRIVATE_DEVELOPMENT_CONFIG');
   }
+  if ('agent' in config && (!config.agent || config.sponsor !== null)) throw Error('AGENT_SPONSOR_DISABLED');
   if (config.sponsor !== null) {
     if (Object.keys(config.sponsor).sort().join(',') !== 'certificateFile,origin'
         || !/^https:\/\/127\.0\.0\.1:[1-9][0-9]{3,4}$/.test(config.sponsor.origin)
@@ -84,12 +87,19 @@ export async function developmentSigningInputs(configPath) {
   return { config, profileBytes, appId, group };
 }
 
-export async function prepareDevelopment(configPath, output) {
+export async function prepareDevelopment(configPath, output, { agentOptIn } = {}) {
+  const selected = validateDevelopmentConfig(await privateJSON(configPath));
+  let agentPaths = null;
+  if (selected.agent) {
+    agentPaths = await validateAgent(selected.agent, agentOptIn);
+    if (output !== agentBuildPath(agentPaths, output.split('/').at(-1))) throw Error('AGENT_BUILD_PATH_INVALID');
+  } else if (agentOptIn !== undefined) throw Error('AGENT_CONFIG_REQUIRED');
   const inputs = await developmentSigningInputs(configPath);
-  return withSigningAccess(inputs.config, inspect => prepareAuthorizedDevelopment(inputs, output, inspect));
+  if (canonical(inputs.config) !== canonical(selected)) throw Error('PRIVATE_CONFIG_CHANGED');
+  return withSigningAccess(inputs.config, inspect => prepareAuthorizedDevelopment(inputs, output, inspect, agentPaths));
 }
 
-async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group }, output, inspect) {
+async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group }, output, inspect, agentPaths) {
   const certificate = config.sponsor ? await readReleaseFile(config.sponsor.certificateFile, { limit: 8192 }) : null;
   if (certificate) {
     const cert = new X509Certificate(certificate);
@@ -122,9 +132,16 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs', 'startup.mjs', 'integration.mjs', 'debug-session.mjs', 'runtime-state.mjs']) {
       await copyFile(join(root, 'spikes/development', name), join(dev, name));
     }
+    if (agentPaths) {
+      await validateAgent(config.agent, AGENT_OPT_IN);
+      await specializeAgentArtifact(root, contents, work, config.agent, agentPaths, run);
+      for (const name of ['agent-runtime.mjs', 'agent-environment.mjs', 'agent-relay.mjs', 'agent-policy.mjs', 'agent-process.mjs', 'fixture-network.mjs']) {
+        await copyFile(join(root, 'spikes/development', name), join(dev, name));
+      }
+    }
     await writeNewJSON(join(dev, 'private-development.json'), { profile: DEVELOPMENT_PROFILE,
       sponsorOrigin: config.sponsor?.origin ?? null, assurance: 'PRIVATE_TESTNET_ONLY', updaterEnabled: false,
-      browserPolicy: 'EXPLICIT_TEST_USER_COPY' });
+      browserPolicy: 'EXPLICIT_TEST_USER_COPY', ...(agentPaths ? { agent: config.agent, build: output.split('/').at(-1) } : {}) });
     if (certificate) await writeFile(join(dev, 'sponsor-certificate.pem'), certificate);
     run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName Attestamp Private Test', join(contents, 'Info.plist')]);
     const html = join(contents, 'Resources/spikes/browser/chatgpt/dashboard.html');
@@ -155,6 +172,12 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
         `anchor apple generic and certificate leaf[subject.OU] = "${config.teamId}"`, { deep: true }));
     }
     await cp(join(root, 'spikes/browser/chatgpt/extension'), join(output, 'extension'), { recursive: true });
+    if (agentPaths) {
+      const stage = join(agentPaths.extension, output.split('/').at(-1));
+      await newDirectory(stage);
+      await cp(join(output, 'extension'), stage, { recursive: true, errorOnExist: true, force: false });
+      await copyFile(join(root, 'spikes/development/AGENT-TESTING.md'), join(output, 'Agent Setup.md'));
+    }
     await copyFile(join(root, 'spikes/development/README.md'), join(output, 'Start Here.md'));
     if ((await sourceInventory(root)).sha256 !== sources.sha256) throw Error('SOURCE_CHANGED_DURING_PRIVATE_BUILD');
     const inventory = { application: await fileInventory(app),
@@ -165,6 +188,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
       releaseClass: 'PRIVATE_DEVELOPMENT', sourceDigest: sources.sha256,
       signature: 'DEVELOPER_ID_WITHOUT_NOTARIZATION', notarized: false, storeDistributed: false,
       updaterEnabled: false, installedAcceptance: 'NOT_RUN',
+      ...(agentPaths ? { agent: config.agent } : {}),
       bundleInventoryDigest: sha256(canonical(inventory)) });
     return { profile: DEVELOPMENT_PROFILE, prepared: true, installedAcceptance: 'NOT_RUN' };
   } finally { await rm(work, { recursive: true, force: true }); }

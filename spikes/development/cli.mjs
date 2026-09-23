@@ -21,7 +21,7 @@ async function stopStage(label, action) {
   try { return await action(); } catch { throw Error(`PRIVATE_STOP_${label}`); }
 }
 
-export async function stopDevelopment(accountPaths, { requestExit = requestPrivateExit, wait = delay } = {}) {
+export async function stopDevelopment(accountPaths, { requestExit = requestPrivateExit, wait = delay, agent = false } = {}) {
   const paths = await stopStage('ACCOUNT_INVALID', () => validateAccount(accountPaths));
   const state = join(paths.control, 'runtime.json');
   const present = () => stopStage('RUNTIME_UNREADABLE', () => exists(state));
@@ -68,13 +68,15 @@ export async function stopDevelopment(accountPaths, { requestExit = requestPriva
   const hasLaunch = await stopStage('LAUNCH_UNREADABLE', () => exists(launch));
   if (hasLaunch) {
     const entry = await stopStage('LAUNCH_UNREADABLE', () => privateJSON(launch));
-    if (entry?.profile !== DEVELOPMENT_PROFILE || !['live-chatgpt-testnet', 'backup', 'restore'].includes(entry.mode)) {
+    const normal = entry?.profile === DEVELOPMENT_PROFILE && ['live-chatgpt-testnet', 'backup', 'restore'].includes(entry.mode);
+    const agentLaunch = agent && entry?.profile === 'pap-private-agent/1' && ['offline', 'live-provider-send'].includes(entry.mode);
+    if (!normal && !agentLaunch) {
       throw Error('PRIVATE_STOP_LAUNCH_INVALID');
     }
   }
   await stopStage('REGISTRATION_CLEANUP_FAILED', () => removeNativeHost(paths));
   if (hasLaunch) await stopStage('LAUNCH_CLEANUP_FAILED', () => unlink(launch));
-  return { stopped: true, evidence: 'RETAINED', browser: 'CLOSE_TEST_CHROME_MANUALLY' };
+  return { stopped: true, evidence: 'RETAINED', browser: agent ? 'SESSION_BROWSER_CLOSE_REQUESTED' : 'CLOSE_TEST_CHROME_MANUALLY' };
 }
 
 async function privateApplication(output) {
@@ -137,6 +139,9 @@ async function maintenance(output, operation) {
 
 export async function command(args) {
   const [action, ...rest] = args;
+  if (action === 'agent') {
+    const { agentCommand } = await import('./agent.mjs'); return agentCommand(rest);
+  }
   if (action === 'doctor' && rest.length === 2 && rest[0] === '--chrome-app') {
     await checkPlatform(rest[1]); return { ready: true, liveCheck: 'NOT_RUN' };
   }

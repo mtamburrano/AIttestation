@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "node spikes/development/cli.mjs",
     "dev:sponsor": "node spikes/development/sponsor.mjs",
-    "test:private-dev": "node --test test/private-development.test.mjs test/private-signing.test.mjs test/private-chrome-launch.test.mjs test/private-stop.test.mjs",
+    "test:private-dev": "node --test test/private-development.test.mjs test/private-signing.test.mjs test/private-chrome-launch.test.mjs test/private-stop.test.mjs test/private-agent.test.mjs",
     "test:product": "node spikes/development/product-test.mjs",
     "test:debug-session": "node --test test/debug-session.test.mjs",
     "test:runtime-latency": "node --test test/runtime-latency.test.mjs",

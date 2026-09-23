@@ -165,6 +165,10 @@ production configuration.
 npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build
 ```
 
+For optional same-account unattended sessions, see the separate
+[isolated agent setup](AGENT-TESTING.md). It uses a fresh namespace and explicit
+opt-ins; the retained owner-checkpoint setup below is unchanged.
+
 ### One-time signing authorization
 
 Each nested executable and bundle is signed separately. A Keychain **Allow**
