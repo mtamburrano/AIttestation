@@ -94,29 +94,73 @@ test('redirected root, state, extension and hard links fail before retained data
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
 
-test('Chrome runtime version links never become trusted state, including dangling and misplaced links', async t => {
+test('stopped Chrome accepts only owned top-level connection metadata matching its validated bundle', async t => {
   const f = await fixture(t), marker = join(f.paths.chrome, 'RunningChromeVersion');
-  const active = () => [{ pid: 99, executable: join(f.paths.chromeApplication, 'Contents/MacOS/Google Chrome') }];
-  for (const target of ['153.0.0.0', f.retained]) {
+  const chrome = { application: f.paths.chromeApplication, version: '153.0.8010.53' };
+  let checks = 0;
+  const options = { processes: () => [], checkChrome: async (application, paths) => {
+    checks++; assert.equal(application, f.paths.chromeApplication); assert.deepEqual(paths, f.paths); return chrome;
+  } };
+  for (const target of ['153.0.8010.53:1', '153.0.8010.53:0', '153.0.8010.53']) {
     await symlink(target, marker);
-    await assert.rejects(validateAgentState(f.paths, { processes: active }), /CLOSE_OTHER_CHROME_COPY/);
-    await assert.rejects(validateAgentState(f.paths, { processes: () => [] }), /AGENT_STATE_UNSAFE/);
+    await assert.rejects(lstat(join(f.paths.chrome, target)), { code: 'ENOENT' });
+    assert.equal(await validateAgentState(f.paths, options), chrome);
     assert.equal(await readlink(marker), target);
     await rm(marker);
   }
-  for (const parent of [f.paths.control, f.paths.support, join(f.paths.chrome, 'Default')]) {
+  assert.equal(checks, 3);
+  await symlink('153.0.8010.53:1', marker);
+  for (const selected of [{ ...chrome, version: '153.0.8010.54' }, { ...chrome, version: '154.0.8010.53' },
+    { ...chrome, version: undefined }, { ...chrome, application: '/Applications/Google Chrome.app' }, null]) {
+    await assert.rejects(validateAgentState(f.paths, { ...options, checkChrome: async () => selected }), /AGENT_STATE_UNSAFE/);
+  }
+  await assert.rejects(validateAgentState(f.paths, { ...options,
+    checkChrome: async () => { throw Error('CHROME_SIGNATURE_REJECTED'); } }), /CHROME_SETUP_REQUIRED/);
+  let processes = 0;
+  await assert.rejects(validateAgentState(f.paths, { ...options,
+    processes: () => processes++ ? [{ pid: 99 }] : [] }), /CLOSE_OTHER_CHROME_COPY/);
+  assert.equal(await readlink(marker), '153.0.8010.53:1');
+  assert.deepEqual(await fileInventory(f.retained), f.baseline);
+});
+
+test('Chrome connection metadata rejects malformed, redirected, misplaced and non-symlink entries', async t => {
+  const f = await fixture(t), marker = join(f.paths.chrome, 'RunningChromeVersion');
+  const active = () => [{ pid: 99, executable: join(f.paths.chromeApplication, 'Contents/MacOS/Google Chrome') }];
+  let checks = 0;
+  const options = { processes: () => [], checkChrome: async () => { checks++; throw Error('UNEXPECTED_BUNDLE_CHECK'); } };
+  for (const target of [f.retained, '/153.0.8010.53:1', '../153.0.8010.53:1', '153.0.8010.53/extra:1',
+    '153.0.8010.53\\extra:1', '..:1', '153..8010.53:1', '153.0.8010:1', '153.0.8010.53.0:1',
+    '0153.0.8010.53:1', '153.00.8010.53:1', '153.0.8010.-1:1', '153.0.8010.+1:1',
+    '153.0.8010.4294967296:1', `153.0.8010.${'9'.repeat(50)}:1`, '153.0.8010.x:1',
+    '１５３.0.8010.53:1', ' 153.0.8010.53:1', '153.0.8010.53:1 ', '153.0.8010.53:1\n',
+    '153.0.8010.53\n', '153.0.8010.53:\t1', '153.0.8010.53:', '153.0.8010.53:2',
+    '153.0.8010.53:01', '153.0.8010.53:true', '153.0.8010.53:-1', '153.0.8010.53:1:extra',
+    '153.0.8010.53:1:', ':1']) {
+    await symlink(target, marker);
+    await assert.rejects(validateAgentState(f.paths, { ...options, processes: active }), /CLOSE_OTHER_CHROME_COPY/);
+    await assert.rejects(validateAgentState(f.paths, options), /AGENT_STATE_UNSAFE/, target);
+    assert.equal(await readlink(marker), target);
+    await rm(marker);
+  }
+  for (const parent of [f.paths.chrome, f.paths.control, f.paths.support, join(f.paths.chrome, 'Default')]) {
     await mkdir(parent, { recursive: true, mode: 0o700 });
     const misplaced = join(parent, 'RunningChromeVersion');
-    await symlink(f.retained, misplaced);
-    await assert.rejects(validateAgentState(f.paths, { processes: active }), /AGENT_STATE_UNSAFE/);
+    if (parent !== f.paths.chrome) {
+      await symlink('153.0.8010.53:1', misplaced);
+      await assert.rejects(validateAgentState(f.paths, options), /AGENT_STATE_UNSAFE/);
+      await rm(misplaced);
+    }
+    await writeFile(misplaced, '153.0.8010.53:1', { mode: 0o600 });
+    await assert.rejects(validateAgentState(f.paths, options), /AGENT_STATE_UNSAFE/);
     await rm(misplaced);
+    await mkdir(misplaced, { mode: 0o700 });
+    await assert.rejects(validateAgentState(f.paths, options), /AGENT_STATE_UNSAFE/);
+    await rm(misplaced, { recursive: true });
   }
-  await writeFile(marker, 'unexpected regular runtime marker', { mode: 0o600 });
-  await assert.rejects(validateAgentState(f.paths, { processes: () => [] }), /AGENT_STATE_UNSAFE/);
-  await rm(marker);
-  await validateAgentState(f.paths, { processes: active }); // Offline does not require unrelated Chrome to quit.
-  await assert.rejects(validateAgentState(f.paths, { processes: active, requireStoppedBrowser: true }), /CLOSE_OTHER_CHROME_COPY/);
-  await validateAgentState(f.paths, { processes: () => [], requireStoppedBrowser: true });
+  await validateAgentState(f.paths, { ...options, processes: active }); // Offline does not require unrelated Chrome to quit.
+  await assert.rejects(validateAgentState(f.paths, { ...options, processes: active, requireStoppedBrowser: true }), /CLOSE_OTHER_CHROME_COPY/);
+  await validateAgentState(f.paths, { ...options, requireStoppedBrowser: true });
+  assert.equal(checks, 0);
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
 
@@ -130,27 +174,38 @@ test('live preflight and bootstrap gate running Chrome before state traversal or
   const preflight = () => preflightAgent(f.agent.namespace, 'one', AGENT_OPT_IN, true, deps);
   const bootstrap = () => agentCommand(['bootstrap', f.agent.namespace, 'one', AGENT_OPT_IN, '--owner-bootstrap', '--live-provider-send'],
     { info: f.info, bootstrap: (...args) => bootstrapAgent(...args, deps) });
-  await symlink('153.0.0.0', marker);
-  for (const run of [preflight, bootstrap]) {
-    assert.equal((await run()).reason, 'CLOSE_OTHER_CHROME_COPY');
-    active = false;
-    assert.equal((await run()).reason, 'AGENT_STATE_UNSAFE');
-    active = true;
+  for (const target of ['153.0.8010.53:1', f.retained]) {
+    await symlink(target, marker);
+    for (const run of [preflight, bootstrap]) assert.equal((await run()).reason, 'CLOSE_OTHER_CHROME_COPY');
+    assert.equal(await readlink(marker), target);
+    await rm(marker);
   }
   assert.equal(probes, 0);
-  assert.equal(await readlink(marker), '153.0.0.0');
-  // Model an owner-completed shutdown, then run the real bootstrap receipt path.
-  active = false; await rm(marker);
+  // Replay the owner-observed metadata surviving shutdown and subsequent runs.
+  active = false; await symlink('153.0.8010.53:1', marker);
   await mkdir(join(f.paths.extension, 'current'), { mode: 0o700 });
   const infoPlist = join(f.home, 'synthetic-chrome-version');
   await writeFile(infoPlist, 'synthetic Chrome 153');
-  const resumed = { ...deps, build: async () => ({ app: '/unused-synthetic-app', extensionInventory: [] }),
+  let chromeChecks = 0;
+  const resumed = { ...deps, consoleUID: async () => f.info.uid, ipc: async () => true,
+    signingInputs: async () => ({ config: f.config }), signing: async () => ({ status: 'READY' }),
+    build: async () => ({ app: '/unused-synthetic-app', extensionInventory: [] }),
     keychain: () => ({ status: 'READY' }),
-    chrome: async () => ({ application: f.paths.chromeApplication, infoPlist }),
+    chrome: async () => { chromeChecks++; return { application: f.paths.chromeApplication, infoPlist, version: '153.0.8010.53' }; },
     extension: async () => true, login: async () => true };
   assert.equal((await bootstrapAgent(f.config, f.paths, 'one', true, resumed)).status, 'READY');
   assert.deepEqual(JSON.parse(await readFile(join(f.paths.control, 'browser.json'), 'utf8')),
     { profile: AGENT_PROFILE, chromeDigest: sha256(await readFile(infoPlist)), automation: 'CDP' });
+  for (const live of [true, false, true]) {
+    assert.equal((await preflightAgent(f.agent.namespace, 'one', AGENT_OPT_IN, live, resumed)).status, 'READY');
+  }
+  assert.equal(chromeChecks, 4, 'each run revalidates the bundle once');
+  const invalid = { ...resumed, ...Object.fromEntries(['consoleUID', 'ipc', 'build', 'signingInputs', 'keychain', 'extension', 'login']
+    .map(name => [name, unexpected])), chrome: async () => ({ application: f.paths.chromeApplication, version: '153.0.8010.54' }) };
+  assert.equal((await preflightAgent(f.agent.namespace, 'one', AGENT_OPT_IN, true, invalid)).reason, 'AGENT_STATE_UNSAFE');
+  await assert.rejects(bootstrapAgent(f.config, f.paths, 'one', true, invalid), /AGENT_STATE_UNSAFE/);
+  assert.equal(probes, 0);
+  assert.equal(await readlink(marker), '153.0.8010.53:1');
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
 
@@ -592,34 +647,41 @@ test('normal shutdown waits for its owned browser and escalates only that child 
   await closeAgentBrowser(graceful);
 });
 
-test('owned cleanup waits for runtime links without following or removing them and times out on stale state', async t => {
-  const f = await fixture(t);
-  for (const name of ['RunningChromeVersion', 'SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+test('owned cleanup tolerates persistent version metadata but waits for singleton links without following or removing them', async t => {
+  const f = await fixture(t), version = join(f.paths.chrome, 'RunningChromeVersion');
+  await symlink('153.0.8010.53:1', version);
+  await waitForAgentBrowserCleanup(f.paths, { wait: () => assert.fail('version metadata must not delay cleanup') });
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
     const marker = join(f.paths.chrome, name);
-    await symlink(name === 'RunningChromeVersion' ? f.retained : 'synthetic-missing-target', marker);
+    await symlink(f.retained, marker);
     let elapsed = 0, waits = 0;
     await assert.rejects(waitForAgentBrowserCleanup(f.paths, {
       timeoutMs: 100, now: () => elapsed, wait: async ms => { elapsed += ms; waits++; },
     }), /AGENT_BROWSER_CLOSE_TIMED_OUT/);
     assert.equal(elapsed, 100); assert.equal(waits, 2);
     assert.equal((await lstat(marker)).isSymbolicLink(), true);
+    assert.equal(await readlink(marker), f.retained);
     await waitForAgentBrowserCleanup(f.paths, { wait: async () => { await rm(marker); } });
   }
   await waitForAgentBrowserCleanup(f.paths);
+  assert.equal(await readlink(version), '153.0.8010.53:1');
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
   await rm(f.paths.chrome, { recursive: true }); await symlink(f.retained, f.paths.chrome);
   await assert.rejects(waitForAgentBrowserCleanup(f.paths), /UNSAFE_PRIVATE_TEST_DIRECTORY/);
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
 
-test('login readiness waits for owned runtime cleanup and stays false after timeout or stale markers', async t => {
-  for (const scenario of ['clean', 'stale', 'probe-timeout']) {
+test('login readiness accepts persistent version metadata but fails on probe timeout or stale singleton links', async t => {
+  for (const scenario of ['clean', 'persistent-version', 'stale-singleton', 'probe-timeout']) {
     await t.test(scenario, async t => {
       const f = await fixture(t), marker = join(f.paths.chrome, 'RunningChromeVersion');
-      const chrome = { application: f.paths.chromeApplication, executable: join(f.paths.chromeApplication, 'Contents/MacOS/Google Chrome') };
+      const singleton = join(f.paths.chrome, 'SingletonLock');
+      const chrome = { application: f.paths.chromeApplication, executable: join(f.paths.chromeApplication, 'Contents/MacOS/Google Chrome'),
+        version: '153.0.8010.53' };
       const browser = loginBrowser(request => scenario === 'probe-timeout' && request.method === 'Runtime.evaluate');
       // Synthetic browser state only: replay the marker remaining during shutdown.
-      await symlink('153.0.0.0', marker);
+      await symlink('153.0.8010.53:1', marker);
+      if (scenario !== 'persistent-version') await symlink('synthetic-host-99', singleton);
       let elapsed = 0, cleanupCalled = false;
       const result = await probeAgentLogin(chrome, f.paths, { ...browser, timeoutMs: 100,
         waitForCleanup: async paths => {
@@ -628,14 +690,20 @@ test('login readiness waits for owned runtime cleanup and stays false after time
           assert.ok(browser.launches[0].child.stdio[3].destroyed);
           assert.ok(scenario === 'probe-timeout' ? browser.killed.length > 0 : browser.calls.some(call => call.method === 'Browser.close'));
           await waitForAgentBrowserCleanup(paths, { timeoutMs: 100, now: () => elapsed,
-            wait: async ms => { elapsed += ms; if (scenario !== 'stale') await rm(marker); } });
+            wait: async ms => {
+              elapsed += ms;
+              if (scenario !== 'stale-singleton') await rm(singleton);
+              if (scenario === 'clean') await rm(marker);
+            } });
         } });
       assert.equal(cleanupCalled, true);
-      assert.equal(result, scenario === 'clean');
-      if (scenario === 'stale') {
-        assert.equal(await readlink(marker), '153.0.0.0');
-        await assert.rejects(validateAgentState(f.paths, { processes: () => [] }), /AGENT_STATE_UNSAFE/);
-      } else await validateAgentState(f.paths, { processes: () => [] });
+      assert.equal(result, ['clean', 'persistent-version'].includes(scenario));
+      if (scenario !== 'clean') assert.equal(await readlink(marker), '153.0.8010.53:1');
+      if (scenario === 'stale-singleton') {
+        assert.equal(elapsed, 100); assert.equal(await readlink(singleton), 'synthetic-host-99');
+      }
+      if (scenario === 'persistent-version') assert.equal(elapsed, 0);
+      await validateAgentState(f.paths, { processes: () => [], checkChrome: async () => chrome });
       assert.deepEqual(await fileInventory(f.retained), f.baseline);
     });
   }

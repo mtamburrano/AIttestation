@@ -31,14 +31,15 @@ export async function chromeApplicationFiles(application, paths = testAccount())
 
 export async function checkPlatform(application, paths = testAccount()) {
   const chrome = await chromeApplicationFiles(application, paths);
+  const version = run('/usr/libexec/PlistBuddy', ['-c', 'Print CFBundleShortVersionString', chrome.infoPlist]).trim();
   assertPlatform({ platform: process.platform, arch: process.arch,
     osVersion: run('/usr/bin/sw_vers', ['-productVersion']).trim(),
-    chromeVersion: run('/usr/libexec/PlistBuddy', ['-c', 'Print CFBundleShortVersionString', chrome.infoPlist]).trim() });
+    chromeVersion: version });
   try {
     run('/usr/bin/codesign', codeSignatureCheckArguments(chrome.executable,
       'anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"'));
   } catch { throw Error('CHROME_SIGNATURE_REJECTED'); }
-  return chrome;
+  return { ...chrome, version };
 }
 
 export function runningChromeProcesses() {

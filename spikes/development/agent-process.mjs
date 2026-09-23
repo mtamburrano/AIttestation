@@ -7,9 +7,9 @@ export async function waitForAgentBrowserCleanup(paths, { timeoutMs = 2000, wait
   const deadline = now() + timeoutMs;
   for (;;) {
     await ownerDirectory(paths.root); await ownerDirectory(paths.chrome);
-    // lstat checks existence without following even dangling runtime links.
-    // Only Chrome removes them; a stale marker must remain available to inspect.
-    const markers = await Promise.all(['RunningChromeVersion', 'SingletonLock', 'SingletonCookie', 'SingletonSocket']
+    // lstat checks singleton existence without following dangling links.
+    // RunningChromeVersion is persistent metadata, not a shutdown signal.
+    const markers = await Promise.all(['SingletonLock', 'SingletonCookie', 'SingletonSocket']
       .map(name => exists(join(paths.chrome, name))));
     if (!markers.some(Boolean)) return;
     const remaining = deadline - now();

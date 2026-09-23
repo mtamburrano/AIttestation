@@ -1,9 +1,9 @@
-import { lstat, mkdir, readdir, realpath } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readlink, realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { userInfo } from 'node:os';
 import { canonical } from '../vault/format.mjs';
 import { DEVELOPMENT_PROFILE, TEST_USER, newDirectory, ownerDirectory, privateJSON, writeNewJSON } from './environment.mjs';
-import { runningChromeProcesses } from './chrome.mjs';
+import { checkPlatform, runningChromeProcesses } from './chrome.mjs';
 
 export const AGENT_PROFILE = 'pap-private-agent/1';
 export const AGENT_OPT_IN = '--agent-mode';
@@ -68,18 +68,37 @@ export async function validateAgent(agent, optIn, info) {
 }
 
 // Reject redirected descendants before any stateful component is started.
-// Chrome's own singleton links are the only exceptions and are never followed.
-export async function validateAgentState(paths, { processes = runningChromeProcesses, requireStoppedBrowser = false } = {}) {
+// Chrome's singleton links and validated version metadata are never followed.
+// Return the bundle checked for metadata so live callers can reuse its validation.
+export async function validateAgentState(paths, {
+  processes = runningChromeProcesses, requireStoppedBrowser = false, checkChrome = checkPlatform,
+} = {}) {
   if (requireStoppedBrowser && processes().length) throw Error('CLOSE_OTHER_CHROME_COPY');
-  let entries = 0;
+  let entries = 0, checkedChrome = null;
   const visit = async (directory, chrome = false) => {
     for (const name of await readdir(directory)) {
       if (++entries > 100000) throw Error('AGENT_STATE_LIMIT');
       const path = join(directory, name), info = await lstat(path);
-      // macOS app shims publish this runtime link. It is never safe idle state,
-      // and must not be followed or added to the singleton-link exceptions.
-      if (chrome && directory === paths.chrome && name === 'RunningChromeVersion') {
-        throw Error(processes().length ? 'CLOSE_OTHER_CHROME_COPY' : 'AGENT_STATE_UNSAFE');
+      if (name === 'RunningChromeVersion') {
+        if (!chrome || directory !== paths.chrome) throw Error('AGENT_STATE_UNSAFE');
+        if (processes().length) throw Error('CLOSE_OTHER_CHROME_COPY');
+        if (!info.isSymbolicLink() || info.uid !== process.getuid() || info.nlink !== 1 || info.size > 45) {
+          throw Error('AGENT_STATE_UNSAFE');
+        }
+        // Chromium encodes ChromeConnectionConfig here, not a destination path.
+        // The legacy version-only form and explicit MojoIpcz 0/1 bit are valid.
+        const target = await readlink(path);
+        const match = /^((?:0|[1-9][0-9]{0,9})(?:\.(?:0|[1-9][0-9]{0,9})){3})(?::[01])?$/.exec(target);
+        if (!match || match[0] !== target || match[1].split('.').some(part => Number(part) > 0xffffffff)) {
+          throw Error('AGENT_STATE_UNSAFE');
+        }
+        try { checkedChrome = await checkChrome(paths.chromeApplication, paths); }
+        catch { throw Error('CHROME_SETUP_REQUIRED'); }
+        if (processes().length) throw Error('CLOSE_OTHER_CHROME_COPY');
+        if (checkedChrome?.application !== paths.chromeApplication || match[1] !== checkedChrome?.version) {
+          throw Error('AGENT_STATE_UNSAFE');
+        }
+        continue;
       }
       if (chrome && directory === paths.chrome && ['SingletonLock', 'SingletonCookie', 'SingletonSocket'].includes(name)) continue;
       if (info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022)
@@ -90,4 +109,5 @@ export async function validateAgentState(paths, { processes = runningChromeProce
     }
   };
   for (const name of ['control', 'support', 'chrome']) await visit(paths[name], name === 'chrome');
+  return checkedChrome;
 }

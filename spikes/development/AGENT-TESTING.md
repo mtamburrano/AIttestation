@@ -56,12 +56,21 @@ rejects aliases, path traversal, redirected state, hard-linked
 files and unsafe permissions before starting storage or a browser. It never
 repairs or cleans an existing namespace automatically. Chrome's own singleton
 links are inspected as browser state and never followed by the harness.
-The macOS `RunningChromeVersion` runtime symlink is not an allowed state link.
 Live bootstrap, preflight and startup check for running Chrome before traversing
 the profile. Active or terminating Chrome reports `CLOSE_OTHER_CHROME_COPY`;
-quit it normally and retry after it has finished closing. If the runtime marker
-remains without a running Chrome process, validation reports `AGENT_STATE_UNSAFE`
-and leaves it for inspection; the harness never follows or deletes it.
+quit it normally and retry after it has finished closing. The top-level macOS
+`chrome/RunningChromeVersion` symlink is validated opaque Chrome metadata and may
+persist while Chrome is stopped. Its target encodes Chromium's
+[connection configuration](https://github.com/chromium/chromium/blob/main/chrome/common/mac/app_mode_common.mm),
+not a filesystem destination. Validation accepts a canonical four-part numeric
+version, optionally followed by exactly `:0` or `:1` for the MojoIpcz bit, only
+when it matches the platform- and signature-validated dedicated Chrome bundle.
+For example, `153.0.8010.53:1` requires that exact bundle version. Each version
+component must fit an unsigned 32-bit integer, with no redundant leading zeros.
+Path separators, traversal, whitespace, malformed versions/bits, extra fields,
+version mismatches, misplaced markers and non-symlink markers report
+`AGENT_STATE_UNSAFE`. Bundle validation failures require Chrome setup. The harness
+reads only the link's metadata and encoded target; it never follows or deletes it.
 Namespaces created before persisted configuration was supported must be replaced
 by a fresh namespace through initialization. There is no automatic import from
 old configs, current-directory files, or environment variables.
@@ -151,12 +160,15 @@ and mismatched browser/profile paths fail closed. Resolve a real login or
 challenge failure interactively in the dedicated profile, quit Chrome normally,
 then rerun bootstrap or preflight.
 
-On macOS, Chromium [creates and removes `RunningChromeVersion` for app shims](https://github.com/chromium/chromium/blob/main/chrome/browser/apps/app_shim/app_shim_listener.mm).
 Owned login probes and agent sessions wait for their child process to exit and
-then allow up to two additional seconds for this marker and the singleton links
-to disappear. Cleanup checks only entry existence in the exact dedicated profile;
+then allow up to two additional seconds for `SingletonLock`, `SingletonCookie`
+and `SingletonSocket` to disappear. `RunningChromeVersion` is not a shutdown
+signal: Chromium may leave it after exit or a crash, so cleanup does not wait
+for its removal, as its [app-shim loader accounts for](https://github.com/chromium/chromium/blob/main/chrome/app_shim/app_mode_loader_mac.mm).
+The next state validation checks it again against the dedicated
+bundle. Cleanup checks only singleton entry existence in the exact dedicated profile;
 it never reads their targets or signals a process discovered from a link.
-Persistent markers fail cleanup, and a valid session response alone cannot make
+Persistent singleton links fail cleanup, and a valid session response alone cannot make
 that login probe ready. Failed session cleanup retains its CDP locator for
 inspection instead of reporting a clean stop.
 
@@ -345,7 +357,7 @@ or malformed output terminates only that invocation's process group.
 Signing access inspection never prompts and the existing signing watchdog
 bounds each codesign operation. Native Keychain requests have an eight-second
 watchdog; native preflight has a fifteen-second process limit. Login preflight
-has a twenty-second deadline plus bounded child-process and runtime-marker cleanup. It requests
+has a twenty-second deadline plus bounded child-process and singleton cleanup. It requests
 `Browser.close` over its inherited CDP pipe and terminates only its own child
 if graceful shutdown fails; a timeout or failed browser exit cannot report
 login readiness. Startup waits

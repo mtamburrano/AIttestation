@@ -23,8 +23,8 @@ try {
   const launchPath = join(paths.control, 'launch.json');
   const request = validateAgentLaunch(await privateJSON(launchPath), config.build);
   const live = request.mode === 'live-provider-send';
-  await validateAgentState(paths, { requireStoppedBrowser: live });
-  const chrome = live ? await checkPlatform(paths.chromeApplication, paths) : null;
+  let chrome = await validateAgentState(paths, { requireStoppedBrowser: live });
+  if (live) chrome ??= await checkPlatform(paths.chromeApplication, paths);
   const keyStore = new MacOSKeychainStore();
   if (!keyStore.get('agent:readiness')?.equals(Buffer.from('agent-readiness-v1'))) throw Error('AGENT_KEYCHAIN_NOT_READY');
   await unlink(launchPath);

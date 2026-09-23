@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdir, mkdtemp, readFile, realpath, rm, lstat, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readlink, realpath, rm, lstat, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { agentControl, agentCondition } from '../spikes/development/agent-control.mjs';
@@ -168,16 +168,18 @@ test('agent Chrome launches the exact process with loopback CDP and private conn
   }
 });
 
-test('owned Chrome keeps its locator until runtime markers disappear and retains stale state on timeout', async t => {
+test('owned Chrome tolerates persistent version metadata but retains its locator until singleton cleanup succeeds', async t => {
   for (const stale of [false, true]) {
     const { paths, sentinel } = await fixture(t), marker = join(paths.chrome, 'RunningChromeVersion');
+    const singleton = join(paths.chrome, 'SingletonLock');
     const chrome = { application: paths.chromeApplication, executable: join(paths.chromeApplication, 'Contents/MacOS/Google Chrome') };
     let owned, elapsed = 0;
     const browser = await launchAgentChrome(chrome, paths, { processes: () => [],
       spawnProcess: () => { owned = child(); return owned; },
       launch: async (_chrome, _paths, _url, options) => {
         options.spawnProcess(chrome.executable, ['about:blank'], {});
-        await symlink('153.0.0.0', marker);
+        await symlink('153.0.8010.53:1', marker);
+        await symlink('synthetic-host-99', singleton);
         await writeFile(join(paths.chrome, 'DevToolsActivePort'), '43210\n/devtools/browser/synthetic-browser\n');
         return { pid: owned.pid };
       },
@@ -187,17 +189,19 @@ test('owned Chrome keeps its locator until runtime markers disappear and retains
           wait: async ms => {
             assert.equal((await lstat(join(paths.control, 'cdp.json'))).isFile(), true);
             elapsed += ms;
-            if (!stale) await rm(marker);
+            if (!stale) await rm(singleton);
           } });
       } });
     if (stale) {
       await assert.rejects(browser.close(), /AGENT_BROWSER_CLOSE_TIMED_OUT/);
-      assert.equal((await lstat(marker)).isSymbolicLink(), true);
+      assert.equal((await lstat(singleton)).isSymbolicLink(), true);
+      assert.equal(elapsed, 100);
       assert.equal((await lstat(browser.metadata)).isFile(), true);
     } else {
       await browser.close();
       await assert.rejects(lstat(browser.metadata), { code: 'ENOENT' });
     }
+    assert.equal(await readlink(marker), '153.0.8010.53:1');
     assert.equal(await readFile(sentinel, 'utf8'), 'synthetic retained evidence');
   }
 });
