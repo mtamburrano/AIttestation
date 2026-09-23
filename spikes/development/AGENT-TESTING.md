@@ -342,6 +342,34 @@ bytes and request identity in verified signed History, checked again after a
 runtime restart. CDP request/response metadata is supporting browser evidence;
 HTTP success does not establish independent provider receipt.
 
+Before the first Send, the foreground page must remain normal and fully loaded
+for five continuous seconds with no visible challenge, browser interstitial or
+dialog, and no pending observed startup/admission requests. Its document and
+observed session/admission responses must have settled successfully. The same
+bounded check runs after composer input, since input may initiate preflight.
+Each check allows at most sixty seconds for natural settlement; it never solves
+or bypasses a challenge. Page readiness is not a promise of Send acceptance.
+
+The trace records only fixed request categories (document, session, bootstrap,
+challenge, admission and conversation preparation), HTTP statuses, coarse
+response types, challenge-header presence and readiness booleans. It records
+whether admission was observed before CDP Enter and what completed afterward,
+so a settled-page rejection remains distinguishable from a readiness timeout.
+Unknown paths, query strings, header values, page text and response bodies are
+not exported. A changed page or persistent challenge stops before dispatch.
+Steering requires a visible enabled Send control while the assistant is active;
+the runner clicks that control once. CDP must still show the preceding successful
+response open, since typing can replace the Stop control. A Stop button alone is never Send
+readiness, and an unavailable control fails without pressing Enter or retrying.
+The dedicated profile must expose its normal **Think** toggle. The runner
+selects it through the UI and verifies its pressed state before the first Send,
+then checks it again before the existing-conversation reasoning puzzle. This
+exercises steering during thinking; a long streamed answer alone did not expose
+a Send control in the observed profile. Missing or disabled thinking controls
+fail before the first attempt. The runner never changes account access or buys
+a model tier. Composer diagnostics retain only bounded control categories and
+enabled/structural flags, without button labels or content.
+
 Each attempted Send first writes an owner-only checkpoint under
 `control/artifacts`. The final JSON report contains fixed endpoint paths, request
 ordinals, byte counts, HTTP status, UI readiness booleans and match results. It

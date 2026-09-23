@@ -10,8 +10,8 @@ import { SCENARIOS, scenarioPrompts, assertScenarioReceipt } from './agent-scena
 const failureCodes = new Set(['AGENT_SCENARIO_INVALID', 'AGENT_SCENARIO_DOCTOR_REQUIRED', 'AGENT_SCENARIO_REQUEST_INVALID', 'AGENT_SCENARIO_REQUEST_MISSING',
   'AGENT_SCENARIO_ENDPOINT_MISMATCH', 'AGENT_SCENARIO_HISTORY_MISMATCH', 'AGENT_SCENARIO_HISTORY_MISSING',
   'AGENT_SCENARIO_HISTORY_LIMIT', 'AGENT_SCENARIO_UNEXPECTED_SEND', 'AGENT_SCENARIO_TRACE_LIMIT',
-  'AGENT_SCENARIO_PROVIDER_REJECTED', 'AGENT_SCENARIO_RESPONSE_MISSING', 'AGENT_SCENARIO_UI_CHANGED', 'AGENT_SCENARIO_ROUTE_MISMATCH',
-  'AGENT_SCENARIO_STEERING_UNAVAILABLE', 'AGENT_SCENARIO_BUDGET_EXHAUSTED', 'AGENT_SCENARIO_RESTART_FAILED',
+  'AGENT_SCENARIO_PROVIDER_REJECTED', 'AGENT_SCENARIO_PROVIDER_NOT_READY', 'AGENT_SCENARIO_RESPONSE_MISSING', 'AGENT_SCENARIO_UI_CHANGED', 'AGENT_SCENARIO_ROUTE_MISMATCH',
+  'AGENT_SCENARIO_STEERING_UNAVAILABLE', 'AGENT_SCENARIO_THINKING_UNAVAILABLE', 'AGENT_SCENARIO_BUDGET_EXHAUSTED', 'AGENT_SCENARIO_RESTART_FAILED',
   'AGENT_SCENARIO_STOP_FAILED', 'AGENT_RUN_TIMED_OUT', 'AGENT_RUN_INTERRUPTED']);
 for (const code of ['AGENT_WAIT_TIMED_OUT', 'AGENT_ASSERTION_FAILED', 'AGENT_RUNTIME_CHANGED',
   'AGENT_CDP_INVALID', 'AGENT_CDP_UNAVAILABLE', 'AGENT_CDP_TIMED_OUT', 'AGENT_CDP_REJECTED',
@@ -63,7 +63,11 @@ export async function runAgentScenarios(paths, { sendBudget, doctor, start, stop
     const result = await start();
     ownedRuntime = result?.started === true; report.runtime = ownedRuntime ? 'RUNNING' : 'LEFT_INSPECTABLE';
     check();
-    if (!requireReady(result) || !ownedRuntime) throw Error('AGENT_SCENARIO_RESTART_FAILED');
+    if (!requireReady(result) || !ownedRuntime) {
+      report.startFailure = { status: ['READY', 'OWNER_ACTION_REQUIRED'].includes(result?.status) ? result.status : 'FAILED' };
+      if (typeof result?.reason === 'string' && /^[A-Z][A-Z0-9_]{1,80}$/.test(result.reason)) report.startFailure.reason = result.reason;
+      throw Error('AGENT_SCENARIO_RESTART_FAILED');
+    }
   };
   try {
     check();
@@ -79,7 +83,7 @@ export async function runAgentScenarios(paths, { sendBudget, doctor, start, stop
       throw Error('AGENT_SCENARIO_DOCTOR_REQUIRED');
     }
     report.doctor = { status: 'READY', restart: true, paired: true };
-    check(); await startRuntime();
+    check(); report.phase = 'start'; await startRuntime();
     report.phase = 'baseline';
     await control('debug', ['on']);
     const baseline = new Set((await scenarioHistory(control)).map(row => row.id));
