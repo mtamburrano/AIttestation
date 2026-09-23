@@ -5,10 +5,22 @@ import { join } from 'node:path';
 import { readReleaseFile } from '../distribution/release-inputs.mjs';
 import { CHATGPT_EXTENSION_ID } from '../browser/chatgpt/adapter.mjs';
 
+const ACTIVE_BLOCKLIST_PREFS = ['blacklist_state', 'omaha_blocklist_state',
+  'extension_telemetry_service_blocklist_state'];
+
+function extensionBlocklistClear(extension) {
+  if (Object.hasOwn(extension, 'blacklist')
+      && (typeof extension.blacklist !== 'boolean' || extension.blacklist)) return false;
+  return ACTIVE_BLOCKLIST_PREFS.every(name => !Object.hasOwn(extension, name)
+    || (Number.isSafeInteger(extension[name]) && extension[name] >= 0 && extension[name] === 0));
+}
+
 function extensionPreferenceReady(extension, stage) {
   if (!extension || typeof extension !== 'object' || Array.isArray(extension) || extension.path !== stage) return false;
   // Current Chromium uses disable_reasons for unpacked entries and may omit legacy state.
   if (Object.hasOwn(extension, 'state') && (!Number.isSafeInteger(extension.state) || extension.state !== 1)) return false;
+  // Blocklist state is persisted separately from disable_reasons.
+  if (!extensionBlocklistClear(extension)) return false;
   if (!Object.hasOwn(extension, 'disable_reasons')) return true;
   if (Array.isArray(extension.disable_reasons)) {
     return extension.disable_reasons.length === 0

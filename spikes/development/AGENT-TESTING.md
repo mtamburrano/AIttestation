@@ -144,10 +144,14 @@ then determined by `disable_reasons`:
 
 An absent `disable_reasons` field and an empty list mean no recorded disable
 reason. Any non-empty list, an explicitly non-enabled legacy `state`, a wrong
-ID or path, malformed JSON, or conflicting entries fails closed. A legacy numeric
-`disable_reasons: 0` is accepted for compatibility; current Chromium writes the
-list form. If both preference files contain the extension, both entries must be
-valid and enabled. These checks are read-only and do not repair Chrome state.
+ID or path, an active blocklist state, malformed JSON, or conflicting entries
+fails closed. The active blocklist fields are `blacklist_state`,
+`omaha_blocklist_state`, and `extension_telemetry_service_blocklist_state`; they
+must be absent or zero. The legacy boolean `blacklist` must be absent or false.
+A legacy numeric `disable_reasons: 0` is accepted for compatibility; current
+Chromium writes the list form. If both preference files contain the extension,
+both entries must be valid and enabled. These checks are read-only and do not
+repair Chrome state.
 
 ## Normal unattended sessions
 

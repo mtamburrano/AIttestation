@@ -130,6 +130,11 @@ test('agent extension readiness follows current Chromium disable reasons and fai
 
   for (const [name, value] of [
     ['disabled', { ...entry, disable_reasons: [1] }],
+    ['blocklisted', { ...entry, blacklist_state: 1 }],
+    ['omaha-blocklisted', { ...entry, omaha_blocklist_state: 1 }],
+    ['telemetry-blocklisted', { ...entry, extension_telemetry_service_blocklist_state: 1 }],
+    ['legacy-blocklisted', { ...entry, blacklist: true }],
+    ['malformed-blocklist', { ...entry, blacklist_state: [] }],
     ['wrong-path', { ...entry, path: join(f.paths.extension, 'other') }],
     ['wrong-state', { ...entry, state: 0 }],
     ['malformed-reasons', { ...entry, disable_reasons: '[]' }],
