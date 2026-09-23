@@ -121,6 +121,34 @@ An interrupted initialization requires a fresh namespace as well.
    private CDP pipe. Full Disk Access, Apple Events, Fast User Switching and
    administrator permission are not required.
 
+### Chrome extension readiness preferences
+
+Private-agent preflight reads the selected profile's `Default/Secure Preferences`
+and `Default/Preferences` files. It accepts the exact ChatGPT extension ID and
+the exact staged extension path only when the extension entry is enabled. Current
+Chromium may omit the legacy `state` field for an unpacked extension; readiness is
+then determined by `disable_reasons`:
+
+```json
+{
+  "extensions": {
+    "settings": {
+      "<ChatGPT extension ID>": {
+        "path": "/.../.attestamp-agent-NAMESPACE/extension/current",
+        "disable_reasons": []
+      }
+    }
+  }
+}
+```
+
+An absent `disable_reasons` field and an empty list mean no recorded disable
+reason. Any non-empty list, an explicitly non-enabled legacy `state`, a wrong
+ID or path, malformed JSON, or conflicting entries fails closed. A legacy numeric
+`disable_reasons: 0` is accepted for compatibility; current Chromium writes the
+list form. If both preference files contain the extension, both entries must be
+valid and enabled. These checks are read-only and do not repair Chrome state.
+
 ## Normal unattended sessions
 
 ```sh

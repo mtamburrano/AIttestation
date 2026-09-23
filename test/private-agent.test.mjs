@@ -13,7 +13,7 @@ import { AGENT_PROFILE, AGENT_OPT_IN, agentAccount, agentBuildPath, initializeAg
 import { agentNativeSources, replaceAgentInput } from '../spikes/development/agent-artifact.mjs';
 import { initializeAgentConfig, resolveAgentConfig } from '../spikes/development/agent-config.mjs';
 import { agentCommand, agentOwnerAction, boundedAgentPreflight, inspectAgentBuild, preflightAgent, probeAgentKeychain } from '../spikes/development/agent.mjs';
-import { probeAgentLogin } from '../spikes/development/agent-browser.mjs';
+import { agentExtensionReady, probeAgentLogin } from '../spikes/development/agent-browser.mjs';
 import { agentPermissions } from '../spikes/development/agent-permissions.mjs';
 import { closeAgentBrowser } from '../spikes/development/agent-process.mjs';
 import { ownerDirectory, writeNewJSON } from '../spikes/development/environment.mjs';
@@ -21,6 +21,7 @@ import { stageAgentExtension, validateDevelopmentConfig } from '../spikes/develo
 import { registerNativeHost, stopDevelopment } from '../spikes/development/cli.mjs';
 import { DurableVault, MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
+import { CHATGPT_EXTENSION_ID } from '../spikes/browser/chatgpt/adapter.mjs';
 import { agentInstallation } from '../spikes/development/agent-policy.mjs';
 import { restrictFixtureNetwork } from '../spikes/development/fixture-network.mjs';
 import { fileInventory } from '../spikes/distribution/inventory.mjs';
@@ -109,6 +110,44 @@ test('agent extension staging copies nested assets into a fresh private root and
   await symlink(f.retained, alias);
   await assert.rejects(stageAgentExtension(source, alias), { code: 'EEXIST' });
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
+});
+
+test('agent extension readiness follows current Chromium disable reasons and fails closed on ambiguity', async t => {
+  const f = await fixture(t), stage = join(f.paths.extension, 'current');
+  await mkdir(join(f.paths.chrome, 'Default'), { mode: 0o700 });
+  const writePreferences = (name, value) => writeFile(join(f.paths.chrome, 'Default', name), JSON.stringify(value), { mode: 0o600 });
+  const entry = { path: stage, disable_reasons: [] };
+  const preferences = { extensions: { settings: { [CHATGPT_EXTENSION_ID]: entry } } };
+  await writePreferences('Secure Preferences', preferences);
+  assert.equal(await agentExtensionReady(f.paths, stage), true);
+
+  await writePreferences('Secure Preferences', { extensions: { settings: { [CHATGPT_EXTENSION_ID]: { path: stage } } } });
+  assert.equal(await agentExtensionReady(f.paths, stage), true);
+
+  entry.state = 1;
+  await writePreferences('Preferences', preferences);
+  assert.equal(await agentExtensionReady(f.paths, stage), true);
+
+  for (const [name, value] of [
+    ['disabled', { ...entry, disable_reasons: [1] }],
+    ['wrong-path', { ...entry, path: join(f.paths.extension, 'other') }],
+    ['wrong-state', { ...entry, state: 0 }],
+    ['malformed-reasons', { ...entry, disable_reasons: '[]' }],
+  ]) {
+    await writePreferences('Secure Preferences',
+      { extensions: { settings: { [CHATGPT_EXTENSION_ID]: value } } });
+    assert.equal(await agentExtensionReady(f.paths, stage), false, name);
+  }
+
+  await writePreferences('Secure Preferences',
+    { extensions: { settings: { wrongextensionid: { path: stage, disable_reasons: [] } } } });
+  await writePreferences('Preferences', {});
+  assert.equal(await agentExtensionReady(f.paths, stage), false, 'wrong-id');
+
+  await writePreferences('Secure Preferences',
+    { extensions: { settings: { [CHATGPT_EXTENSION_ID]: { path: stage, disable_reasons: [] } } } });
+  await writeFile(join(f.paths.chrome, 'Default', 'Preferences'), '{ malformed', { mode: 0o600 });
+  assert.equal(await agentExtensionReady(f.paths, stage), false);
 });
 
 test('agent vault, bridge registration, launch cleanup and key service leave retained resources byte-identical', async t => {
