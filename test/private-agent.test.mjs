@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile, symlink, link, copyFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile, symlink, link, copyFile, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { userInfo } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
@@ -10,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { AGENT_PROFILE, AGENT_OPT_IN, agentAccount, agentBuildPath, initializeAgent,
   validateAgent, validateAgentLaunch, validateAgentState } from '../spikes/development/agent-environment.mjs';
 import { agentNativeSources, replaceAgentInput } from '../spikes/development/agent-artifact.mjs';
+import { initializeAgentConfig, resolveAgentConfig } from '../spikes/development/agent-config.mjs';
 import { agentCommand, agentOwnerAction, boundedAgentPreflight, inspectAgentBuild, preflightAgent, probeAgentKeychain } from '../spikes/development/agent.mjs';
 import { probeAgentLogin } from '../spikes/development/agent-browser.mjs';
 import { agentPermissions } from '../spikes/development/agent-permissions.mjs';
@@ -26,22 +28,23 @@ import { canonical } from '../spikes/vault/format.mjs';
 import { sha256 } from '../spikes/distribution/release.mjs';
 import { copyApplicationResource } from '../spikes/distribution/package-resources.mjs';
 
-async function fixture(t) {
+async function fixture(t, namespace = 'fixture01') {
   const home = await realpath(await mkdtemp('/private/tmp/agent-test-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const info = { username: 'synthetic-signer', uid: process.getuid(), homedir: home };
-  const agent = { profile: AGENT_PROFILE, namespace: 'fixture01', automation: 'local-api', account: { username: info.username, uid: info.uid, home } };
+  const agent = { profile: AGENT_PROFILE, namespace, automation: 'local-api', account: { username: info.username, uid: info.uid, home } };
   const config = { profile: 'pap-private-development/1', teamId: 'TESTTEAM01', signingIdentity: 'A'.repeat(40),
     helperProvisioningProfile: join(home, 'synthetic-profile'), signingKeychain: join(home, 'synthetic-keychain'), sponsor: null, agent };
-  const configPath = join(home, 'agent-config.json'); await writeNewJSON(configPath, config);
+  const sourceConfigPath = join(home, 'agent-config.json'); await writeNewJSON(sourceConfigPath, config);
+  await writeFile(config.helperProvisioningProfile, 'synthetic profile, never used for signing', { mode: 0o600 });
   const retained = join(home, 'retained-checkpoint'); await mkdir(retained, { mode: 0o700 });
   for (const name of ['control', 'vault', 'browser', 'extension', 'sponsor-ledger', 'evidence', 'keychain']) {
     await writeFile(join(retained, name), `retained synthetic ${name}`, { mode: 0o600 });
   }
   const baseline = await fileInventory(retained);
-  await initializeAgent(agent, AGENT_OPT_IN, info);
-  const paths = await validateAgent(agent, AGENT_OPT_IN, info);
-  return { home, info, agent, config, configPath, paths, retained, baseline };
+  await initializeAgentConfig(sourceConfigPath, AGENT_OPT_IN, info);
+  const persisted = await resolveAgentConfig(agent.namespace, AGENT_OPT_IN, info);
+  return { home, info, agent, ...persisted, retained, baseline };
 }
 
 async function nativeSources() {
@@ -192,7 +195,7 @@ test('preflight gates every predictable prerequisite and never probes the provid
     build: async () => build, keychain: () => ({ status: 'READY' }),
     chrome: async () => ({ infoPlist: chromeInfo }), processes: () => [], extension: async () => true,
     login: async () => { calls.push('login'); return true; } };
-  const preflight = (live = false, patch = {}) => preflightAgent(f.configPath, 'one', AGENT_OPT_IN, live, { ...deps, ...patch });
+  const preflight = (live = false, patch = {}) => preflightAgent(f.agent.namespace, 'one', AGENT_OPT_IN, live, { ...deps, ...patch });
   assert.equal((await preflight()).status, 'READY'); assert.deepEqual(calls, []);
   assert.deepEqual((await preflight()).providerSend, false);
   for (const [patch, reason] of [
@@ -245,27 +248,30 @@ test('the preflight worker has a global deadline, clean environment and bounded 
     } });
   const ready = { profile: AGENT_PROFILE, status: 'READY', automation: 'local-api', providerSend: false,
     sponsor: false, mainnet: false, publication: false, deployment: false };
-  assert.deepEqual(await boundedAgentPreflight('/synthetic-config', 'one', AGENT_OPT_IN, false, options(JSON.stringify(ready))), ready);
+  assert.deepEqual(await boundedAgentPreflight('fixture01', 'one', AGENT_OPT_IN, false, options(JSON.stringify(ready))), ready);
   assert.deepEqual(spawned[0].config.env, { PATH: '/usr/bin:/bin' });
+  assert.deepEqual(spawned[0].args.slice(1), ['fixture01', 'one', AGENT_OPT_IN, 'offline']);
   assert.equal(spawned[0].config.detached, true);
-  assert.equal((await boundedAgentPreflight('/synthetic-config', 'one', AGENT_OPT_IN, false, options(null))).reason, 'AGENT_PREFLIGHT_TIMED_OUT');
+  assert.equal((await boundedAgentPreflight('fixture01', 'one', AGENT_OPT_IN, false, options(null))).reason, 'AGENT_PREFLIGHT_TIMED_OUT');
   for (const output of ['/private/secret', 'x'.repeat(4097), JSON.stringify({ ...ready, sponsor: true })]) {
-    assert.equal((await boundedAgentPreflight('/synthetic-config', 'one', AGENT_OPT_IN, false, options(output))).reason, 'AGENT_PREFLIGHT_FAILED');
+    assert.equal((await boundedAgentPreflight('fixture01', 'one', AGENT_OPT_IN, false, options(output))).reason, 'AGENT_PREFLIGHT_FAILED');
   }
   assert.deepEqual(killed, spawned.map(entry => entry.child));
-  assert.equal((await boundedAgentPreflight('/synthetic-config', 'one', AGENT_OPT_IN, false,
+  assert.equal((await boundedAgentPreflight('fixture01', 'one', AGENT_OPT_IN, false,
     { spawnProcess: () => { throw Error('private-path'); } })).reason, 'AGENT_PREFLIGHT_FAILED');
 });
 
 test('the real CLI preflight emits machine-readable failure and ignores inherited account and agent overrides', async t => {
-  const f = await fixture(t);
+  const namespace = `env-test-${randomBytes(4).toString('hex')}`, f = await fixture(t, namespace);
+  await assert.rejects(lstat(join(userInfo().homedir, `.attestamp-agent-${namespace}`)), { code: 'ENOENT' });
   const result = spawnSync(process.execPath, [new URL('../spikes/development/cli.mjs', import.meta.url).pathname,
-    'agent', 'preflight', f.configPath, 'one', AGENT_OPT_IN], {
-    env: { PATH: '/usr/bin:/bin', HOME: f.home, ATTESTAMP_AGENT_MODE: 'true', ATTESTAMP_AGENT_UID: String(f.info.uid) },
+    'agent', 'preflight', namespace, 'one', AGENT_OPT_IN], {
+    env: { PATH: '/usr/bin:/bin', HOME: f.home, ATTESTAMP_AGENT_MODE: 'true', ATTESTAMP_AGENT_UID: String(f.info.uid),
+      ATTESTAMP_AGENT_CONFIG: f.configPath },
     encoding: 'utf8', timeout: 10000,
   });
   assert.equal(result.status, 2, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), agentOwnerAction('AGENT_ACCOUNT_MISMATCH'));
+  assert.deepEqual(JSON.parse(result.stdout), agentOwnerAction('AGENT_CONFIG_NOT_PREPARED'));
   assert.ok(!result.stdout.includes(f.home));
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
@@ -284,7 +290,7 @@ test('computer-use readiness checks permissions without prompts and fails closed
   const agent = { ...f.agent, automation: 'computer-use' }, config = { ...f.config, agent };
   await writeFile(f.configPath, JSON.stringify(config));
   await writeFile(join(f.paths.root, 'agent.json'), JSON.stringify(agent));
-  const report = await preflightAgent(f.configPath, 'one', AGENT_OPT_IN, false, {
+  const report = await preflightAgent(f.agent.namespace, 'one', AGENT_OPT_IN, false, {
     info: f.info, consoleUID: async () => f.info.uid, ipc: async () => true,
     permissions: async () => 'ACCESSIBILITY_PERMISSION_REQUIRED',
     signingInputs: async () => { assert.fail('permission failure must precede signing and runtime'); },

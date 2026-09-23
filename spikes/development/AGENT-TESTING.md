@@ -6,8 +6,9 @@ does not use the retained owner-checkpoint account. It is available only through
 `PRIVATE_DEVELOPMENT` artifacts. Normal private preparation and distribution
 builds retain their existing behavior.
 
-Use a new, owner-only config outside the checkout. Copy the signing selection
-from the existing private config, keep `sponsor` null, and add:
+For one-time initialization, create a new, owner-only input config outside the
+checkout. Copy the signing selection from the existing private config, keep
+`sponsor` null, and add:
 
 ```json
 "agent": {
@@ -27,11 +28,21 @@ the retained test account is rejected. The namespace is a lowercase letter
 followed by 2–19 lowercase letters, digits or hyphens. No environment variables
 select accounts, paths, permissions or live scope. Never copy retained evidence,
 Chrome state, Keychain items, sponsor configuration or ledgers into this setup.
+Keep the original private config and provisioning profile unchanged. If the
+profile is inaccessible to the runner, select an explicitly supplied accessible
+copy in this new input config; do not widen the original file's permissions.
 
 All mutable resources are under the **new** directory
 `~/.attestamp-agent-codex01`: `control`, `support` (vault and native bridge),
 `chrome` (user data and native registration), `extension/BUILD`, `browser` and
-`builds/BUILD`. The Keychain service is `ai.provenance.agent.UID.NAMESPACE`.
+`builds/BUILD`. Initialization also writes
+`bootstrap/agent-config.json` and a byte-for-byte copy at
+`bootstrap/helper.provisionprofile`, both mode 0600 in an owner-only directory.
+The persisted config points to that profile copy. After initialization, every
+command uses the namespace (for example, `codex01`); the original input config
+and profile paths are no longer needed. The Keychain selection remains the
+explicit selection from the input config; its contents and ACLs are unchanged.
+The Keychain service is `ai.provenance.agent.UID.NAMESPACE`.
 The provisioned access group and signed helper identity stay unchanged; the
 specialized helper accepts only this agent service and rejects managed-account
 credentials. The native app lock and browser relay use the pinned agent support
@@ -43,6 +54,10 @@ new. Validation rejects aliases, path traversal, redirected state, hard-linked
 files and unsafe permissions before starting storage or a browser. It never
 repairs or cleans an existing namespace automatically. Chrome's own singleton
 links are inspected as browser state and never followed by the harness.
+Namespaces created before persisted configuration was supported must be replaced
+by a fresh namespace through initialization. There is no automatic import from
+old configs, current-directory files, or environment variables.
+An interrupted initialization requires a fresh namespace as well.
 
 ## One-time owner bootstrap
 
@@ -57,9 +72,15 @@ links are inspected as browser state and never followed by the harness.
 
    ```sh
    npm run dev -- agent init /absolute/private/agent-config.json --agent-mode
-   npm run dev -- agent prepare /absolute/private/agent-config.json build01 --agent-mode
-   npm run dev -- agent bootstrap /absolute/private/agent-config.json build01 --agent-mode --owner-bootstrap
+   npm run dev -- agent prepare codex01 build01 --agent-mode
+   npm run dev -- agent bootstrap codex01 build01 --agent-mode --owner-bootstrap
    ```
+
+   `init` reports the configured namespace after persisting the config and
+   profile. It does not sign, access the Keychain, or grant session readiness.
+   `prepare` validates the copied helper profile against the selected signing
+   certificate before building. Save the namespace in the unattended command;
+   no original config path needs to be supplied or rediscovered on later runs.
 
    Bootstrap creates a nonsecret readiness item **only** in the agent Keychain
    service. The signed native host and helper must successfully access it.
@@ -79,7 +100,7 @@ links are inspected as browser state and never followed by the harness.
    provider access:
 
    ```sh
-   npm run dev -- agent bootstrap /absolute/private/agent-config.json build01 --agent-mode --owner-bootstrap --live-provider-send
+   npm run dev -- agent bootstrap codex01 build01 --agent-mode --owner-bootstrap --live-provider-send
    ```
 
    This records readiness for the exact build and Chrome version after a
@@ -98,10 +119,18 @@ links are inspected as browser state and never followed by the harness.
 ## Normal unattended sessions
 
 ```sh
-npm run dev -- agent preflight /absolute/private/agent-config.json build01 --agent-mode
-npm run dev -- agent start /absolute/private/agent-config.json build01 --agent-mode
-npm run dev -- agent stop /absolute/private/agent-config.json --agent-mode
+npm run dev -- agent preflight codex01 build01 --agent-mode
+npm run dev -- agent start codex01 build01 --agent-mode
+npm run dev -- agent stop codex01 --agent-mode
 ```
+
+Each command resolves `~/.attestamp-agent-codex01/bootstrap/agent-config.json`
+from the current OS account and validates its namespace/account marker and
+owner-only permissions. Filesystem paths are accepted only by `init`. A missing
+or unsafe canonical config produces a bounded failure; no fallback searches
+the home directory or consults environment variables. Preflight resolves the
+config inside its existing two-minute deadline. A missing profile blocks
+preflight and prepare, while `stop` can still use the persisted namespace.
 
 The default session starts the local resident engine with browser integration
 disabled. It never opens Chrome. Its authenticated loopback dashboard is in the
@@ -127,7 +156,8 @@ paths, browser contents, account identifiers, credentials or raw errors:
 
 | Reason | Owner action before starting a session |
 | --- | --- |
-| `AGENT_OPT_IN_REQUIRED`, `AGENT_CONFIG_INVALID`, `AGENT_ACCOUNT_MISMATCH` | Select the explicit agent config and its current signing account. |
+| `AGENT_OPT_IN_REQUIRED`, `AGENT_CONFIG_INVALID`, `AGENT_ACCOUNT_MISMATCH` | Use the explicit opt-in, selected namespace and current signing account; initialization also requires a valid input config. |
+| `AGENT_CONFIG_NOT_PREPARED` | Complete initialization for the selected namespace. Existing partial or older namespaces require a fresh namespace; normal commands never fall back to an input config path. |
 | `AGENT_STATE_NOT_PREPARED`, `AGENT_NAMESPACE_MISMATCH`, `AGENT_STATE_UNSAFE` | Inspect the selected namespace; create a fresh one if needed. Do not redirect it to retained state. |
 | `GUI_SESSION_REQUIRED` | Log in to the configured account before scheduling the session. |
 | `LOCAL_IPC_PERMISSION_REQUIRED` | Allow the runner to create local Unix sockets and loopback listeners in this isolated namespace. |

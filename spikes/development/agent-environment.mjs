@@ -12,7 +12,7 @@ export function agentAccount(agent, optIn, info = userInfo()) {
   if (optIn !== AGENT_OPT_IN) throw Error('AGENT_OPT_IN_REQUIRED');
   if (fields(agent) !== 'account,automation,namespace,profile' || agent.profile !== AGENT_PROFILE
       || !['local-api', 'computer-use'].includes(agent.automation)
-      || !/^[a-z][a-z0-9-]{2,19}$/.test(agent.namespace)
+      || typeof agent.namespace !== 'string' || !/^[a-z][a-z0-9-]{2,19}$/.test(agent.namespace)
       || fields(agent.account) !== 'home,uid,username') throw Error('AGENT_CONFIG_INVALID');
   const { home, uid, username } = agent.account;
   if (username === TEST_USER || username !== info.username || uid !== info.uid || uid < 501

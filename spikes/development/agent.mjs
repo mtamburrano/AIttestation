@@ -10,8 +10,9 @@ import { fileInventory } from '../distribution/inventory.mjs';
 import { assertReleasePath, readReleaseFile } from '../distribution/release-inputs.mjs';
 import { codeSignatureCheckArguments } from '../distribution/local.mjs';
 import { DEVELOPMENT_PROFILE, exists, ownerDirectory, privateJSON, writeNewJSON } from './environment.mjs';
-import { AGENT_OPT_IN, AGENT_PROFILE, agentAccount, agentBuildPath, initializeAgent, validateAgent, validateAgentState } from './agent-environment.mjs';
-import { developmentSigningInputs, prepareDevelopment, validateDevelopmentConfig } from './prepare.mjs';
+import { AGENT_OPT_IN, AGENT_PROFILE, agentBuildPath, validateAgent, validateAgentState } from './agent-environment.mjs';
+import { initializeAgentConfig, resolveAgentConfig } from './agent-config.mjs';
+import { developmentSigningInputs, prepareDevelopment } from './prepare.mjs';
 import { preflightSigning } from './signing.mjs';
 import { checkPlatform, runningChromeProcesses } from './chrome.mjs';
 import { agentExtensionReady, probeAgentLogin } from './agent-browser.mjs';
@@ -22,7 +23,7 @@ const run = (command, args) => execFileSync(command, args, { env: { PATH: '/usr/
   encoding: 'utf8', stdio: 'pipe', timeout: 15000, killSignal: 'SIGKILL', maxBuffer: 65536 });
 const reasons = new Set(['AGENT_OPT_IN_REQUIRED', 'AGENT_CONFIG_INVALID', 'AGENT_CONFIG_REQUIRED', 'AGENT_ACCOUNT_MISMATCH',
   'AGENT_PATH_TOO_LONG', 'AGENT_BUILD_NAME_INVALID', 'AGENT_NAMESPACE_MISMATCH', 'AGENT_STATE_UNSAFE', 'AGENT_STATE_LIMIT',
-  'AGENT_SPONSOR_DISABLED', 'AGENT_BUILD_INVALID', 'AGENT_STATE_NOT_PREPARED', 'AGENT_COMMAND_INVALID',
+  'AGENT_SPONSOR_DISABLED', 'AGENT_BUILD_INVALID', 'AGENT_STATE_NOT_PREPARED', 'AGENT_CONFIG_NOT_PREPARED', 'AGENT_COMMAND_INVALID',
   'AGENT_PREFLIGHT_TIMED_OUT', 'AGENT_PREFLIGHT_FAILED',
   'SIGNING_INPUTS_INVALID', 'SIGNING_AUTHORIZATION_REQUIRED', 'KEYCHAIN_SELECTION_REQUIRED', 'APPLE_SILICON_MAC_REQUIRED',
   'INVALID_SELECTION', 'INTERACTION_GUARD_UNAVAILABLE',
@@ -39,7 +40,7 @@ export const agentOwnerAction = reason => ({ profile: AGENT_PROFILE, status: 'OW
 const ready = () => ({ profile: AGENT_PROFILE, status: 'READY', providerSend: false, sponsor: false,
   mainnet: false, publication: false, deployment: false });
 
-export function boundedAgentPreflight(configPath, name, optIn, live, {
+export function boundedAgentPreflight(namespace, name, optIn, live, {
   spawnProcess = spawn, timeoutMs = 120000,
   killGroup = child => { if (child?.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} } },
 } = {}) {
@@ -54,7 +55,7 @@ export function boundedAgentPreflight(configPath, name, optIn, live, {
     const interrupted = () => finish(agentOwnerAction('AGENT_PREFLIGHT_FAILED'));
     try {
       child = spawnProcess(process.execPath, [fileURLToPath(new URL('agent-preflight-worker.mjs', import.meta.url)),
-        configPath, name, optIn, live ? 'live-provider-send' : 'offline'], {
+        namespace, name, optIn, live ? 'live-provider-send' : 'offline'], {
         env: { PATH: '/usr/bin:/bin' }, detached: true, stdio: ['ignore', 'pipe', 'ignore'],
       });
       timer = setTimeout(() => finish(agentOwnerAction('AGENT_PREFLIGHT_TIMED_OUT')), timeoutMs);
@@ -144,7 +145,7 @@ export function probeAgentKeychain(app, bootstrap = false, execute = run) {
   }
 }
 
-export async function preflightAgent(configPath, name, optIn, live = false, dependencies = {}) {
+export async function preflightAgent(namespace, name, optIn, live = false, dependencies = {}) {
   // Test injection is in this non-shipping module; no environment variable or
   // packaged runtime switch can replace a platform, signing or login check.
   const deps = { signingInputs: developmentSigningInputs, signing: preflightSigning, build: inspectAgentBuild,
@@ -155,11 +156,7 @@ export async function preflightAgent(configPath, name, optIn, live = false, depe
     consoleUID: async () => (await lstat('/dev/console')).uid, ...dependencies };
   try {
     if (optIn !== AGENT_OPT_IN) return agentOwnerAction('AGENT_OPT_IN_REQUIRED');
-    let config;
-    try { config = validateDevelopmentConfig(await privateJSON(configPath)); }
-    catch { return agentOwnerAction('AGENT_CONFIG_INVALID'); }
-    if (!config.agent) return agentOwnerAction('AGENT_CONFIG_REQUIRED');
-    const paths = await validateAgent(config.agent, optIn, deps.info);
+    const { config, paths, configPath } = await resolveAgentConfig(namespace, optIn, deps.info);
     if (await exists(join(paths.control, 'runtime.json')) || await exists(join(paths.control, 'launch.json'))
         || await exists(join(paths.control, 'registration.json'))) return agentOwnerAction('STOP_PREVIOUS_AGENT_SESSION');
     await validateAgentState(paths);
@@ -223,8 +220,8 @@ async function bootstrapAgent(config, paths, name, live) {
   return ready();
 }
 
-async function startAgent(configPath, config, paths, name, live) {
-  const report = await boundedAgentPreflight(configPath, name, AGENT_OPT_IN, live);
+async function startAgent(namespace, config, paths, name, live) {
+  const report = await boundedAgentPreflight(namespace, name, AGENT_OPT_IN, live);
   if (report.status !== 'READY') return report;
   const { app } = await inspectAgentBuild(config, paths, name);
   await validateAgent(config.agent, AGENT_OPT_IN);
@@ -250,8 +247,10 @@ async function startAgent(configPath, config, paths, name, live) {
   return agentOwnerAction('AGENT_START_NOT_CONFIRMED');
 }
 
-export async function agentCommand(args) {
-  const [action, configPath, ...rest] = args;
+export async function agentCommand(args, {
+  info, preflight = boundedAgentPreflight, prepare = prepareDevelopment, bootstrap = bootstrapAgent, start = startAgent,
+} = {}) {
+  const [action, selection, ...rest] = args;
   const optIn = rest.includes(AGENT_OPT_IN) ? AGENT_OPT_IN : null;
   if (!optIn) return agentOwnerAction('AGENT_OPT_IN_REQUIRED');
   const live = rest.includes('--live-provider-send');
@@ -263,20 +262,17 @@ export async function agentCommand(args) {
       || rest.includes('--owner-bootstrap') !== (action === 'bootstrap')
       || live && ['init', 'prepare', 'stop'].includes(action)) return agentOwnerAction('AGENT_COMMAND_INVALID');
   try {
-    if (action === 'preflight') return boundedAgentPreflight(configPath, positional[0], optIn, live);
-    const config = validateDevelopmentConfig(await privateJSON(configPath));
-    if (!config.agent) return agentOwnerAction('AGENT_CONFIG_REQUIRED');
-    agentAccount(config.agent, optIn);
-    if (action === 'init') return initializeAgent(config.agent, optIn);
-    const paths = await validateAgent(config.agent, optIn), name = positional[0];
+    if (action === 'init') return await initializeAgentConfig(selection, optIn, info);
+    if (action === 'preflight') return await preflight(selection, positional[0], optIn, live);
+    const { config, paths, configPath } = await resolveAgentConfig(selection, optIn, info), name = positional[0];
     if (action === 'prepare') {
-      const result = await prepareDevelopment(configPath, agentBuildPath(paths, name), { agentOptIn: optIn });
+      const result = await prepare(configPath, agentBuildPath(paths, name), { agentOptIn: optIn });
       return result.status === 'OWNER_ACTION_REQUIRED' ? agentOwnerAction(result.reason) : result;
     }
-    if (action === 'bootstrap') return bootstrapAgent(config, paths, name, live);
-    if (action === 'start') return startAgent(configPath, config, paths, name, live);
+    if (action === 'bootstrap') return await bootstrap(config, paths, name, live);
+    if (action === 'start') return await start(selection, config, paths, name, live);
     const { stopDevelopment } = await import('./cli.mjs');
-    return stopDevelopment(paths, { agent: true });
+    return await stopDevelopment(paths, { agent: true });
   } catch (error) {
     if (/^PRIVATE_PREPARE_(?:SIGNING|CODESIGN|PARTITION)/.test(error.message)) return agentOwnerAction('SIGNING_AUTHORIZATION_REQUIRED');
     if (error.message.startsWith('PRIVATE_PREPARE_') && reasons.has(error.message.slice('PRIVATE_PREPARE_'.length))) {
