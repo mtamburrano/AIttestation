@@ -8,9 +8,7 @@ import { algorandSponsor } from '../managed/algorand.mjs';
 import { startManagedServer } from '../managed/http.mjs';
 import { readReleaseFile } from '../distribution/release-inputs.mjs';
 import { DEVELOPMENT_PROFILE, newDirectory, ownerDirectory, privateJSON, writeNewJSON } from './environment.mjs';
-
-const limits = { accounts: 1, ledger: 1000, accountMonth: 1000, accountDay: 100,
-  globalDay: 1000, accountMinute: 20, globalMinute: 30 };
+import { PRIVATE_SPONSOR_LIMITS as limits, checkPrivateSponsorPolicy, migratePrivateSponsorPolicy } from './sponsor-policy.mjs';
 
 export function algorandAddress(publicKey) {
   const key = Buffer.from(publicKey);
@@ -56,10 +54,10 @@ export async function initializeSponsor(directory, port) {
   } finally { service.close(); }
   await checkSponsor(directory);
   return { profile: DEVELOPMENT_PROFILE, network: 'testnet-v1.0', address, origin: `https://127.0.0.1:${port}`,
-    maxTransactions: 1000, externalCalls: 0, next: 'FUND_NEW_ADDRESS_WITH_FREE_TESTNET_FAUCET_ONLY' };
+    maxTransactions: limits.ledger, externalCalls: 0, next: 'FUND_NEW_ADDRESS_WITH_FREE_TESTNET_FAUCET_ONLY' };
 }
 
-export async function checkSponsor(directory) {
+async function checkSponsorIdentity(directory) {
   await ownerDirectory(directory);
   const config = await privateJSON(join(directory, 'sponsor.json'));
   if (Object.keys(config).sort().join(',') !== 'address,network,port,profile'
@@ -84,9 +82,21 @@ export async function checkSponsor(directory) {
   } finally { key?.fill(0); seed?.fill(0); }
 }
 
+export async function checkSponsor(directory) {
+  const report = await checkSponsorIdentity(directory);
+  const policy = await checkPrivateSponsorPolicy(directory);
+  return { ...report, ...policy, checks: [...report.checks, 'SPONSOR_POLICY_CURRENT'] };
+}
+
+export async function migrateSponsor(directory) {
+  await checkSponsorIdentity(directory);
+  const migration = await migratePrivateSponsorPolicy(directory);
+  return { profile: DEVELOPMENT_PROFILE, ...migration };
+}
+
 export async function serveSponsor(directory, optIn) {
   if (optIn !== '--live-testnet') throw Error('EXPLICIT_LIVE_TESTNET_OPT_IN_REQUIRED');
-  await ownerDirectory(directory);
+  await checkSponsor(directory);
   const config = await privateJSON(join(directory, 'sponsor.json'));
   if (Object.keys(config).sort().join(',') !== 'address,network,port,profile'
       || config.profile !== DEVELOPMENT_PROFILE || config.network !== 'testnet-v1.0'
@@ -109,11 +119,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [action, directory, option] = process.argv.slice(2);
   try {
     if (action === 'doctor' && process.argv.length === 4) console.log(JSON.stringify(await checkSponsor(directory)));
+    else if (action === 'migrate-policy' && process.argv.length === 4) console.log(JSON.stringify(await migrateSponsor(directory)));
     else if (process.argv.length !== 5) throw Error('USAGE');
     else if (action === 'init') console.log(JSON.stringify(await initializeSponsor(directory, Number(option))));
     else if (action === 'serve') {
       const server = await serveSponsor(directory, option);
-      console.log(JSON.stringify({ origin: server.origin, network: 'testnet-v1.0', maxTransactions: 1000 }));
+      console.log(JSON.stringify({ origin: server.origin, network: 'testnet-v1.0', maxTransactions: limits.ledger }));
       const stop = () => server.close().then(() => process.exit(0));
       process.once('SIGINT', stop); process.once('SIGTERM', stop);
     } else throw Error('USAGE');

@@ -343,16 +343,35 @@ selected sponsor directory, without starting a server or making network calls:
 npm run dev:sponsor -- doctor /absolute/private-sponsor
 ```
 
-The self-check reports fixed labels and does not repair existing permissions.
+The self-check reports fixed labels, validates the current ledger policy, and
+does not repair existing permissions or migrate the policy.
 The existing owner/permission validation at server startup remains enforced.
 
 It generates a fresh TestNet-only signing seed, a 30-day loopback TLS certificate,
 one seven-day test access code and an isolated durable ledger. Fund **only the
 printed new public address** with free TestNet faucet ALGO. Never import an existing
 account or use MainNet/paid funds. The seed and TLS private key stay in this directory;
-the access code is in its owner-only `access.json`. Total ledger capacity is ten
-anchor reservations, with 1,000 microALGO fees and the existing bounded replay policy.
+the access code is in its owner-only `access.json`. Total and monthly capacity
+are 1000 anchor reservations; the account daily limit remains 100. Transactions
+use 1,000 microALGO fees and the existing bounded replay policy.
 Restarting cannot reset quotas or sign replacement transactions.
+
+For a stopped private sponsor using the exact historical ten-reservation
+policy, migrate its existing ledger explicitly:
+
+```sh
+npm run dev:sponsor -- migrate-policy /absolute/private-sponsor
+npm run dev:sponsor -- doctor /absolute/private-sponsor
+```
+
+The migration makes no network calls. It updates only the policy row in one
+SQLite transaction, preserving accounts, token hashes, reservations, signed
+transactions and broadcast counters. The signing seed/address, access code,
+TLS certificate and port stay unchanged, so no client rebuild is needed.
+An already-current policy is a no-op. Any other policy, unexpected schema or
+unsafe file fails without repair. Generic managed-service defaults and strict
+policy mismatch checks are unchanged. Never reinitialize an existing sponsor
+or replace its ledger to obtain more capacity.
 
 Set `sponsor` in the private build config and prepare a fresh app:
 

@@ -151,7 +151,7 @@ test('account setup refuses existing state and registration cleanup is ownership
 test('local TLS sponsorship keeps explicit certificate trust and cannot supply release confirmation', async t => {
   const root = await isolated(t), sponsorDirectory = join(root, 'sponsor');
   const setup = await initializeSponsor(sponsorDirectory, 37461);
-  assert.equal(setup.externalCalls, 0); assert.equal(setup.maxTransactions, 10);
+  assert.equal(setup.externalCalls, 0); assert.equal(setup.maxTransactions, 1000);
   assert.equal(setup.network, 'testnet-v1.0'); assert.match(setup.address, /^[A-Z2-7]{58}$/);
   assert.equal(algorandAddress(Buffer.alloc(32)), 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ');
   await assert.rejects(initializeSponsor(sponsorDirectory, 37461), { code: 'EEXIST' });
