@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { runAgentScenarios, scenarioHistory } from '../spikes/development/agent-scenarios.mjs';
 import { scenarioBrowser } from '../spikes/development/agent-scenario-browser.mjs';
 import { scenarioReadiness, scenarioResponse, scenarioUI } from '../spikes/development/agent-scenario-readiness.mjs';
-import { providerEndpoint, inspectScenarioRequest, assertScenarioReceipt } from '../spikes/development/agent-scenario-oracle.mjs';
+import { scenarioPrompts, providerEndpoint, inspectScenarioRequest, assertScenarioReceipt } from '../spikes/development/agent-scenario-oracle.mjs';
 import { agentCommand } from '../spikes/development/agent.mjs';
 import { agentControl } from '../spikes/development/agent-control.mjs';
 import { publishRuntimeState } from '../spikes/development/runtime-state.mjs';
@@ -90,6 +90,17 @@ test('three exact sends are checked again after a fresh epoch; artifacts exclude
   const evidence = await readFile(result.artifact, 'utf8');
   assert.doesNotMatch(evidence, /ATTESTAMP_SYNTHETIC|SECRET|synthetic-message|synthetic-conversation|receipt-/);
   assert.equal((await lstat(result.artifact)).mode & 0o777, 0o600);
+});
+
+test('steering input is not delayed by awaiting the existing response, while all three responses remain required', async t => {
+  const f = await fixture(t), openBrowser = f.dependencies.browser, accepted = [];
+  f.dependencies.browser = async (...args) => ({ ...await openBrowser(...args), accepted: async index => {
+    accepted.push({ index, sends: f.texts.length, receipts: f.events.filter(value => value === 'receipt').length });
+  } });
+  const result = await runAgentScenarios(f.paths, f.dependencies);
+  assert.equal(result.status, 'PASS');
+  assert.deepEqual(accepted, [{ index: 0, sends: 1, receipts: 1 }, { index: 1, sends: 3, receipts: 3 },
+    { index: 2, sends: 3, receipts: 3 }]);
 });
 
 test('missing capture, extra rows, restart loss and cancellation fail with evidence and no resend', async t => {
@@ -183,8 +194,9 @@ test('history baseline is paginated, bounded and rejects changed totals or dupli
   await assert.rejects(scenarioHistory(async () => ({ counts: { prompts: 2 }, page: { total: 2, offset: 0 }, prompts: [row(0), row(0)] })), /HISTORY_MISMATCH/);
 });
 
-test('CDP browser uses ordinary input once and keeps secrets out of network traces', async () => {
-  const trace = [], calls = []; let events, inserted, sends = 0, clock = 0, steeringPolls = 0, thinking = false;
+async function scenarioCDPFixture({ bodyMode = 'inline', deferExistingResponse = false, existingResponseStatus = 200 } = {}) {
+  const trace = [], calls = []; let events, inserted, sends = 0, clock = 0, steeringPolls = 0, thinking = false, sendDisabled = false;
+  const postData = new Map();
   const connect = async (_metadata, { onEvent }) => {
     events = onEvent;
     return { close() {}, async call(method, params, sessionId) {
@@ -203,7 +215,7 @@ test('CDP browser uses ordinary input once and keeps secrets out of network trac
         const composer = { value: inserted ?? '', isContentEditable: true, focus() {}, closest: () => form, getClientRects: () => [{}] };
         const attributes = { type: 'button', innerText: '', hasAttribute: () => true };
         const stop = { ...attributes, disabled: false, getClientRects: () => sends === 2 && !inserted ? [{}] : [], getAttribute: key => key === 'data-testid' ? 'stop-button' : 'Stop streaming' };
-        const send = { ...attributes, disabled: !inserted || sends === 2 && steeringPolls < 3,
+        const send = { ...attributes, disabled: sendDisabled || !inserted || sends === 2 && steeringPolls < 3,
           getClientRects: () => [{}], getAttribute: key => key === 'aria-label' ? 'Send prompt' : null,
           getBoundingClientRect: () => ({ x: 10, y: 20, width: 30, height: 40 }), contains: node => node === send };
         const think = { ...attributes, innerText: 'Think', disabled: false, getClientRects: () => [{}],
@@ -216,7 +228,21 @@ test('CDP browser uses ordinary input once and keeps secrets out of network trac
         return { result: { value: runInNewContext(params.expression, { document, location: {
           origin: 'https://chatgpt.com', pathname: sends ? '/c/synthetic-conversation' : '/' }, URL }) } };
       }
-      if (method === 'Input.insertText') inserted = params.text;
+      if (method === 'Input.insertText') {
+        inserted = params.text;
+        if (sends === 2 && deferExistingResponse && existingResponseStatus !== null) onEvent({ sessionId, method: 'Network.responseReceived',
+          params: { requestId: 'req-1', response: { status: existingResponseStatus } } });
+      }
+      if (method === 'Network.getRequestPostData') {
+        assert.equal(params.requestId, 'req-2'); assert.equal(sessionId, 'test-session');
+        if (bodyMode === 'unavailable') throw Error('SECRET_REQUEST_ERROR');
+        if (bodyMode === 'wrong-text') return { postData: JSON.stringify(body('SECRET_WRONG_TEXT', 2)) };
+        if (bodyMode === 'oversize') return { postData: 'x'.repeat(512 * 1024 + 1) };
+        if (bodyMode === 'bad-base64') return { postData: '%%%', base64Encoded: true };
+        if (bodyMode === 'invalid-utf8') return { postData: '/w==', base64Encoded: true };
+        const text = postData.get(params.requestId);
+        return bodyMode === 'base64' ? { postData: Buffer.from(text).toString('base64'), base64Encoded: true } : { postData: text };
+      }
       if (method === 'Input.dispatchMouseEvent' && params.x > 100) {
         if (params.type === 'mouseReleased') thinking = !thinking;
         return {};
@@ -227,19 +253,30 @@ test('CDP browser uses ordinary input once and keeps secrets out of network trac
         if (sends === 2) assert.ok(steeringPolls >= 3);
         const index = sends++;
         const requestBody = JSON.stringify(body(inserted, index)); inserted = null;
+        postData.set(`req-${index}`, requestBody);
         onEvent({ sessionId, method: 'Network.requestWillBeSent', params: { requestId: `req-${index}`,
-          request: { url: `https://chatgpt.com${request(index).path}`, method: 'POST', headers: { Cookie: 'SECRET' }, postData: requestBody } } });
-        onEvent({ sessionId, method: 'Network.responseReceived', params: { requestId: `req-${index}`, response: { status: 200, headers: { SECRET: 'SECRET' } } } });
+          request: { url: `https://chatgpt.com${request(index).path}`, method: 'POST', headers: { Cookie: 'SECRET' },
+            hasPostData: true, ...(index === 2 && bodyMode !== 'inline' ? {} : { postData: requestBody }) } } });
+        if (!(index === 1 && deferExistingResponse)) onEvent({ sessionId, method: 'Network.responseReceived',
+          params: { requestId: `req-${index}`, response: { status: 200, headers: { SECRET: 'SECRET' } } } });
       }
       return {};
     } };
   };
-  const browser = await scenarioBrowser({}, { trace, connect, now: () => clock, wait: async ms => { clock += ms; } }); let consumed = 0;
+  const browser = await scenarioBrowser({}, { trace, connect, now: () => clock, wait: async ms => { clock += ms; } });
+  return { browser, trace, calls, events, get sends() { return sends; },
+    finishTurn: () => events({ sessionId: 'test-session', method: 'Network.loadingFinished', params: { requestId: 'req-1' } }),
+    disableSend: () => { sendDisabled = true; } };
+}
+
+test('CDP browser uses ordinary input once and keeps secrets out of network traces', async () => {
+  const f = await scenarioCDPFixture(), { browser, trace, calls, events } = f;
+  const prompts = scenarioPrompts('00000000-0000-4000-8000-000000000000'); let consumed = 0;
   for (let index = 0; index < 3; index++) {
-    assert.deepEqual(await browser.send(index, `SYNTHETIC_${index}`, async () => { consumed++; }), { ...request(index), index });
+    assert.deepEqual(await browser.send(index, prompts[index], async () => { consumed++; }), { ...request(index), index });
     await browser.accepted(index);
   }
-  assert.equal(consumed, 3); assert.equal(sends, 3);
+  assert.equal(consumed, 3); assert.equal(f.sends, 3);
   await assert.rejects(browser.send(3, 'not allowed', async () => { consumed++; }));
   events({ sessionId: 'unrelated-tab', method: 'Network.requestWillBeSent', params: { request: { url: 'SECRET' } } });
   await browser.close();
@@ -252,6 +289,74 @@ test('CDP browser uses ordinary input once and keeps secrets out of network trac
   assert.equal(trace.find(value => value.event === 'ui-dispatch' && value.scenario === 2).input, 'CDP_SEND_CLICK');
   assert.equal(trace.find(value => value.event === 'ui-dispatch' && value.scenario === 2).priorResponseActive, true);
   assert.deepEqual(trace.filter(value => value.event === 'thinking-mode').map(value => value.changed), [true, false]);
+});
+
+test('steering can be composed before response headers arrive, but dispatch still requires the successful open response', async () => {
+  for (const existingResponseStatus of [200, 403, null]) {
+    const f = await scenarioCDPFixture({ deferExistingResponse: true, existingResponseStatus }); let consumed = 0;
+    try {
+      for (let index = 0; index < 2; index++) await f.browser.send(index, `SYNTHETIC_${index}`, async () => { consumed++; });
+      const result = f.browser.send(2, 'SYNTHETIC_STEERING', async () => { consumed++; });
+      if (existingResponseStatus === 200) {
+        await result;
+        for (let index = 0; index < 3; index++) await f.browser.accepted(index);
+        const compose = f.trace.findIndex(value => value.event === 'before-send' && value.scenario === 2);
+        const response = f.trace.findIndex(value => value.event === 'response' && value.sequence === 2);
+        const dispatch = f.trace.findIndex(value => value.event === 'ui-dispatch' && value.scenario === 2);
+        assert.ok(compose < response && response < dispatch);
+        assert.equal(f.trace[dispatch].priorResponseActive, true);
+        assert.equal(f.sends, 3); assert.equal(consumed, 3);
+      } else {
+        await assert.rejects(result, existingResponseStatus === 403 ? /AGENT_SCENARIO_PROVIDER_REJECTED/ : /AGENT_SCENARIO_STEERING_UNAVAILABLE/);
+        assert.equal(f.sends, 2); assert.equal(consumed, 2);
+      }
+    } finally { await f.browser.close(); }
+  }
+});
+
+test('omitted CDP bodies are fetched once for the observed request, including responses received during retrieval', async () => {
+  for (const bodyMode of ['omitted', 'base64', 'unavailable', 'wrong-text', 'oversize', 'bad-base64', 'invalid-utf8']) {
+    const f = await scenarioCDPFixture({ bodyMode }); let consumed = 0;
+    try {
+      for (let index = 0; index < 2; index++) {
+        await f.browser.send(index, `SYNTHETIC_${index}`, async () => { consumed++; });
+        await f.browser.accepted(index);
+      }
+      const result = f.browser.send(2, 'SYNTHETIC_STEERING_e\u0301 ☕', async () => { consumed++; });
+      if (['omitted', 'base64'].includes(bodyMode)) {
+        assert.deepEqual(await result, { ...request(2), index: 2 });
+        await f.browser.accepted(2);
+        const entry = f.trace.find(value => value.scenario === 2 && value.sequence === 3);
+        assert.equal(entry.exactSyntheticText, true); assert.equal(entry.bodySource, 'CDP');
+        assert.ok(entry.requestBytes > 0);
+      } else await assert.rejects(result, /AGENT_SCENARIO_REQUEST_INVALID/, bodyMode);
+      assert.equal(f.calls.filter(value => value === 'Network.getRequestPostData').length, 1, bodyMode);
+      assert.equal(f.sends, 3); assert.equal(consumed, 3);
+      assert.ok(f.trace.some(value => value.event === 'response' && value.sequence === 3));
+      assert.doesNotMatch(JSON.stringify(f.trace), /SYNTHETIC_|SECRET|req-|synthetic-message|synthetic-conversation/);
+    } finally { await f.browser.close(); }
+  }
+});
+
+test('steering stops if the prior response finishes or Send becomes disabled during the checkpoint', async () => {
+  for (const fault of ['already-finished', 'finished-during-checkpoint', 'disabled-during-checkpoint']) {
+    const f = await scenarioCDPFixture(); let consumed = 0;
+    try {
+      for (let index = 0; index < 2; index++) {
+        await f.browser.send(index, `SYNTHETIC_${index}`, async () => { consumed++; });
+        await f.browser.accepted(index);
+      }
+      if (fault === 'already-finished') f.finishTurn();
+      await assert.rejects(f.browser.send(2, 'SYNTHETIC_STEERING', async () => {
+        consumed++;
+        if (fault === 'finished-during-checkpoint') f.finishTurn();
+        if (fault === 'disabled-during-checkpoint') f.disableSend();
+      }), /AGENT_SCENARIO_STEERING_UNAVAILABLE/, fault);
+      assert.equal(f.sends, 2, fault);
+      assert.equal(consumed, fault === 'already-finished' ? 2 : 3, fault);
+      assert.equal(f.trace.some(value => value.event === 'ui-dispatch' && value.scenario === 2), false, fault);
+    } finally { await f.browser.close(); }
+  }
 });
 
 const normalPage = () => scenarioUI({ provider: true, route: 'new', composer: true, empty: true,

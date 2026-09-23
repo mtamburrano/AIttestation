@@ -8,8 +8,8 @@ export function scenarioPrompts(runId) {
   if (!/^[a-f0-9-]{36}$/.test(runId)) throw Error('AGENT_SCENARIO_INVALID');
   return [
     `ATTESTAMP_SYNTHETIC_${runId}_fresh-chat. Reply only with OK.`,
-    `ATTESTAMP_SYNTHETIC_${runId}_existing-send. Solve this puzzle carefully: find all five-digit integers ABCDE with distinct nonzero digits where ABCDE is divisible by 17, EDCBA by 19, and A+B+C+D+E=25. Give a complete hand-checkable derivation. Do not use tools or browse.`,
-    `ATTESTAMP_SYNTHETIC_${runId}_steering. Stop solving the puzzle and reply only with DONE.`,
+    `ATTESTAMP_SYNTHETIC_${runId}_existing-send. I need to perform a test. Can you think about 10 seconds before answering me? Use that thinking time to find all five-digit integers ABCDE with distinct nonzero digits where ABCDE is divisible by 17, EDCBA by 19, and A+B+C+D+E=25. Check the complete set silently. Do not use tools or browse. Reply only with the number of solutions.`,
+    `ATTESTAMP_SYNTHETIC_${runId}_steering. Can you see this steering? Reply only with DONE.`,
   ];
 }
 

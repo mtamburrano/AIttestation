@@ -117,7 +117,11 @@ export async function runAgentScenarios(paths, { sendBudget, doctor, start, stop
       selected.push(row.id);
       report.scenarios.push({ scenario: SCENARIOS[index], requestSequence: index + 1,
         exactText: true, signedRequestIdentity: true, localSave: 'SAVED', survivesRestart: false });
-      await browser.accepted(index);
+      // Verify the existing Send's receipt now, but let steering input start
+      // before waiting for its response. The browser still gates the click on
+      // a successful open response, and both responses are checked afterward.
+      if (index === 2) await browser.accepted(1);
+      if (index !== 1) await browser.accepted(index);
     }
     check(); report.phase = 'restart';
     await control('recording', ['off']);

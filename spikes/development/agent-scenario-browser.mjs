@@ -59,6 +59,33 @@ export async function scenarioBrowser(metadata, { trace, signal, connect = conne
     trace.push({ elapsedMs: Math.max(0, Math.floor(now() - startedAt)), ...value });
   };
   const readiness = scenarioReadiness({ add, now, mainFrameId: () => mainFrameId });
+  const observeRequest = async (value, entry, expected) => {
+    try {
+      let body = value.request.postData;
+      if (typeof body !== 'string') {
+        // CDP can omit postData even with Network.enable's size allowance.
+        // Read this observed request once; never reconstruct it from the DOM.
+        const result = await cdp.call('Network.getRequestPostData', { requestId: value.requestId }, sessionId);
+        body = result?.postData;
+        if (result?.base64Encoded === true) {
+          if (typeof body !== 'string' || body.length > 4 * Math.ceil(512 * 1024 / 3)) throw Error('AGENT_SCENARIO_REQUEST_INVALID');
+          const bytes = Buffer.from(body, 'base64');
+          if (bytes.toString('base64') !== body) throw Error('AGENT_SCENARIO_REQUEST_INVALID');
+          body = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+        }
+      }
+      entry.requestBytes = typeof body === 'string' ? Buffer.byteLength(body) : null;
+      const identity = inspectScenarioRequest(body, entry.endpoint, expected.text);
+      if (expected.index === 2 ? !entry.endpoint.endsWith('/steer_turn') : entry.endpoint.endsWith('/steer_turn')) {
+        throw Error('AGENT_SCENARIO_ENDPOINT_MISMATCH');
+      }
+      entry.exactSyntheticText = true;
+      entry.hasConversation = identity.conversationId !== null;
+      requests.push({ ...identity, index: expected.index });
+    } catch (error) {
+      problem ??= error.message === 'AGENT_SCENARIO_ENDPOINT_MISMATCH' ? error.message : 'AGENT_SCENARIO_REQUEST_INVALID';
+    } finally { add(entry); }
+  };
   const onEvent = event => {
     if (event.sessionId !== sessionId) return;
     try { readiness.event(event); } catch { problem = 'AGENT_SCENARIO_TRACE_LIMIT'; }
@@ -68,21 +95,13 @@ export async function scenarioBrowser(metadata, { trace, signal, connect = conne
       if (!endpoint) return;
       const entry = { sequence: requests.length + 1, scenario: current?.index ?? null, endpoint,
         method: 'POST', requestBytes: typeof value.request.postData === 'string' ? Buffer.byteLength(value.request.postData) : null,
+        bodySource: typeof value.request.postData === 'string' ? 'EVENT' : 'CDP',
         exactSyntheticText: false };
       if (requests.length >= 3 || !current || current.observed) { add(entry); problem = 'AGENT_SCENARIO_UNEXPECTED_SEND'; return; }
       current.observed = true;
-      try {
-        const identity = inspectScenarioRequest(value.request.postData, endpoint, current.text);
-        if (current.index === 2 ? !endpoint.endsWith('/steer_turn') : endpoint.endsWith('/steer_turn')) {
-          throw Error('AGENT_SCENARIO_ENDPOINT_MISMATCH');
-        }
-        entry.exactSyntheticText = true;
-        entry.hasConversation = identity.conversationId !== null;
-        requests.push({ ...identity, index: current.index });
-        byId.set(value.requestId, entry);
-      } catch (error) {
-        problem = error.message === 'AGENT_SCENARIO_ENDPOINT_MISMATCH' ? error.message : 'AGENT_SCENARIO_REQUEST_INVALID';
-      } finally { add(entry); }
+      // Responses can arrive while the request body is being retrieved.
+      byId.set(value.requestId, entry);
+      void observeRequest(value, entry, current);
     } else if (event.method === 'Network.responseReceived' && byId.has(value?.requestId)) {
       const status = value.response?.status;
       responses.set(byId.get(value.requestId).scenario, status);
@@ -176,7 +195,10 @@ export async function scenarioBrowser(metadata, { trace, signal, connect = conne
         if ([...responses.values()].some(status => !(status >= 200 && status < 300))) throw Error('AGENT_SCENARIO_PROVIDER_REJECTED');
         const before = await until(async () => {
           const state = await ui();
-          return state.composer && state.empty && (index === 2 ? activeTurn(1) : !state.active) ? state : false;
+          // Prepare steering while the preceding request is pending. Waiting
+          // for response headers before typing can consume the thinking window.
+          return state.composer && state.empty && (index === 2
+            ? state.active && !finished.has(1) : !state.active) ? state : false;
         }, index === 2 ? 'AGENT_SCENARIO_STEERING_UNAVAILABLE' : 'AGENT_SCENARIO_UI_CHANGED', index === 2 ? 15000 : 60000);
         if (before.route !== (index === 0 ? 'new' : 'conversation')) throw Error('AGENT_SCENARIO_ROUTE_MISMATCH');
         if (index === 1) await thinking();
@@ -184,13 +206,21 @@ export async function scenarioBrowser(metadata, { trace, signal, connect = conne
         await evaluate(`document.querySelector('#prompt-textarea').focus(); true`);
         await cdp.call('Input.insertText', { text }, sessionId);
         await until(async () => {
+          if ([...responses.values()].some(status => !(status >= 200 && status < 300))) throw Error('AGENT_SCENARIO_PROVIDER_REJECTED');
+          if (index === 2 && finished.has(1)) throw Error('AGENT_SCENARIO_STEERING_UNAVAILABLE');
           const state = await ui();
-          return !state.empty && state.send;
-        }, index === 2 ? 'AGENT_SCENARIO_STEERING_UNAVAILABLE' : 'AGENT_SCENARIO_UI_CHANGED', 5000);
+          return !state.empty && state.send && (index !== 2 || activeTurn(1));
+        }, index === 2 ? 'AGENT_SCENARIO_STEERING_UNAVAILABLE' : 'AGENT_SCENARIO_UI_CHANGED', index === 2 ? 15000 : 5000);
         if (index === 2 && !activeTurn(1)) throw Error('AGENT_SCENARIO_STEERING_UNAVAILABLE');
         // Input can trigger admission preflight. Settle again before the first
         // dispatch, without manufacturing requests or interacting with challenges.
         if (index === 0) await settle();
+        current = { index, text, observed: false };
+        // Consume before dispatch. A timeout or lost reply is an ambiguous
+        // attempt and must never cause an automatic second Enter.
+        await consume(); check();
+        // Persisting the checkpoint can outlast the thinking window. Recheck
+        // both the control and the open response before attempting steering.
         const point = index === 2 ? await evaluate(`(() => {
           const visible = element => !!element && element.getClientRects().length > 0;
           ${sendControl}
@@ -201,10 +231,6 @@ export async function scenarioBrowser(metadata, { trace, signal, connect = conne
         if (index === 2 && (!pointReady(point) || !activeTurn(1))) {
           throw Error('AGENT_SCENARIO_STEERING_UNAVAILABLE');
         }
-        current = { index, text, observed: false };
-        // Consume before dispatch. A timeout or lost reply is an ambiguous
-        // attempt and must never cause an automatic second Enter.
-        await consume(); check();
         add({ event: 'ui-dispatch', scenario: index, input: index === 2 ? 'CDP_SEND_CLICK' : 'CDP_ENTER',
           ...(index === 2 ? { priorResponseActive: activeTurn(1) } : {}), readiness: readiness.snapshot() });
         if (index === 2) {
