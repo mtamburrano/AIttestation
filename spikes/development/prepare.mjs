@@ -1,4 +1,4 @@
-import { copyFile, cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
@@ -99,6 +99,14 @@ export async function prepareDevelopment(configPath, output, { agentOptIn } = {}
   return withSigningAccess(inputs.config, inspect => prepareAuthorizedDevelopment(inputs, output, inspect, agentPaths));
 }
 
+export async function stageAgentExtension(source, destination) {
+  await newDirectory(destination);
+  // Keep the exclusive, owner-only root; cp rejects it with errorOnExist.
+  for (const name of await readdir(source)) {
+    await cp(join(source, name), join(destination, name), { recursive: true, errorOnExist: true, force: false });
+  }
+}
+
 async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group }, output, inspect, agentPaths) {
   const certificate = config.sponsor ? await readReleaseFile(config.sponsor.certificateFile, { limit: 8192 }) : null;
   if (certificate) {
@@ -174,8 +182,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     await cp(join(root, 'spikes/browser/chatgpt/extension'), join(output, 'extension'), { recursive: true });
     if (agentPaths) {
       const stage = join(agentPaths.extension, output.split('/').at(-1));
-      await newDirectory(stage);
-      await cp(join(output, 'extension'), stage, { recursive: true, errorOnExist: true, force: false });
+      await stageAgentExtension(join(output, 'extension'), stage);
       await copyFile(join(root, 'spikes/development/AGENT-TESTING.md'), join(output, 'Agent Setup.md'));
     }
     await copyFile(join(root, 'spikes/development/README.md'), join(output, 'Start Here.md'));

@@ -14,8 +14,8 @@ import { agentCommand, agentOwnerAction, boundedAgentPreflight, inspectAgentBuil
 import { probeAgentLogin } from '../spikes/development/agent-browser.mjs';
 import { agentPermissions } from '../spikes/development/agent-permissions.mjs';
 import { closeAgentBrowser } from '../spikes/development/agent-process.mjs';
-import { writeNewJSON } from '../spikes/development/environment.mjs';
-import { validateDevelopmentConfig } from '../spikes/development/prepare.mjs';
+import { ownerDirectory, writeNewJSON } from '../spikes/development/environment.mjs';
+import { stageAgentExtension, validateDevelopmentConfig } from '../spikes/development/prepare.mjs';
 import { registerNativeHost, stopDevelopment } from '../spikes/development/cli.mjs';
 import { DurableVault, MemoryKeyStore } from '../spikes/vault/key-lifecycle.mjs';
 import { startPackagedChatGPT } from '../spikes/browser/chatgpt/runtime-main.mjs';
@@ -86,6 +86,25 @@ test('redirected root, state, extension and hard links fail before retained data
   await rm(join(f.paths.control, 'linked-state'));
   await rm(f.paths.extension, { recursive: true }); await symlink(f.retained, f.paths.extension);
   await assert.rejects(validateAgent(f.agent, AGENT_OPT_IN, f.info));
+  assert.deepEqual(await fileInventory(f.retained), f.baseline);
+});
+
+test('agent extension staging copies nested assets into a fresh private root and refuses reuse', async t => {
+  const f = await fixture(t), source = join(f.home, 'extension-source');
+  await mkdir(join(source, 'assets'), { recursive: true, mode: 0o755 });
+  await writeFile(join(source, 'manifest.json'), '{"manifest_version":3}');
+  await writeFile(join(source, 'assets/fixture.js'), 'synthetic extension');
+  const stage = join(f.paths.extension, 'build01');
+  await stageAgentExtension(source, stage);
+  await ownerDirectory(stage);
+  const staged = await fileInventory(stage);
+  assert.deepEqual(staged, await fileInventory(source));
+  await writeFile(join(source, 'assets/fixture.js'), 'changed source');
+  await assert.rejects(stageAgentExtension(source, stage), { code: 'EEXIST' });
+  assert.deepEqual(await fileInventory(stage), staged);
+  const alias = join(f.paths.extension, 'retained-alias');
+  await symlink(f.retained, alias);
+  await assert.rejects(stageAgentExtension(source, alias), { code: 'EEXIST' });
   assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
 
