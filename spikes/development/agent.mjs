@@ -24,6 +24,7 @@ import { CONTROL_ACTIONS, agentControl, agentCondition } from './agent-control.m
 import { agentDoctor } from './agent-doctor.mjs';
 import { withAgentAwake } from './agent-awake.mjs';
 import { validateAgentCDP } from './agent-cdp.mjs';
+import { runAgentScenarios } from './agent-scenarios.mjs';
 
 const run = (command, args) => execFileSync(command, args, { env: { PATH: '/usr/bin:/bin' },
   encoding: 'utf8', stdio: 'pipe', timeout: 15000, killSignal: 'SIGKILL', maxBuffer: 65536 });
@@ -45,6 +46,7 @@ const reasons = new Set(['AGENT_OPT_IN_REQUIRED', 'AGENT_CONFIG_INVALID', 'AGENT
   'AGENT_API_UNAVAILABLE', 'AGENT_RUNTIME_CHANGED', 'AGENT_WAIT_TIMED_OUT', 'AGENT_ASSERTION_FAILED',
   'AGENT_RUN_TIMED_OUT', 'AGENT_RUN_INTERRUPTED', 'AGENT_SLEEP_HOLD_UNAVAILABLE',
   'AGENT_BROWSER_READINESS_REQUIRED', 'AGENT_RUNTIME_READINESS_REQUIRED',
+  'AGENT_SCENARIO_INVALID',
   'AGENT_PREPARATION_FAILED']);
 export const agentOwnerAction = reason => ({ profile: AGENT_PROFILE, status: 'OWNER_ACTION_REQUIRED',
   reason: reasons.has(reason) ? reason : 'AGENT_STATE_NOT_PREPARED' });
@@ -278,13 +280,14 @@ async function startAgentLocked(namespace, config, paths, name, live) {
 export async function agentCommand(args, {
   info, preflight = boundedAgentPreflight, prepare = prepareDevelopment, bootstrap = bootstrapAgent, start = startAgent,
   control = agentControl, stage = updateAgentStage, doctor = agentDoctor, awake = withAgentAwake,
+  scenarios = runAgentScenarios,
 } = {}) {
   const [action, selection, ...rest] = args;
   const optIn = rest.includes(AGENT_OPT_IN) ? AGENT_OPT_IN : null;
   if (!optIn) return agentOwnerAction('AGENT_OPT_IN_REQUIRED');
   const live = rest.includes('--live-provider-send');
   const positional = rest.filter(value => !value.startsWith('--'));
-  const arity = { init: 0, stop: 0, prepare: 1, bootstrap: 1, preflight: 1, start: 1, stage: 1, doctor: 1, cdp: 0, run: 3 };
+  const arity = { init: 0, stop: 0, prepare: 1, bootstrap: 1, preflight: 1, start: 1, stage: 1, doctor: 1, cdp: 0, run: 3, scenarios: 2 };
   const controlAction = CONTROL_ACTIONS.includes(action);
   if (rest.filter(value => value === AGENT_OPT_IN).length !== 1
       || rest.filter(value => value === '--live-provider-send').length > 1
@@ -292,7 +295,8 @@ export async function agentCommand(args, {
       && ![AGENT_OPT_IN, '--live-provider-send', '--owner-bootstrap'].includes(value))
       || !controlAction && (!Object.hasOwn(arity, action) || positional.length !== arity[action])
       || rest.includes('--owner-bootstrap') !== (action === 'bootstrap')
-      || live && !['bootstrap', 'preflight', 'start', 'doctor', 'run'].includes(action)) return agentOwnerAction('AGENT_COMMAND_INVALID');
+      || live && !['bootstrap', 'preflight', 'start', 'doctor', 'run', 'scenarios'].includes(action)
+      || action === 'scenarios' && (!live || positional[1] !== '3')) return agentOwnerAction('AGENT_COMMAND_INVALID');
   try {
     if (action === 'init') return await initializeAgentConfig(selection, optIn, info);
     if (action === 'preflight') return await preflight(selection, positional[0], optIn, live);
@@ -323,6 +327,23 @@ export async function agentCommand(args, {
     }
     if (action === 'doctor') return await doctor(paths, live, {
       preflight: () => preflight(selection, name, optIn, live), start: () => start(selection, config, paths, name, live), stop, control });
+    if (action === 'scenarios') {
+      let running;
+      try {
+        return await awake(900, async signal => {
+          const launch = async () => { signal.throwIfAborted(); return start(selection, config, paths, name, true); };
+          running = scenarios(paths, { sendBudget: 3, signal, control, start: launch, stop,
+            doctor: () => doctor(paths, true, { preflight: () => preflight(selection, name, optIn, true),
+              start: launch, stop, control }) });
+          return await running;
+        });
+      } catch (error) {
+        // Let cooperative cancellation finish its bounded diagnostic export and
+        // owned-runtime shutdown before emitting the one final JSON result.
+        if (running) return await running;
+        throw error;
+      }
+    }
     if (action === 'run') {
       agentCondition(positional[1]);
       if (!/^[1-9][0-9]{0,5}$/.test(positional[2]) || Number(positional[2]) > 120000) throw Error('AGENT_COMMAND_INVALID');

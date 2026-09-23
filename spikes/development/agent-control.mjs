@@ -7,7 +7,7 @@ import { exists, ownerDirectory, privateJSON, writeNewJSON } from './environment
 import { validateRuntimeState } from './runtime-state.mjs';
 import { agentRequest } from './agent-http.mjs';
 
-export const CONTROL_ACTIONS = ['state', 'dashboard', 'history', 'recording', 'debug', 'wait', 'assert', 'failure-bundle'];
+export const CONTROL_ACTIONS = ['state', 'dashboard', 'history', 'receipt', 'recording', 'debug', 'wait', 'assert', 'failure-bundle'];
 const number = value => /^(0|[1-9][0-9]{0,7})$/.test(value) ? Number(value) : NaN;
 const invalid = () => { throw Error('AGENT_COMMAND_INVALID'); };
 
@@ -25,7 +25,7 @@ export function agentCondition(condition) {
 }
 
 export async function saveAgentArtifact(paths, kind, value) {
-  if (!['debug', 'failure'].includes(kind)) return invalid();
+  if (!['debug', 'failure', 'scenario'].includes(kind)) return invalid();
   const directory = join(paths.control, 'artifacts');
   await ownerDirectory(paths.control);
   if (!await exists(directory)) await mkdir(directory, { mode: 0o700 });
@@ -64,6 +64,9 @@ export async function agentControl(paths, action, args = [], { request = agentRe
     if (!Number.isSafeInteger(offset)) return invalid();
     const state = await call('/dashboard/state', { offset });
     return action === 'history' ? state.history : state;
+  }
+  if (action === 'receipt' && args.length === 1 && /^[A-Za-z0-9_-]{1,128}$/.test(args[0])) {
+    return call('/receipts/preview', { ids: args, includeEvidence: true });
   }
   if (action === 'recording' && args.length === 1 && ['on', 'off'].includes(args[0])) {
     const state = await call('/engine/state');

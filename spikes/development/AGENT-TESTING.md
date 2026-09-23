@@ -323,12 +323,39 @@ session. Normal shutdown waits for only the Chrome process created by that
 session to close, with a bounded termination fallback; a crash or stale locator
 fails the next preflight before work starts.
 
-`--live-provider-send` permits provider access for a separately authorized test;
-no command in this harness synthesizes a Send. Sponsorship stays disabled in
+`--live-provider-send` permits provider access for a separately authorized test.
+The explicit `scenarios NAMESPACE BUILD 3 --agent-mode --live-provider-send`
+command drives three synthetic normal UI Sends, after its own live doctor check.
+Other commands do not drive Send. Sponsorship stays disabled in
 both modes, including pending confirmation network fallbacks. There is no
 sponsor/MainNet/publication/deployment option. Each would require separately
 authorized tooling and its own isolated resources; the retained ledger is never
 read, reset, refilled or reused.
+
+The scenario command creates its own fresh conversation, then tests an existing
+conversation Send and steering during the response. The numeric argument is an
+explicit three-attempt ceiling, including ambiguous dispatches; it accepts no
+other budget, arbitrary prompt, existing conversation or retry option. Its
+fifteen-minute deadline includes doctor and runtime startup. Cancellation waits
+for bounded diagnostic export and shutdown. Success requires exact synthetic
+bytes and request identity in verified signed History, checked again after a
+runtime restart. CDP request/response metadata is supporting browser evidence;
+HTTP success does not establish independent provider receipt.
+
+Each attempted Send first writes an owner-only checkpoint under
+`control/artifacts`. The final JSON report contains fixed endpoint paths, request
+ordinals, byte counts, HTTP status, UI readiness booleans and match results. It
+contains no prompt/response bodies, headers, cookies, raw digests or conversation
+URLs/identifiers. Failure exports the persistent content-free debug session and
+bounded engine state before stopping the owned runtime/Chrome. Existing History
+and debug journals are retained. A crash preserves the last attempt checkpoint;
+no command resumes or replays it. The runner reads only receipt metadata for its
+baseline and discloses only new receipts from its own run for comparison.
+
+Provider rejection, a changed page, loss of login or absent steering support
+fails the run without retry. Login readiness cannot guarantee that the provider
+will accept a later Send. There is no challenge bypass or automatic login repair.
+This remains an optional development check and does not replace owner acceptance.
 
 Preflight emits one bounded JSON report and exits with code 2 on
 `OWNER_ACTION_REQUIRED`. It reports the first failing prerequisite, without
