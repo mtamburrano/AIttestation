@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, rmdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -18,6 +18,12 @@ import { checkPlatform, runningChromeProcesses } from './chrome.mjs';
 import { agentExtensionReady, probeAgentLogin } from './agent-browser.mjs';
 import { agentPermissions } from './agent-permissions.mjs';
 import { registerNativeHost } from './integration.mjs';
+import { atomicWrite } from '../distribution/files.mjs';
+import { agentStagePath, updateAgentStage } from './agent-stage.mjs';
+import { CONTROL_ACTIONS, agentControl, agentCondition } from './agent-control.mjs';
+import { agentDoctor } from './agent-doctor.mjs';
+import { withAgentAwake } from './agent-awake.mjs';
+import { validateAgentCDP } from './agent-cdp.mjs';
 
 const run = (command, args) => execFileSync(command, args, { env: { PATH: '/usr/bin:/bin' },
   encoding: 'utf8', stdio: 'pipe', timeout: 15000, killSignal: 'SIGKILL', maxBuffer: 65536 });
@@ -34,6 +40,11 @@ const reasons = new Set(['AGENT_OPT_IN_REQUIRED', 'AGENT_CONFIG_INVALID', 'AGENT
   'ACCESSIBILITY_PERMISSION_REQUIRED', 'SCREEN_RECORDING_PERMISSION_REQUIRED', 'AUTOMATION_PERMISSION_CHECK_UNAVAILABLE',
   'VAULT_KEYCHAIN_BOOTSTRAP_REQUIRED', 'VAULT_KEYCHAIN_UNAVAILABLE', 'CHROME_SETUP_REQUIRED', 'CLOSE_OTHER_CHROME_COPY',
   'EXTENSION_SETUP_REQUIRED', 'BROWSER_BOOTSTRAP_REQUIRED', 'PROVIDER_LOGIN_REQUIRED', 'AGENT_START_NOT_CONFIRMED',
+  'AGENT_CDP_INVALID', 'AGENT_CDP_STALE', 'AGENT_CDP_UNAVAILABLE', 'AGENT_CDP_TIMED_OUT', 'AGENT_CDP_CHANGED',
+  'AGENT_CDP_REJECTED', 'AGENT_API_TIMED_OUT', 'AGENT_API_LIMIT', 'AGENT_API_INVALID', 'AGENT_API_REJECTED',
+  'AGENT_API_UNAVAILABLE', 'AGENT_RUNTIME_CHANGED', 'AGENT_WAIT_TIMED_OUT', 'AGENT_ASSERTION_FAILED',
+  'AGENT_RUN_TIMED_OUT', 'AGENT_RUN_INTERRUPTED', 'AGENT_SLEEP_HOLD_UNAVAILABLE',
+  'AGENT_BROWSER_READINESS_REQUIRED', 'AGENT_RUNTIME_READINESS_REQUIRED',
   'AGENT_PREPARATION_FAILED']);
 export const agentOwnerAction = reason => ({ profile: AGENT_PROFILE, status: 'OWNER_ACTION_REQUIRED',
   reason: reasons.has(reason) ? reason : 'AGENT_STATE_NOT_PREPARED' });
@@ -159,6 +170,7 @@ export async function preflightAgent(namespace, name, optIn, live = false, depen
     const { config, paths, configPath } = await resolveAgentConfig(namespace, optIn, deps.info);
     if (await exists(join(paths.control, 'runtime.json')) || await exists(join(paths.control, 'launch.json'))
         || await exists(join(paths.control, 'registration.json'))) return agentOwnerAction('STOP_PREVIOUS_AGENT_SESSION');
+    if (await exists(join(paths.control, 'cdp.json'))) return agentOwnerAction('AGENT_CDP_STALE');
     await validateAgentState(paths);
     if (await deps.consoleUID() !== config.agent.account.uid) return agentOwnerAction('GUI_SESSION_REQUIRED');
     if (!await deps.ipc(paths)) return agentOwnerAction('LOCAL_IPC_PERMISSION_REQUIRED');
@@ -182,7 +194,7 @@ export async function preflightAgent(namespace, name, optIn, live = false, depen
       try { chrome = await deps.chrome(paths.chromeApplication, paths); }
       catch { return agentOwnerAction('CHROME_SETUP_REQUIRED'); }
       if (deps.processes().length) return agentOwnerAction('CLOSE_OTHER_CHROME_COPY');
-      const stage = join(paths.extension, name);
+      const stage = agentStagePath(paths);
       try {
         await ownerDirectory(stage);
         if (canonical(await fileInventory(stage)) !== canonical(build.extensionInventory)
@@ -190,8 +202,8 @@ export async function preflightAgent(namespace, name, optIn, live = false, depen
       } catch { return agentOwnerAction('EXTENSION_SETUP_REQUIRED'); }
       const chromeDigest = sha256(await readFile(chrome.infoPlist));
       try {
-        const receipt = await privateJSON(join(paths.control, `browser-${name}.json`));
-        if (canonical(receipt) !== canonical({ profile: AGENT_PROFILE, buildDigest: build.digest, chromeDigest, automation: 'CDP' })) {
+        const receipt = await privateJSON(join(paths.control, 'browser.json'));
+        if (canonical(receipt) !== canonical({ profile: AGENT_PROFILE, chromeDigest, automation: 'CDP' })) {
           return agentOwnerAction('BROWSER_BOOTSTRAP_REQUIRED');
         }
       } catch { return agentOwnerAction('BROWSER_BOOTSTRAP_REQUIRED'); }
@@ -211,16 +223,30 @@ async function bootstrapAgent(config, paths, name, live) {
   if (keychain.status !== 'READY' || !live) return keychain;
   const chrome = await checkPlatform(paths.chromeApplication, paths);
   if (runningChromeProcesses().length) return agentOwnerAction('CLOSE_OTHER_CHROME_COPY');
-  const stage = join(paths.extension, name);
+  const stage = agentStagePath(paths);
   if (canonical(await fileInventory(stage)) !== canonical(build.extensionInventory)
       || !await agentExtensionReady(paths, stage)) return agentOwnerAction('EXTENSION_SETUP_REQUIRED');
   if (!await probeAgentLogin(chrome, paths)) return agentOwnerAction('PROVIDER_LOGIN_REQUIRED');
-  await writeNewJSON(join(paths.control, `browser-${name}.json`), { profile: AGENT_PROFILE,
-    buildDigest: build.digest, chromeDigest: sha256(await readFile(chrome.infoPlist)), automation: 'CDP' });
+  const receipt = join(paths.control, 'browser.json');
+  if (await exists(receipt)) {
+    const previous = await privateJSON(receipt);
+    if (previous.profile !== AGENT_PROFILE || Object.keys(previous).sort().join(',') !== 'automation,chromeDigest,profile') {
+      return agentOwnerAction('BROWSER_BOOTSTRAP_REQUIRED');
+    }
+  }
+  await atomicWrite(receipt, JSON.stringify({ profile: AGENT_PROFILE,
+    chromeDigest: sha256(await readFile(chrome.infoPlist)), automation: 'CDP' }));
   return ready();
 }
 
 async function startAgent(namespace, config, paths, name, live) {
+  const lock = join(paths.control, 'stage.lock');
+  await mkdir(lock, { mode: 0o700 });
+  try { return await startAgentLocked(namespace, config, paths, name, live); }
+  finally { await rmdir(lock); }
+}
+
+async function startAgentLocked(namespace, config, paths, name, live) {
   const report = await boundedAgentPreflight(namespace, name, AGENT_OPT_IN, live);
   if (report.status !== 'READY') return report;
   const { app } = await inspectAgentBuild(config, paths, name);
@@ -249,22 +275,38 @@ async function startAgent(namespace, config, paths, name, live) {
 
 export async function agentCommand(args, {
   info, preflight = boundedAgentPreflight, prepare = prepareDevelopment, bootstrap = bootstrapAgent, start = startAgent,
+  control = agentControl, stage = updateAgentStage, doctor = agentDoctor, awake = withAgentAwake,
 } = {}) {
   const [action, selection, ...rest] = args;
   const optIn = rest.includes(AGENT_OPT_IN) ? AGENT_OPT_IN : null;
   if (!optIn) return agentOwnerAction('AGENT_OPT_IN_REQUIRED');
   const live = rest.includes('--live-provider-send');
   const positional = rest.filter(value => !value.startsWith('--'));
-  if (new Set(rest).size !== rest.length || rest.some(value => value.startsWith('--')
+  const arity = { init: 0, stop: 0, prepare: 1, bootstrap: 1, preflight: 1, start: 1, stage: 1, doctor: 1, cdp: 0, run: 3 };
+  const controlAction = CONTROL_ACTIONS.includes(action);
+  if (rest.filter(value => value === AGENT_OPT_IN).length !== 1
+      || rest.filter(value => value === '--live-provider-send').length > 1
+      || rest.some(value => value.startsWith('--')
       && ![AGENT_OPT_IN, '--live-provider-send', '--owner-bootstrap'].includes(value))
-      || !['init', 'prepare', 'bootstrap', 'preflight', 'start', 'stop'].includes(action)
-      || positional.length !== (['init', 'stop'].includes(action) ? 0 : 1)
+      || !controlAction && (!Object.hasOwn(arity, action) || positional.length !== arity[action])
       || rest.includes('--owner-bootstrap') !== (action === 'bootstrap')
-      || live && ['init', 'prepare', 'stop'].includes(action)) return agentOwnerAction('AGENT_COMMAND_INVALID');
+      || live && !['bootstrap', 'preflight', 'start', 'doctor', 'run'].includes(action)) return agentOwnerAction('AGENT_COMMAND_INVALID');
   try {
     if (action === 'init') return await initializeAgentConfig(selection, optIn, info);
     if (action === 'preflight') return await preflight(selection, positional[0], optIn, live);
     const { config, paths, configPath } = await resolveAgentConfig(selection, optIn, info), name = positional[0];
+    if (controlAction) {
+      try { return { profile: AGENT_PROFILE, status: 'OK', value: await control(paths, action, positional) }; }
+      catch (error) {
+        const reason = reasons.has(error.message) ? error.message : 'AGENT_API_UNAVAILABLE';
+        return { profile: AGENT_PROFILE, status: 'FAILED', reason, evidence: 'RETAINED', runtime: 'LEFT_INSPECTABLE' };
+      }
+    }
+    if (action === 'cdp') {
+      await control(paths, 'state');
+      validateAgentCDP(await privateJSON(join(paths.control, 'cdp.json')));
+      return { profile: AGENT_PROFILE, status: 'OK', metadata: join(paths.control, 'cdp.json') };
+    }
     if (action === 'prepare') {
       const result = await prepare(configPath, agentBuildPath(paths, name), { agentOptIn: optIn });
       return result.status === 'OWNER_ACTION_REQUIRED' ? agentOwnerAction(result.reason) : result;
@@ -272,7 +314,27 @@ export async function agentCommand(args, {
     if (action === 'bootstrap') return await bootstrap(config, paths, name, live);
     if (action === 'start') return await start(selection, config, paths, name, live);
     const { stopDevelopment } = await import('./cli.mjs');
-    return await stopDevelopment(paths, { agent: true });
+    const stop = () => stopDevelopment(paths, { agent: true });
+    if (action === 'stage') {
+      const build = await inspectAgentBuild(config, paths, name);
+      return await stage(paths, join(agentBuildPath(paths, name), 'extension'), build.extensionInventory);
+    }
+    if (action === 'doctor') return await doctor(paths, live, {
+      preflight: () => preflight(selection, name, optIn, live), start: () => start(selection, config, paths, name, live), stop, control });
+    if (action === 'run') {
+      agentCondition(positional[1]);
+      if (!/^[1-9][0-9]{0,5}$/.test(positional[2]) || Number(positional[2]) > 120000) throw Error('AGENT_COMMAND_INVALID');
+      return await awake(300, async signal => {
+        const started = await start(selection, config, paths, name, live);
+        signal.throwIfAborted();
+        if (started.status !== 'READY') return started;
+        const result = await control(paths, 'wait', positional.slice(1), { signal });
+        signal.throwIfAborted();
+        await stop();
+        return { profile: AGENT_PROFILE, status: 'OK', value: result, stopped: true };
+      });
+    }
+    return await stop();
   } catch (error) {
     if (/^PRIVATE_PREPARE_(?:SIGNING|CODESIGN|PARTITION)/.test(error.message)) return agentOwnerAction('SIGNING_AUTHORIZATION_REQUIRED');
     if (error.message.startsWith('PRIVATE_PREPARE_') && reasons.has(error.message.slice('PRIVATE_PREPARE_'.length))) {

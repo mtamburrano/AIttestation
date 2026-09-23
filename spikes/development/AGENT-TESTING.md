@@ -34,7 +34,7 @@ copy in this new input config; do not widen the original file's permissions.
 
 All mutable resources are under the **new** directory
 `~/.attestamp-agent-codex01`: `control`, `support` (vault and native bridge),
-`chrome` (user data and native registration), `extension/BUILD`, `browser` and
+`chrome` (user data and native registration), `extension/current`, `browser` and
 `builds/BUILD`. Initialization also writes
 `bootstrap/agent-config.json` and a byte-for-byte copy at
 `bootstrap/helper.provisionprofile`, both mode 0600 in an owner-only directory.
@@ -49,8 +49,10 @@ credentials. The native app lock and browser relay use the pinned agent support
 directory. Sources are specialized before signing, with exact input matches;
 there is no agent switch or namespace authority in distribution artifacts.
 
-Initialization refuses an existing root. Each build and extension stage must be
-new. Validation rejects aliases, path traversal, redirected state, hard-linked
+Initialization refuses an existing root. Each signed build must be new. The
+explicit `stage` command replaces `extension/current` only while the runtime
+and Chrome are stopped, retaining the previous stage for inspection. Validation
+rejects aliases, path traversal, redirected state, hard-linked
 files and unsafe permissions before starting storage or a browser. It never
 repairs or cleans an existing namespace automatically. Chrome's own singleton
 links are inspected as browser state and never followed by the harness.
@@ -73,6 +75,7 @@ An interrupted initialization requires a fresh namespace as well.
    ```sh
    npm run dev -- agent init /absolute/private/agent-config.json --agent-mode
    npm run dev -- agent prepare codex01 build01 --agent-mode
+   npm run dev -- agent stage codex01 build01 --agent-mode
    npm run dev -- agent bootstrap codex01 build01 --agent-mode --owner-bootstrap
    ```
 
@@ -93,7 +96,7 @@ An interrupted initialization requires a fresh namespace as well.
    [private Chrome setup guidance](README.md) to resolve Gatekeeper/first-open
    setup. Never ad hoc sign Chrome or reuse its normal profile. Open that exact
    executable with `--user-data-dir=/Users/YOUR_SIGNING_ACCOUNT/.attestamp-agent-codex01/chrome`.
-   Load the unpacked extension from `extension/build01`, enable it, and sign in
+   Load the unpacked extension from `extension/current`, enable it, and sign in
    to the dedicated synthetic-content provider account. Resolve Chrome's own
    initial Keychain/login prompts, then quit Chrome normally.
 4. Complete the live-browser bootstrap only after separate authorization for
@@ -103,10 +106,12 @@ An interrupted initialization requires a fresh namespace as well.
    npm run dev -- agent bootstrap codex01 build01 --agent-mode --owner-bootstrap --live-provider-send
    ```
 
-   This records readiness for the exact build and Chrome version after a
+   This records readiness for the Chrome version after a
    bounded, read-only provider-login probe. It performs no provider Send. A
-   replaced build/extension or browser requires its corresponding bootstrap
-   again. For `automation: "computer-use"`, grant the launching automation app
+   replaced browser requires bootstrap again. Every preflight checks the
+   selected signed build's exact inventory against the current extension stage;
+   a normal stopped-stage update needs no manual extension reload or new login.
+   For `automation: "computer-use"`, grant the launching automation app
    Accessibility and Screen Recording in macOS System Settings and restart it
    if macOS requires that. Run preflight from that same automation app/session;
    a check run from Terminal does not certify a different responsible app.
@@ -123,6 +128,93 @@ npm run dev -- agent preflight codex01 build01 --agent-mode
 npm run dev -- agent start codex01 build01 --agent-mode
 npm run dev -- agent stop codex01 --agent-mode
 ```
+
+For machine consumption, call `node spikes/development/agent-cli.mjs` directly
+(or `npm run --silent agent -- …` to suppress npm's command banner). It emits
+one JSON result on stdout. Exit codes are 0 for success, 1 for a failed control
+or assertion, and 2 for `OWNER_ACTION_REQUIRED`. Raw subprocess errors and
+dashboard bearer tokens are not included in failures.
+
+```sh
+node spikes/development/agent-cli.mjs doctor codex01 build01 --agent-mode
+node spikes/development/agent-cli.mjs start codex01 build01 --agent-mode
+node spikes/development/agent-cli.mjs state codex01 --agent-mode
+node spikes/development/agent-cli.mjs recording codex01 on --agent-mode
+node spikes/development/agent-cli.mjs dashboard codex01 --agent-mode
+node spikes/development/agent-cli.mjs history codex01 0 --agent-mode
+node spikes/development/agent-cli.mjs debug codex01 on --agent-mode
+node spikes/development/agent-cli.mjs debug codex01 off --agent-mode
+node spikes/development/agent-cli.mjs debug codex01 export --agent-mode
+node spikes/development/agent-cli.mjs assert codex01 recording=ON --agent-mode
+node spikes/development/agent-cli.mjs wait codex01 prompt-count=0 10000 --agent-mode
+node spikes/development/agent-cli.mjs failure-bundle codex01 --agent-mode
+node spikes/development/agent-cli.mjs stop codex01 --agent-mode
+```
+
+State, dashboard/history queries and recording controls reuse the existing
+authenticated APIs. Recording commands bind to the current engine epoch and
+revision. A conflict fails without replay. Waits use exact conditions:
+`engine-ready`, `paired`, `sources-ready`, `recording=ON`, `recording=OFF`,
+`prompt-count=N`, and `anchors-settled`. The maximum wait is 120000 ms; a
+runtime replacement invalidates the wait. `anchors-settled` only means no
+pending anchors, and can be true for empty history. It makes no proof claim.
+
+`debug status` returns the current debug session ID and revision. Starting
+fresh requires a paused session and `debug NAMESPACE new SESSION_ID REVISION
+acknowledge --agent-mode`, preserving the dashboard's explicit acknowledgement
+contract. Export never clears the journal. Debug exports and failure bundles
+are created exclusively under `control/artifacts` with mode 0600. Failure
+bundles contain bounded state counts, without source URLs, prompts, credentials,
+console output, or arbitrary error text. Failures leave evidence and diagnostic
+journals in place; inspect before explicitly stopping or replacing anything.
+
+`doctor NAMESPACE BUILD` runs preflight, starts and drains the runtime, starts
+a fresh epoch, checks it, then stops it. With the separate live flag it also
+checks loopback CDP and native pairing through a ChatGPT tab. It never sends a
+prompt. It returns one readiness report, including zero authorized provider
+sends and anchor transactions: this harness has no sponsor or live-send budget.
+A failure after launch leaves that runtime inspectable. `preflight` remains
+available for prerequisite checks without the runtime lifecycle exercise.
+
+For a bounded unattended check, use `run NAMESPACE BUILD CONDITION TIMEOUT_MS
+--agent-mode`. It starts, waits, then stops on success. The run holds idle system
+sleep using `/usr/bin/caffeinate -i -t 300 -w PID`, without changing persistent
+power settings. Failure or interruption releases the hold and retains runtime
+state for inspection. All operations remain bounded; the hold also expires if
+the caller crashes. A bare `start` intentionally leaves the runtime running
+and does not hold system sleep.
+
+## CDP inspection and extension updates
+
+Live agent Chrome uses the exact validated executable, the namespace's
+non-default profile, `--remote-debugging-address=127.0.0.1` and an ephemeral
+debugging port. `cdp NAMESPACE --agent-mode` returns only the path of the mode
+0600 connection record at `control/cdp.json`, inside the owner-only namespace.
+It never enables debugging on ordinary Chrome or production artifacts. Do not
+publish the connection record: CDP grants inspection of this private browser.
+The original dashboard and native peer/signature/source/epoch checks remain
+in force; CDP is not an evidence admission API.
+
+The development-only `connectAgentCDP` helper accepts that validated connection
+record and exposes bounded CDP calls and event subscriptions. Attach to a page
+with `Target.attachToTarget` (`flatten: true`), then use `DOM.getDocument`,
+`Runtime.enable`/`Runtime.consoleAPICalled`, and
+`Network.enable`/`Network.requestWillBeSent` to inspect DOM, console and actual
+requests without screenshots. Subscribe before the action being observed.
+Raw browser inspection stays in the private client; it is never added to the
+content-free failure bundle or Attestamp evidence. Close the helper connection
+after inspection. It does not close Chrome or send any provider prompt.
+
+After preparing another signed build, run guarded `stop`, then `stage NAMESPACE
+NEW_BUILD --agent-mode`, then `start NAMESPACE NEW_BUILD --agent-mode` with the
+same explicit live selection. Chrome restarts from the stable unpacked path;
+no manual `chrome://extensions` action is needed after the initial load. The
+stage and startup operations serialize through an exclusive control lock and
+refuse a running browser. Interrupted stages retain incoming/previous bytes
+for inspection, and never repair an unsafe stage automatically.
+
+Chrome requires a [non-default profile for remote debugging](https://developer.chrome.com/blog/remote-debugging-port).
+The helper uses the standard [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/).
 
 Each command resolves `~/.attestamp-agent-codex01/bootstrap/agent-config.json`
 from the current OS account and validates its namespace/account marker and

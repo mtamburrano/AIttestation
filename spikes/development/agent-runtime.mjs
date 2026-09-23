@@ -1,7 +1,6 @@
 import { unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
 import { MacOSKeychainStore } from '../vault/key-lifecycle.mjs';
 import { startPackagedChatGPT } from '../browser/chatgpt/runtime-main.mjs';
 import { AGENT_OPT_IN, validateAgent, validateAgentLaunch, validateAgentState } from './agent-environment.mjs';
@@ -12,9 +11,9 @@ import { OwnerDebugSession } from './debug-session.mjs';
 import { publishRuntimeState } from './runtime-state.mjs';
 import { restrictFixtureNetwork } from './fixture-network.mjs';
 import { startupFailure } from './startup.mjs';
-import { closeAgentBrowser } from './agent-process.mjs';
+import { launchAgentChrome } from './agent-cdp.mjs';
 
-let runtime, debugSession, statePath, browserChild;
+let runtime, debugSession, statePath, browser;
 try {
   const config = await privateJSON(fileURLToPath(new URL('private-development.json', import.meta.url)));
   if (Object.keys(config).sort().join(',') !== 'agent,assurance,browserPolicy,build,profile,sponsorOrigin,updaterEnabled'
@@ -41,22 +40,20 @@ try {
     openDashboard: live ? url => launchDevelopmentChrome(chrome, paths, url)
       : async () => { throw Error('AGENT_LIVE_OPT_IN_REQUIRED'); } });
   network.allowRuntime(runtime);
-  if (live) await launchDevelopmentChrome(chrome, paths, 'about:blank', {
-    spawnProcess: (...args) => { browserChild = spawn(...args); return browserChild; },
-  });
+  if (live) browser = await launchAgentChrome(chrome, paths);
   statePath = await publishRuntimeState(paths.control, runtime);
   process.once('beforeExit', async () => {
-    try { await closeAgentBrowser(browserChild); debugSession.close(); await unlink(statePath).catch(() => {}); }
+    try { await browser?.close(); debugSession.close(); await unlink(statePath).catch(() => {}); }
     catch { process.stderr.write('AGENT_BROWSER_CLOSE_TIMED_OUT\n'); process.exitCode = 1; }
   });
   const stop = async () => {
-    await runtime.close(); await closeAgentBrowser(browserChild); debugSession.close(); await unlink(statePath).catch(() => {}); process.exit(0);
+    await runtime.close(); await browser?.close(); debugSession.close(); await unlink(statePath).catch(() => {}); process.exit(0);
   };
   const signalStop = () => stop().catch(() => {
     process.stderr.write('AGENT_STOP_FAILED\n'); process.exit(1);
   });
   process.once('SIGINT', signalStop); process.once('SIGTERM', signalStop);
 } catch (error) {
-  await runtime?.close(); await closeAgentBrowser(browserChild).catch(() => {}); debugSession?.close();
+  await runtime?.close(); await browser?.close().catch(() => {}); debugSession?.close();
   process.stderr.write(`${startupFailure(error)}\n`); process.exitCode = 1;
 }

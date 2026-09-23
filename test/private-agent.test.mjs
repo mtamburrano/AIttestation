@@ -187,7 +187,7 @@ test('agent artifact validation pins the signed namespace and inventories before
 });
 
 test('preflight gates every predictable prerequisite and never probes the provider without a separate opt-in', async t => {
-  const f = await fixture(t), calls = [], stage = join(f.paths.extension, 'one'); await mkdir(stage, { mode: 0o700 });
+  const f = await fixture(t), calls = [], stage = join(f.paths.extension, 'current'); await mkdir(stage, { mode: 0o700 });
   const chromeInfo = join(f.home, 'Chrome-Info.plist'); await writeFile(chromeInfo, 'synthetic Chrome version');
   const build = { app: '/unused-synthetic-app', digest: 'test-build', extensionInventory: [] };
   const deps = { info: f.info, consoleUID: async () => f.info.uid,
@@ -208,7 +208,7 @@ test('preflight gates every predictable prerequisite and never probes the provid
   ]) assert.equal((await preflight(false, patch)).reason, reason);
   assert.equal((await preflight(true)).reason, 'BROWSER_BOOTSTRAP_REQUIRED');
   assert.deepEqual(calls, []);
-  await writeNewJSON(join(f.paths.control, 'browser-one.json'), { profile: AGENT_PROFILE, buildDigest: build.digest,
+  await writeNewJSON(join(f.paths.control, 'browser.json'), { profile: AGENT_PROFILE,
     chromeDigest: sha256(await readFile(chromeInfo)), automation: 'CDP' });
   for (const [patch, reason] of [
     [{ chrome: async () => { throw Error('untrusted'); } }, 'CHROME_SETUP_REQUIRED'],

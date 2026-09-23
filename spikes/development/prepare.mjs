@@ -143,7 +143,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     if (agentPaths) {
       await validateAgent(config.agent, AGENT_OPT_IN);
       await specializeAgentArtifact(root, contents, work, config.agent, agentPaths, run);
-      for (const name of ['agent-runtime.mjs', 'agent-environment.mjs', 'agent-relay.mjs', 'agent-policy.mjs', 'agent-process.mjs', 'fixture-network.mjs']) {
+      for (const name of ['agent-runtime.mjs', 'agent-environment.mjs', 'agent-relay.mjs', 'agent-policy.mjs', 'agent-process.mjs', 'agent-cdp.mjs', 'fixture-network.mjs']) {
         await copyFile(join(root, 'spikes/development', name), join(dev, name));
       }
     }
@@ -181,8 +181,6 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     }
     await cp(join(root, 'spikes/browser/chatgpt/extension'), join(output, 'extension'), { recursive: true });
     if (agentPaths) {
-      const stage = join(agentPaths.extension, output.split('/').at(-1));
-      await stageAgentExtension(join(output, 'extension'), stage);
       await copyFile(join(root, 'spikes/development/AGENT-TESTING.md'), join(output, 'Agent Setup.md'));
     }
     await copyFile(join(root, 'spikes/development/README.md'), join(output, 'Start Here.md'));
