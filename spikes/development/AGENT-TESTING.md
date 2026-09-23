@@ -363,9 +363,13 @@ response open, since typing can replace the Stop control. A Stop button alone is
 readiness, and an unavailable control fails without pressing Enter or retrying.
 The dedicated profile must expose its normal **Think** toggle. The runner
 selects it through the UI and verifies its pressed state before the first Send,
-then checks it again before the existing-conversation reasoning puzzle. This
-exercises steering during thinking; a long streamed answer alone did not expose
-a Send control in the observed profile. Missing or disabled thinking controls
+then checks it again before the existing-conversation reasoning puzzle. Selecting
+Think requests reasoning but does not establish steering availability: the
+provider may still expose only Stop after text is entered during an active
+response. The run then fails without spending its third Send attempt. Verify
+steering availability on the designated test account before another live run;
+do not infer it from login readiness or the selected Think toggle.
+Missing or disabled thinking controls
 fail before the first attempt. The runner never changes account access or buys
 a model tier. Composer diagnostics retain only bounded control categories and
 enabled/structural flags, without button labels or content.
