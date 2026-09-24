@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { emit } from '../../diagnostics/local.mjs';
+import { emit, emitCaptureFailure } from '../../diagnostics/local.mjs';
 import { Vault } from '../../vault/vault.mjs';
 import { canonical, parseCanonical, b64, unb64, keys } from '../../vault/format.mjs';
 import { verifyRecord } from '../../vault/records.mjs';
@@ -59,8 +59,13 @@ export class ChatGPTRecordingSession {
     return next;
   }
   #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value }), { type: 'observation' }); }
+  #captureRecord(bytes, options, failureCode, eventId) {
+    try { return this.vault.capture(bytes, options); }
+    catch (error) { emit(this.#diagnostics, failureCode, { operationId: eventId }); throw error; }
+  }
   #normalEvent(value) {
-    return this.vault.capture(wire(validateNormalObservation({ profile: NORMAL_OBSERVATION_PROFILE, ...value })), { type: 'observation' });
+    return this.#captureRecord(wire(validateNormalObservation({ profile: NORMAL_OBSERVATION_PROFILE, ...value })),
+      { type: 'observation' }, 'CAPTURE_DESCRIPTOR_WRITE_FAILED', value.eventId);
   }
   #observedVersion(record, value, text) {
     return { id: value.eventId, observation: true, legacy: value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE,
@@ -142,11 +147,19 @@ export class ChatGPTRecordingSession {
     try { return this.#observeNormal(input); }
     catch (error) {
       if (['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT', 'Legacy evidence is read-only'].includes(error.message)) throw error;
+      const refs = { operationId: input?.eventId };
+      emit(this.#diagnostics, 'CAPTURE_SESSION_FAILED', refs);
+      emitCaptureFailure(this.#diagnostics, error, refs);
       // A write may have committed before its caller observed an error. Rebuild
       // the exact-ID receipt index; absence still leaves the caller uncertain.
       const preserved = new Map(this.#versions);
       this.#versions.clear(); this.#providerMessages.clear(); this.#aliases.clear();
-      this.#restoreObservations(preserved);
+      try { this.#restoreObservations(preserved); }
+      catch (reconciliationError) {
+        emit(this.#diagnostics, 'CAPTURE_RECONCILIATION_FAILED', refs);
+        emitCaptureFailure(this.#diagnostics, reconciliationError, refs);
+        throw reconciliationError;
+      }
       throw error;
     }
   }
@@ -180,13 +193,14 @@ export class ChatGPTRecordingSession {
         throw Error('CAPTURE_REPLAY_CONFLICT');
       }
       emit(this.#diagnostics, 'REQUEST_DEDUPLICATED', { operationId: eventId });
-      this.#event({ kind: 'request-deduplicated', version: repeated.id, recordDigest: repeated.recordDigest, eventId, source,
-        request: input.request, inputMethod: input.inputMethod });
+      this.#captureRecord(wire({ profile: 'pap-chatgpt-observation/1', kind: 'request-deduplicated',
+        version: repeated.id, recordDigest: repeated.recordDigest, eventId, source,
+        request: input.request, inputMethod: input.inputMethod }), { type: 'observation' }, 'CAPTURE_ALIAS_WRITE_FAILED', eventId);
       this.#aliases.set(eventId, { version: repeated, source: structuredClone(source),
         request: structuredClone(input.request), inputMethod: input.inputMethod });
       return this.#public(repeated);
     }
-    const captured = this.vault.capture(Buffer.from(text, 'utf8'));
+    const captured = this.#captureRecord(Buffer.from(text, 'utf8'), undefined, 'CAPTURE_TEXT_WRITE_FAILED', eventId);
     const value = { profile: NORMAL_OBSERVATION_PROFILE, kind: 'normal-request-observed', eventId, source,
       inputMethod: input.inputMethod, request: input.request,
       textRecord: captured.manifest.eventId, textObject: captured.manifest.evidence[0].objectDigest,

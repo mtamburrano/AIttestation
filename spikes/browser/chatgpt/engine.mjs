@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { canonical, keys } from '../../vault/format.mjs';
-import { emit } from '../../diagnostics/local.mjs';
+import { emit, emitCaptureFailure } from '../../diagnostics/local.mjs';
 import { CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
 import { EngineStateStore, migrateRecordingState } from './engine-store.mjs';
 import { CHATGPT_CAPTURE_PROFILE, validateCapture, validateCaptureReceipt } from './capture.mjs';
@@ -58,10 +58,15 @@ export class ResidentEngine {
   #publish() {
     for (const listener of this.#listeners) { try { listener(this.state()); } catch {} }
   }
-  async #commit() {
+  async #commit(refs = {}) {
     this.#state.revision++;
     try { await this.#store.save(structuredClone(this.#state)); }
-    catch (error) { this.#failed = true; this.#captureTokens.clear(); emit(this.#diagnostics, 'VAULT_WRITE_FAILED'); throw error; }
+    catch (error) {
+      this.#failed = true; this.#captureTokens.clear();
+      emit(this.#diagnostics, 'VAULT_WRITE_FAILED', refs);
+      emitCaptureFailure(this.#diagnostics, error, refs);
+      throw error;
+    }
     finally { this.#publish(); }
   }
   #serial(operation) {
@@ -147,10 +152,11 @@ export class ResidentEngine {
       let version;
       try {
         version = this.#session.observeNormal(observation);
-        if (!prior && version.id === eventId) await this.#commit();
+        if (!prior && version.id === eventId) await this.#commit({ operationId: eventId });
       } catch (error) {
         if (observation.kind === 'request-observed' && !['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
           this.#failed = true; this.#captureTokens.clear(); this.#publish();
+          emit(this.#diagnostics, 'ENGINE_CAPTURE_DISABLED', { operationId: eventId });
         }
         if (!['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
           const receipt = this.#session.captureReceipt(eventId, source);
