@@ -81,11 +81,11 @@ restart. No provider action waits on storage, IPC, account or anchoring.
 
 The engine keeps at most 512 queued/active/scheduled anchor jobs and runs at most two at a
 time. A full anchor queue leaves new durable evidence saved with PENDING anchoring;
-it does not reject capture. An insertion-order cursor fills freed slots from
-durable history, considering each observation once per runtime. Metadata still
+it does not reject capture. A keyset cursor fills freed slots from
+the pending index, considering each pending observation once per runtime. Metadata still
 being saved is excluded. Temporary service/quota/credit or confirmation timeout failures schedule at most
 two retries, after five and thirty seconds. The saved anchor identity and cumulative
-attempt journal apply to every retry. Restart resumes pending history in a fresh
+durable attempt counter apply to every retry. Restart resumes pending history in a fresh
 bounded batch, including observations whose earlier batch exhausted its retries;
 invalid proof results, missing configuration and missing credentials do not
 automatically retry. No job can replay a provider request.
@@ -119,32 +119,24 @@ ON/OFF observation/3 and /4 retain their bounded pending anchor workflow.
 
 ## Persistence and migration
 
-The encrypted `pap-resident-state/2` snapshot contains only revision, recording
-and migration reason. `engine-pointer` publishes the vault record ID after a
-durable write, atomic rename and directory fsync. Interrupted migration can leave
-an unreferenced snapshot; retry deterministically migrates the original pointer.
+The encrypted `pap-resident-state/2` preference contains only revision, recording
+and migration reason. Schema 4 stores one replaceable authenticated setting in
+SQLite; controls and startup never append signed evidence snapshots. The legacy
+`engine-pointer` is read by indexed record ID when no new setting exists. Its
+historical signed record remains immutable, but future writes use the setting.
 No old journal, grant, attempt or provider action is executed.
 
-Startup loads and migrates the pointed state without appending a new snapshot;
-the new runtime epoch invalidates prior commands and source tokens. The current
-vault guardrail permits 512 signed records, including internal state and anchor
-records. Fewer than two free slots makes new prompt capture unavailable because
-both exact text and its signed observation must fit. A fixed
-`VAULT_CAPACITY_EXHAUSTED` code distinguishes this condition from parser limits,
-disk errors and uncertain saves. Capture checks the pair before writing text.
-The engine remains available for History, selective export, independent verifier
-access and encrypted recovery; automatic anchor work is suspended. A capture
-whose text and descriptor filled the last slots still has an exact saved receipt,
-even though there is no room for an additional engine snapshot.
+Startup reads a fixed-size authenticated vault header and the preference. It does
+not scan, decrypt or verify retained history. Exact text and signed observations
+append as independent encrypted rows, with each record and its lookup indexes
+published in one FULL-synchronous SQLite transaction. The former 512-record
+lifetime ceiling is removed. Object, export, query and memory limits remain;
+actual disk/write failures still preserve exact-event receipt reconciliation.
 
-At capacity, OFF atomically writes and fsyncs an owner-only
-`engine-recording-off` revocation latch outside the signed evidence inventory.
-The latch can only force OFF. Explicit ON must persist its signed state and pointer
-before removing and fsyncing the latch. An interruption before latch removal
-preserves OFF on restart. No retained evidence is deleted or rewritten to reclaim space.
-Restoring a full recovery snapshot preserves the capacity condition. An earlier
-checkpoint with space is writable after explicit ON, but does not represent newer
-history; the full retained vault and its recovery snapshot must remain preserved.
+An owner-only fsynced `engine-recording-off` latch can only force OFF. Explicit
+ON must persist its encrypted setting before clearing and fsyncing the latch.
+An interruption before latch removal preserves OFF. Recovery carries evidence,
+not current preferences, and therefore starts OFF.
 
 | Previous state | New preference |
 | --- | --- |
@@ -159,7 +151,7 @@ restored recovery installation requires explicit ON; ordinary restart can retain
 the already-consented new preference after fresh source/identity checks.
 Migration preserves signed historical objects without rewriting their bytes.
 
-Recent state lists the last 512 observation versions; the vault retains history.
+Recent state lists the last five observation versions; the vault retains history.
 Source policies, command acknowledgements and undelivered captures are not
 restored. New signed records use `pap-local-record/2` and normal observations use
 `pap-chatgpt-observation/6`. Stable provider message identities are indexed from
@@ -167,14 +159,24 @@ signed transport history so retries return the original receipt across restarts.
 Native framing, bundle identities, cryptographic domains and portable export
 formats retain their established identities.
 
-The vault caches only a validated, decrypted index for its current SQLite
-connection. Any external database commit, local index write, failed index commit,
-key rotation, close or custody reopen invalidates the appropriate snapshot.
-Writers use detached copies with the original optimistic conflict baseline;
-nonce reservation and FULL synchronous commits are unchanged. Receipt summaries
-cache verified observation groups by that opaque snapshot revision. Object reads
-still authenticate ciphertext; explicit export and full verification still read
-and verify the selected evidence or complete retained history.
+The vault caches only its fixed-size authenticated header. Session receipt/text
+caches retain at most 64 active observations. Dashboard History fetches five
+logical prompt receipts by keyset cursor, supports older/newer pages and searches
+whole words using vault-private HMAC postings. Search matches all supplied words,
+case-insensitively; it does not normalize the signed bytes. Counts are maintained
+transactionally. Selective disclosure loads only selected records and related
+proof material. Explicit full verification, index rebuild and streaming recovery
+walk the archive in bounded pages; ordinary startup and views never do.
+
+The pending-anchor index supplies at most 32 candidates per refill, with the
+existing 512-job/two-worker limits and committed capture boundary. Cumulative
+attempt counters replace their previous value in encrypted durable state, so
+outages no longer append an immutable audit record for every failed attempt.
+Signed submissions and successful proof observations remain evidence. Historical
+signed attempt/state records remain readable and unchanged.
+
+See [storage architecture and measurements](../../vault/SCALING.md) for the
+persisted-artifact audit, encryption generations, migration and recovery formats.
 
 The private development locator is `pap-private-runtime/2` with only
 `dashboardURL`. After acquiring the resident lock, startup can replace an old

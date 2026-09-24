@@ -290,9 +290,9 @@ export async function verifyDistribution(directory, policy, { now = Date.now() }
     await check('PRODUCTION_SIGNATURE', () => {
       if (policy.releaseChannel !== 'production') return;
       const release = verifyRelease(stable, { publicKey: policy.updatePublicKey, installedSequence: policy.sequence,
-        highestSeen: policy.sequence, allowCurrent: true, schema: { writerVersion: 3, minimumReader: 3 }, now });
+        highestSeen: policy.sequence, allowCurrent: true, schema: { writerVersion: 4, minimumReader: 4 }, now });
       require(release.sequence === policy.sequence && release.version === policy.version
-        && release.readerVersion === 3 && release.maximumSchema === 3
+        && release.readerVersion === 4 && release.maximumSchema === 4
         && release.provenanceDigest === sha256(bytes('build-provenance.json')) && release.dependencyDigest === provenance.dependencyDigest);
       const artifact = snapshot.files.get(contract.artifactName);
       same(release.artifact, { name: contract.artifactName, bytes: artifact.bytes, sha256: artifact.sha256 });

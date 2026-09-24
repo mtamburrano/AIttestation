@@ -1,6 +1,7 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes } from 'node:crypto';
-import { readSync, writeSync, read, write } from 'node:fs';
+import { readSync, writeSync, read, write, rmSync } from 'node:fs';
 import { b64, unb64, fail } from './format.mjs';
+import { inspectRecoveryFile, exportRecoveryFile } from './recovery-stream.mjs';
 import { Vault, inspectRecovery, readVaultHeader, vaultKeyId } from './vault.mjs';
 
 const DEFAULT_SERVICE = 'ai.provenance.evidence-vault';
@@ -224,6 +225,20 @@ export class DurableVault {
       throw error;
     }
   }
+  static restoreFile(path, recoveryKey, newDirectory, { keyStore = new MacOSKeychainStore(), fault = () => {} } = {}) {
+    const snapshot = inspectRecoveryFile(path, recoveryKey);
+    const result = DurableVault.create(newDirectory, { keyStore, fault });
+    try {
+      const restored = inspectRecoveryFile(path, recoveryKey, { onRecord: (record, bytes) => result.#vault.importRecord(record, bytes) });
+      if (restored.packageId !== snapshot.packageId || restored.count !== snapshot.count || restored.head !== snapshot.head) fail('INVALID', 'Recovery input changed');
+      return result;
+    } catch (error) {
+      const header = readVaultHeader(newDirectory); result.close();
+      try { keyStore.delete(signingAccount(header.vaultId)); } catch {}
+      try { keyStore.delete(vaultAccount(header.vaultId, header.keyId)); } catch {}
+      rmSync(newDirectory, { recursive: true, force: true }); throw error;
+    }
+  }
   get locked() { return this.#vault === null; }
   get vaultId() { return this.#vault?.vaultId ?? readVaultHeader(this.#directory).vaultId; }
   #require() { if (!this.#vault) fail('LOCKED', 'Vault is locked'); return this.#vault; }
@@ -248,12 +263,26 @@ export class DurableVault {
   close() { this.lock(); }
   capture(bytes, options) { return this.#require().capture(bytes, options); }
   inspect() { return this.#require().inspect(); }
+  get checkpoint() { return this.#require().checkpoint; }
+  recoveryFitsJSON() { return this.#require().recoveryFitsJSON(); }
+  get recordCount() { return this.#require().recordCount; }
+  hasObject(digest) { return this.#require().hasObject(digest); }
+  getRecord(id) { return this.#require().getRecord(id); }
+  lookupRecords(field, value, options) { return this.#require().lookupRecords(field, value, options); }
+  recordPage(options) { return this.#require().recordPage(options); }
+  records() { return this.#require().records(); }
+  rebuildIndexes() { return this.#require().rebuildIndexes(); }
+  historyCounts() { return this.#require().historyCounts(); }
+  readState(name) { return this.#require().readState(name); }
+  writeState(name, value) { return this.#require().writeState(name, value); }
+  metrics(options) { return this.#require().metrics(options); }
   get revision() { return this.#require().revision; }
   get remainingRecordCapacity() { return this.#require().remainingRecordCapacity; }
   requireRecordCapacity(count) { return this.#require().requireRecordCapacity(count); }
   read(digest) { return this.#require().read(digest); }
   verifyAll() { return this.#require().verifyAll(); }
   exportDisclosure(recordIds, options) { return this.#require().exportDisclosure(recordIds, options); }
+  exportRecoveryFile(path) { return exportRecoveryFile(this.#require(), path); }
   exportRecovery() { return this.#require().exportRecovery(); }
   retentionStatus() { return this.#require().retentionStatus(); }
   schemaInfo() { return this.#require().schemaInfo(); }

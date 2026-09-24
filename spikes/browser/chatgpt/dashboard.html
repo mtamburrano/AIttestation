@@ -11,7 +11,8 @@
 <section id="history"><h2>Prompt history</h2><div class="stats">
 <div><strong id="prompt-count">0</strong><span>Prompts</span></div><div><strong id="conversation-count">0</strong><span>Known conversations</span></div>
 <div><strong id="anchor-count">0</strong><span>Pending anchors</span></div><div><button id="filter-attention" aria-pressed="false"><strong id="attention-count">0</strong><span>Need attention</span></button></div></div>
-<p id="history-note"></p><p id="history-filter" role="status"></p><button id="all-prompts" hidden>Show all prompts</button><div id="prompts">Loading retained history…</div>
+<p id="history-note"></p><label for="history-search">Search prompt words</label> <input id="history-search" type="search" maxlength="256" placeholder="Words in saved prompts"> <button id="history-search-button">Search</button>
+<p id="history-filter" role="status"></p><button id="all-prompts" hidden>Show all prompts</button><div id="prompts">Loading retained history…</div>
 <div class="actions"><button id="history-newer" hidden>Newer prompts</button><button id="history-older" hidden>Older prompts</button></div>
 <details><summary>Other retained receipts</summary><p>Derivatives and unassociated legacy cancellations are available for export; they do not increase the prompt count.</p><div id="other-receipts"></div></details>
 <div class="actions"><button id="preview-export">Review selected evidence</button><button id="save-export" disabled>Save reviewed export</button><button id="verifier">Open free verifier</button></div>

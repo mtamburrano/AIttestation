@@ -147,7 +147,7 @@ test('verified downloads require both signatures, reject partial/tampered artifa
 test('migration process death preserves exact acknowledged proofs before and after commit for compatible readers', async t => {
   for (const phase of ['migration-after-ddl', 'migration-before-commit', 'migration-after-commit']) {
     const root = await temporary(t), path = join(root, 'vault'), vmk = randomBytes(32), signer = identity();
-    const vault = new Vault(path, vmk, signer, { create: true });
+    const vault = new Vault(path, vmk, signer, { create: true, readerVersion: 3 });
     const record = vault.capture(Buffer.from('synthetic migration baseline e\u0301\r\n☕'));
     const event = record.manifest.eventId, baseline = vault.exportDisclosure([event]); vault.close();
     const db = new DatabaseSync(join(path, 'vault.sqlite'));
@@ -156,17 +156,18 @@ test('migration process death preserves exact acknowledged proofs before and aft
     const child = spawnSync(process.execPath, [join(import.meta.dirname, 'vault-migration-child.mjs'), path, keyPath, phase],
       { env: {}, encoding: 'utf8', timeout: 10000 });
     assert.equal(child.signal, 'SIGKILL', child.stderr);
-    for (const readerVersion of [1, 3]) {
+    for (const readerVersion of (phase === 'migration-after-commit' ? [4] : [1, 3, 4])) {
       const reopened = new Vault(path, vmk, signer, { readerVersion });
       assert.equal(reopened.verifyAll().count, 1);
       assert.deepEqual(reopened.exportDisclosure([event]), baseline); reopened.close();
     }
+    assert.throws(() => new Vault(path, vmk, signer, { readerVersion: 3 }), { code: 'UNSUPPORTED' });
     assert.equal(verifyDisclosure(baseline).records[0].integrity, 'VALID');
   }
 });
 
 test('missing or incompatible migration metadata fails closed before newer or older app writes', async t => {
-  for (const sql of ['DROP TABLE vault_schema', 'UPDATE vault_schema SET minimum_reader=4', 'UPDATE vault_schema SET minimum_reader=0', 'PRAGMA user_version=99']) {
+  for (const sql of ['DROP TABLE vault_schema', 'UPDATE vault_schema SET minimum_reader=5', 'UPDATE vault_schema SET minimum_reader=0', 'PRAGMA user_version=99']) {
     const root = await temporary(t), path = join(root, 'vault'), key = randomBytes(32);
     new Vault(path, key, undefined, { create: true }).close();
     const db = new DatabaseSync(join(path, 'vault.sqlite')); db.exec(sql); db.close();

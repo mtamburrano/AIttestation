@@ -60,14 +60,17 @@ restore. Direct `Vault` construction remains the POC/testing API; production cal
 use `DurableVault`. JavaScript memory zeroization is best effort, not a secure-memory
 guarantee.
 
-Each object and immutable encrypted index receives a fresh single-use AES-256-GCM
-DEK. A VMK wraps DEKs using durably reserved 96-bit counter nonces, capped at 2^20
-invocations. Reservations commit before encryption; interrupted work burns nonces.
-Missing or inconsistent reservation state blocks encryption. Local database rollback
-by a malicious storage administrator is outside the trusted-local-storage assumption.
-The VMK is never used directly for object/index encryption. Ciphertext AAD binds
-purpose, crypto profile, vault, object/key role and recovery package/snapshot where
-applicable. Each recovery key wraps exactly one VMK for one package.
+Each evidence object, signed-record row, metadata row and preference receives a
+fresh single-use AES-256-GCM DEK. Schema 4 derives a vault-specific wrapping key
+from the VMK for each group of 65,536 nonce reservations, using domain-separated
+HMAC-SHA256. Reservations are fsynced in blocks of 64 before encryption; crashes
+burn unused reservations. Every wrapping key therefore stays below the original
+2^20-invocation bound without imposing an archive lifetime limit. Missing or
+inconsistent reservation state fails closed. Legacy direct VMK wraps remain
+readable. The VMK never directly encrypts new evidence or index plaintext.
+Ciphertext AAD still binds purpose, vault, role and object identity. Local rollback
+by a malicious storage administrator remains outside the trusted-local-storage
+assumption; snapshots never establish latest state.
 
 Capture acknowledges only after the object, metadata, opening and signed event are
 committed together. Deduplication authenticates existing content before reusing it.
@@ -77,26 +80,35 @@ evidence ciphertext or historical signatures. Retain both old and new credential
 until rotation completes, so a crash at its commit boundary is recoverable. Used
 VMKs cannot be reused in that vault. Old recovery packages retain their own old VMK.
 The MVP retention policy is explicitly append-only: there is no object/record delete
-or garbage-collection path, and the encrypted index rejects both missing referenced
-objects and unreferenced private objects. This prevents retention cleanup from
+or garbage-collection path, and full verification checks the complete signed sequence, object references and
+authenticated checkpoint. Reads authenticate their selected rows and exact bytes. This prevents retention cleanup from
 silently removing evidence, openings or proof dependencies.
 
-Schema 2 added a transactionally installed compatibility marker. Schema 3 adds the
-durable key-retirement journal. Both are additive and preserve the schema-1
-encrypted index/wire formats. Interrupted migration rolls back as a unit; schema-1
-readers remain permitted after upgrade. `adoptLegacy()` validates a
-live schema-1 vault and then installs its supplied VMK/signing identity into the
-separated Keychain roles. New readers continue to accept schema-1 disclosures and
-recovery packages.
+Schema 4 migrates schemas 1–3 transactionally into encrypted rows and private
+B-tree lookup indexes. Migration is the one-time archive scan; historical signed
+records, openings and evidence bytes remain identical. Old schema writers are
+rejected after publication (minimum reader 4), while legacy disclosure/recovery
+readers remain supported. A pre-commit interruption leaves the old layout usable;
+a post-commit interruption reopens the new layout. `adoptLegacy()` preserves the
+same separated Keychain custody.
 
-`exportRecovery()` returns an encrypted package and a separate recovery key; keep
-the key separately. Its authenticated encrypted inventory binds every object,
-record, opening, ciphertext digest, byte length, count and snapshot checkpoint.
-`restoreRecovery(package, recoveryKey, newDirectory, newVMK)` authenticates all
-material before creating the destination, then stores it under fresh local keys.
-`COMPLETE` means complete for that declared snapshot; `latestState` is always
-`NOT_PROVEN`. Missing keys are `UNRECOVERABLE`; missing content/openings are
-`INCOMPLETE`; cryptographic mismatches are `INVALID`.
+`exportRecovery()` keeps the bounded legacy JSON package for small snapshots.
+It uses a fresh package-only wrapping key and the established recovery profile.
+For large collections, `exportRecoveryFile(vault, path)` in `recovery-stream.mjs`
+writes `pap-recovery-stream/1`: length-prefixed authenticated frames, exact signed
+records, compressed payloads and an authenticated final count/chain checkpoint.
+Memory is bounded to one record/object plus the SQLite page cache. Package-derived
+keys encrypt at most 1,024 frames each. `inspectRecoveryFile` validates the entire
+chain and rejects truncation, substitution or extra frames; `restoreRecoveryFile`
+validates before creating its new destination and imports without resigning.
+`DurableVault.restoreFile()` also provisions fresh app-bound keys. All recovery
+forms exclude current recording consent, account credentials and cached indexes.
+
+Keep the returned recovery key separately. `COMPLETE` means complete for that
+declared snapshot; `latestState` remains `NOT_PROVEN`. Missing keys are
+`UNRECOVERABLE`; missing content/openings are `INCOMPLETE`; cryptographic mismatches
+are `INVALID`. The dashboard offers a short-lived, single-use streaming download
+for large snapshots, and the private recovery CLI accepts `.pap-recovery` files.
 
 `exportDisclosure(eventIds)` deliberately exports selected plaintext evidence and
 portable public verification material, with no encryption/recovery/private signing
@@ -113,23 +125,24 @@ shared material. Profile-1 bundles remain accepted. The integrated demonstrator
 uses the same representation for shared anchor archives while retaining legacy
 export support in its verifier.
 
-The JSON transport is a bounded canonical format, not an extracted archive. Binary
-ciphertexts/objects use canonical 128-KiB chunks, keeping each encoded field below
-256 KiB. Limits are 32 MiB per evidence object, 1 MiB per manifest, 512 objects and
-records, 256 MiB total decoded evidence, 384 MiB encoded transport and nesting depth
-32. Unknown fields/profiles, duplicate JSON names, noncanonical input and malformed
-UTF-8/base64url fail closed. Names are never interpreted as paths; no decompression,
-remote references or active content execution is supported.
+Portable JSON transport retains its existing bounds: 32 MiB per evidence object,
+1 MiB per manifest, 512 objects/records per core bundle, 256 MiB decoded evidence,
+384 MiB wire size, nesting depth 32 and 256 KiB individual metadata fields.
+These are operation/legacy-package limits, not a lifetime vault limit. Streaming
+recovery bounds individual frames to 64 MiB. Unknown profiles, duplicate names,
+noncanonical input and invalid encodings fail closed. Paths and remote content
+are never interpreted by the verifier.
 
-The record limit is a bounded-storage guardrail. A rejected append reports the
-fixed `VAULT_CAPACITY_EXHAUSTED` code before changing signed evidence. Existing
-history, selective disclosure, verification and encrypted recovery remain usable
-at 512 records. Restoring a full snapshot preserves all records and remains full;
-recovery never drops evidence to manufacture capacity. The resident app opens
-without appending a startup record and supports durable OFF while capture is
-unavailable; see [engine persistence](../browser/chatgpt/ENGINE.md).
+Local storage losslessly compresses evidence before encryption only when it saves
+at least 32 bytes. Decompression is bounded by the authenticated original length;
+original byte length and digest must match before evidence is returned. Portable
+exports always contain original bytes, preserving signature and verifier semantics.
 
-Run `node --test test/vault.test.mjs test/key-lifecycle.test.mjs`. Tests use only
+The [storage design, persisted-artifact audit and benchmarks](SCALING.md) cover
+50,000 prompts, bounded startup, five-receipt History, indexed word search,
+transactional rebuilds and the retained legacy compatibility surface.
+
+Run `node --test test/vault.test.mjs test/vault-indexed.test.mjs test/key-lifecycle.test.mjs`. Tests use only
 newly created temporary vaults, fresh in-memory or temporary-file test stores, separate synthetic
 credentials and child processes. Coverage includes real SIGKILL boundaries,
 injected SQLite-full errors, recovery inventory mutations, clean-device restore,
@@ -145,8 +158,8 @@ Cryptographic primitives use [Node.js crypto](https://nodejs.org/api/crypto.html
 ## ON/OFF record compatibility
 
 New local writes use `pap-local-record/2` with LOCAL_RECORD mode and
-local_evidence_store boundary. Commitment/signature domains, encrypted storage,
-key identities and recovery format stay fixed. Readers continue authenticating
+local_evidence_store boundary. Commitment/signature domains, key identities and selective disclosure formats stay fixed. Storage/recovery formats
+are explicitly versioned independently of historical evidence. Readers continue authenticating
 `pap-poc/1` and `pap-local-record/1` without rewriting old bytes or labels.
 Recovered evidence does not imply recording consent; a restored installation
 starts OFF. Legacy workflow journals remain inert encrypted history.

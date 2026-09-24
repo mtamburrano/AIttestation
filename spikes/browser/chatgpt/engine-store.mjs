@@ -32,25 +32,26 @@ export class EngineStateStore {
     return snapshot;
   }
   async #loadSnapshot() {
+    const current = this.vault.readState('recording-preference');
+    if (current) return current;
     let id;
     try { id = await readFile(join(this.directory, 'engine-pointer'), 'utf8'); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw Error('INVALID_ENGINE_POINTER');
-    const record = this.vault.inspect().records.find(value => value.manifest.eventId === id);
+    const record = this.vault.getRecord(id);
     if (!record) throw Error('ENGINE_HISTORY_MISSING');
     const decoded = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest), 16 * 1024 * 1024);
     return { profile: decoded.profile, state: decoded.state };
   }
   async save(state) {
-    const record = this.vault.capture(Buffer.from(canonical({ profile: 'pap-resident-state/2', state })));
-    await this.#write('engine-pointer', record.manifest.eventId);
+    this.vault.writeState('recording-preference', { profile: 'pap-resident-state/2', state });
     if (state.recording) {
       await unlink(join(this.directory, 'engine-recording-off')).catch(error => { if (error.code !== 'ENOENT') throw error; });
       await this.#syncDirectory();
     }
   }
   // This latch can only revoke consent. Clearing it requires a new durable ON
-  // record, so exhaustion and interrupted writes cannot silently resume capture.
+  // preference, so exhaustion and interrupted writes cannot silently resume capture.
   async revokeRecording() { await this.#write('engine-recording-off', 'OFF\n'); }
   async #syncDirectory() {
     const directory = await open(this.directory, 'r');

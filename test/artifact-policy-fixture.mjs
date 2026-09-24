@@ -149,7 +149,7 @@ export async function fixture(t, channel = 'release-candidate') {
       storeDistributed: false, nativeHostManifestInstalled: false });
   const release = { profile: 'pap-desktop-release/1', sequence: values.sequence, version: values.version, platform: 'darwin-arm64',
     publishedAt: new Date(now - 60_000).toISOString(), expiresAt: new Date(now + 86400_000).toISOString(),
-    readerVersion: 3, maximumSchema: 3, artifact, provenanceDigest: '', dependencyDigest: provenance.dependencyDigest };
+    readerVersion: 4, maximumSchema: 4, artifact, provenanceDigest: '', dependencyDigest: provenance.dependencyDigest };
   const signStable = () => json('stable.json', { release, signature: sign(null, Buffer.from(canonical(release)), key.privateKey).toString('base64url') });
   const seal = async () => {
     provenance.bundles = { application: await fileInventory(join(output, app)), verifier: await fileInventory(join(output, verifier)) };

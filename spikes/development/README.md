@@ -537,7 +537,9 @@ stays in place; restored history starts with recording OFF and is never connecte
 the bridge. These developer commands make no provider/sponsor calls. They accept
 only paths inside the test user's home, require new output directories outside
 repositories and the active control/vault/browser directories, and bound recovery
-input to 16 MiB. Receipt export alone is not a recovery backup.
+legacy JSON input to 16 MiB. Large backups use the printed `.pap-recovery` file,
+which validates and restores bounded authenticated frames without loading the
+archive into memory. Receipt export alone is not a recovery backup.
 
 If an interrupted maintenance command leaves `operation.json` in the test control
 directory, inspect and save that report before removing that one file and retrying.

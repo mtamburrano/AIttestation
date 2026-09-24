@@ -1,5 +1,6 @@
 import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 
+// These are limits for individual evidence objects and portable/legacy packages, not retained vault history.
 export const LIMITS = Object.freeze({ object: 32 * 2 ** 20, manifest: 2 ** 20, objects: 512,
   entries: 1024, total: 256 * 2 ** 20, depth: 32, field: 256 * 2 ** 10, wire: 384 * 2 ** 20 });
 export class VaultError extends Error {

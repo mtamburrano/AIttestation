@@ -1,6 +1,10 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { exportRecoveryFile } from '../../vault/recovery-stream.mjs';
 import { dashboardState } from './dashboard.mjs';
 
 const BODY_LIMIT = 384 * 1024;
@@ -37,7 +41,11 @@ async function requestBody(request, limit = BODY_LIMIT) {
 export async function startProductDashboard(runtime, { onClose = () => {}, onExit = null } = {}) {
   if (!runtime?.session || typeof runtime.browserState !== 'function') throw Error('Product runtime required');
   const secret = randomBytes(32).toString('base64url');
-  let origin, closed = false;
+  let origin, closed = false, recoveryDownload = null, recoveryTimer;
+  const clearRecovery = async () => {
+    clearTimeout(recoveryTimer); const pending = recoveryDownload; recoveryDownload = null;
+    if (pending) await rm(pending.directory, { recursive: true, force: true });
+  };
   const server = createServer(async (request, response) => {
     try {
       if (request.headers.host !== new URL(origin).host) throw Error('Local host mismatch');
@@ -48,6 +56,16 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
         '/dashboard.css': ['dashboard.css', 'text/css; charset=utf-8'],
       };
       const pathname = new URL(request.url, origin).pathname;
+      if (request.method === 'GET' && recoveryDownload && pathname === recoveryDownload.url) {
+        const download = recoveryDownload; recoveryDownload = null; clearTimeout(recoveryTimer);
+        response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store',
+          'Content-Disposition': 'attachment; filename="attestamp-encrypted-recovery.pap-recovery"',
+          'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin' });
+        const stream = createReadStream(download.path);
+        stream.on('error', () => response.destroy());
+        response.on('close', () => { stream.destroy(); void rm(download.directory, { recursive: true, force: true }); });
+        stream.pipe(response); return;
+      }
       if (request.method === 'GET' && Object.hasOwn(assets, pathname)) {
         const [name, type] = assets[pathname];
         return reply(response, 200, await readFile(new URL(name, import.meta.url), 'utf8'), type);
@@ -101,7 +119,7 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
       }
       switch (request.url) {
         case '/dashboard/state':
-          if (Object.keys(data).some(key => !['attentionOnly', 'offset'].includes(key))) throw Error('Invalid dashboard request');
+          if (Object.keys(data).some(key => !['attentionOnly', 'before', 'search'].includes(key))) throw Error('Invalid dashboard request');
           value = await dashboardState(runtime, data); break;
         case '/dashboard/command': value = await runtime.engine.command(data, { surface: 'desktop' }); break;
         case '/dashboard/verifier':
@@ -109,6 +127,19 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
           value = await runtime.openVerifier(); break;
         case '/dashboard/recovery': {
           if (Object.keys(data).join(',') !== 'confirmed' || data.confirmed !== true) throw Error('Recovery consent required');
+          if (!runtime.session.vault.recoveryFitsJSON()) {
+            await clearRecovery();
+            const directory = await mkdtemp(join(tmpdir(), 'attestamp-recovery-'));
+            try {
+              const path = join(directory, 'snapshot.pap-recovery'), recovery = exportRecoveryFile(runtime.session.vault, path);
+              const url = `/recovery-download/${randomBytes(32).toString('base64url')}`;
+              recoveryDownload = { directory, path, url };
+              recoveryTimer = setTimeout(() => { void clearRecovery(); }, 60000); recoveryTimer.unref();
+              try { value = { downloadURL: url, recoveryKey: recovery.recoveryKey.toString('base64') }; }
+              finally { recovery.recoveryKey.fill(0); }
+            } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
+            break;
+          }
           const recovery = runtime.session.vault.exportRecovery();
           try { value = { package: recovery.package.toString('utf8'), recoveryKey: recovery.recoveryKey.toString('base64') }; }
           finally { recovery.recoveryKey.fill(0); }
@@ -129,7 +160,7 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
         case '/managed/connect': value = await runtime.session.connectManaged(data); break;
         case '/managed/disconnect': value = await runtime.session.disconnectManaged(); break;
         case '/managed/anchor': value = await runtime.session.anchorManaged(data); break;
-        case '/receipts': value = runtime.session.receipts.list(); break;
+        case '/receipts': value = runtime.session.receipts.page(data); break;
         case '/receipts/preview': value = runtime.session.receipts.prepare(data); break;
         case '/receipts/export': value = { content: runtime.session.receipts.export(data.previewId).toString('utf8') }; break;
         case '/receipts/redact': value = runtime.session.receipts.redact(data); break;
@@ -147,7 +178,7 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
   });
   origin = await listen(server);
   const close = async () => {
-    if (closed) return; closed = true;
+    if (closed) return; closed = true; await clearRecovery();
     await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
     await onClose();
   };

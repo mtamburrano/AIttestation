@@ -245,7 +245,7 @@ async function prepareDistribution(output, config = null) {
     const bytes = await readFile(dmg), published = new Date();
     const release = validateRelease({ profile: RELEASE_PROFILE, sequence: config.sequence, version: config.version,
       platform: 'darwin-arm64', publishedAt: published.toISOString(), expiresAt: new Date(+published + 30 * 86400_000).toISOString(),
-      readerVersion: 3, maximumSchema: 3, artifact: { name, bytes: bytes.length, sha256: sha256(bytes) },
+      readerVersion: 4, maximumSchema: 4, artifact: { name, bytes: bytes.length, sha256: sha256(bytes) },
       provenanceDigest: sha256(provenanceBytes), dependencyDigest });
     await writeFile(join(output, 'stable.json'), canonical({ release,
       signature: sign(null, Buffer.from(canonical(release)), privateKey).toString('base64url') }));

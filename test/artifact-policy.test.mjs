@@ -68,7 +68,7 @@ test('production requires every production file and rejects candidate and develo
 
 test('production authenticates exact provenance, inventory and disk image with the external root and freshness policy', async t => {
   for (const mutate of [f => { f.release.provenanceDigest = '0'.repeat(64); }, f => { f.release.dependencyDigest = '0'.repeat(64); },
-    f => { f.release.sequence++; }, f => { f.release.maximumSchema = 4; },
+    f => { f.release.sequence++; }, f => { f.release.maximumSchema = 5; },
     f => { f.release.expiresAt = new Date(now - 1000).toISOString(); },
     f => { f.release.publishedAt = new Date(now + 3600_000).toISOString(); },
     f => { f.release.artifact.sha256 = '0'.repeat(64); }, f => { f.release.artifact.bytes++; }]) {

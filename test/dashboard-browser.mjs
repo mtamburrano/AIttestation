@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { recordingFixture, until } from './recording-fixture.mjs';
 import { InstallationLifecycle } from '../spikes/distribution/lifecycle.mjs';
 import { disclosureRegressions } from './dashboard-disclosure-browser.mjs';
+import { scaleObservation } from './vault-scale-fixture.mjs';
 import { OwnerDebugSession } from '../spikes/development/debug-session.mjs';
 
 // Real local UI, fresh browser profile/vault and synthetic provider and sponsor.
@@ -69,7 +70,7 @@ try {
       await delay(30);
     }
     throw Error(`Dashboard UI condition failed: ${expression}; ${JSON.stringify({ exceptions,
-      visible: await evaluate('document.body.innerText') })}`);
+      feedback: await evaluate(`(()=>{const node=document.querySelector('#feedback-debug-session-save');return {rect:node?.getBoundingClientRect().toJSON(),active:document.activeElement?.id,scrollY,innerHeight};})()`), visible: await evaluate('document.body.innerText') })}`);
   };
   await call('Page.enable'); await call('Runtime.enable'); await call('Network.enable');
   const requests = [];
@@ -100,17 +101,21 @@ try {
     assert.doesNotMatch(await evaluate('document.body.innerText'), /SYNTHETIC_ACCOUNT_SECRET/);
     assert.equal(await evaluate('document.activeElement.id'), 'feedback-refresh-account');
   }
-  const list = f.runtime.session.receipts.list.bind(f.runtime.session.receipts);
-  f.runtime.session.receipts.list = () => [...list(), ...['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].map((outcome, index) => ({
-    id: `synthetic-history-${index}`, prompt: { mode: 'Historical', outcome, anchor: 'PENDING' },
-  }))];
+  const page = f.runtime.session.receipts.page.bind(f.runtime.session.receipts);
+  f.runtime.session.receipts.page = options => {
+    const result = page(options), extra = ['OUTCOME_UNKNOWN', 'FAILED_BEFORE_EGRESS'].map((outcome, index) => ({
+      id: `synthetic-history-${index}`, prompt: { mode: 'Historical', outcome, anchor: 'PENDING' },
+    }));
+    return { ...result, receipts: [...result.receipts, ...extra],
+      counts: { ...result.counts, needsAttention: 2, prompts: result.counts.prompts + 2 } };
+  };
   await click('refresh'); await wait("document.querySelector('#attention-count').textContent === '2'");
   await click('filter-attention'); await wait("document.querySelector('#filter-attention').getAttribute('aria-pressed') === 'true'");
   assert.equal(await evaluate("document.querySelectorAll('#prompts article').length"), 2);
   assert.equal(await evaluate("document.querySelectorAll('#prompts article.attention').length"), 2);
   assert.match(await evaluate("document.querySelector('#prompts').textContent"), /Do not resend automatically/);
-  assert.match(await evaluate("document.querySelector('#history-filter').textContent"), /1–2 of 2/);
-  f.runtime.session.receipts.list = list;
+  assert.match(await evaluate("document.querySelector('#history-filter').textContent"), /2 shown · 2 retained/);
+  f.runtime.session.receipts.page = page;
   await click('all-prompts'); await wait("document.querySelectorAll('#prompts article').length === 1");
   assert.equal(await evaluate("document.querySelector('#debug-session-banner').hidden"), true);
   assert.equal(await evaluate("document.querySelector('#debug-session-new').disabled"), true);
@@ -153,8 +158,8 @@ try {
   await until(async () => { try { return (await readFile(join(root, 'attestamp-debug-session.json'))).length > 0; } catch { return false; } });
   const debugExport = await readFile(join(root, 'attestamp-debug-session.json'), 'utf8');
   await wait("document.querySelector('#feedback-debug-session-save')?.textContent.startsWith('Private debug session saved.')");
-  assert.equal(await evaluate(`(()=>{const node=document.querySelector('#feedback-debug-session-save'), rect=node.getBoundingClientRect();
-    return rect.top >= 0 && rect.bottom <= innerHeight && document.activeElement === node;})()`), true);
+  await wait(`(()=>{const node=document.querySelector('#feedback-debug-session-save'), rect=node.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= innerHeight && document.activeElement === node;})()`);
   assert.ok(JSON.parse(debugExport).segments.flatMap(segment => segment.events).some(event => event.code === 'BRIDGE_DISCONNECTED'));
   assert.doesNotMatch(debugExport, /SYNTHETIC_DASHBOARD_CANARY|SYNTHETIC_ACCOUNT_SECRET|https:\/\/|token|digest|DOM/);
   assert.equal(await evaluate("document.querySelector('#debug-session-new').disabled && document.querySelector('#debug-session-acknowledge').disabled"), true);
@@ -187,6 +192,16 @@ try {
   await wait("document.querySelector('#feedback-debug-session-new')?.textContent.startsWith('Fresh debug session created')");
   assert.notEqual(debugSession.status().sessionId, freshDebugId); assert.equal(debugSession.status().retainedEvents, 0);
   assert.equal(await readFile(join(root, 'attestamp-debug-session.json'), 'utf8'), debugExport);
+  for (let n = 0; n < 12; n++) f.runtime.session.observeNormal(scaleObservation(n, `UI_HISTORY_NEEDLE_${n}`));
+  await click('refresh'); await wait("document.querySelector('#prompt-count').textContent === '13'");
+  assert.equal(await evaluate("document.querySelectorAll('#prompts article').length"), 5);
+  await click('history-older'); await wait("!document.querySelector('#history-newer').hidden");
+  assert.equal(await evaluate("document.querySelectorAll('#prompts article').length"), 5);
+  await click('history-older'); await wait("document.querySelectorAll('#prompts article').length === 3");
+  await evaluate("document.querySelector('#history-search').value = 'SYNTHETIC_DASHBOARD_CANARY'");
+  await click('history-search-button'); await wait("document.querySelectorAll('#prompts article').length === 1");
+  assert.equal(await evaluate("document.querySelector('#history-older').hidden"), true);
+  await writeFile(join(screenshotRoot, 'history-search.png'), Buffer.from((await call('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
   await click('verifier'); await until(() => opened.length === 1);
   await call('Page.navigate', { url: opened[0] }); await wait("document.querySelector('#bundle') !== null");
   const dom = await call('DOM.getDocument'), field = await call('DOM.querySelector', { nodeId: dom.root.nodeId, selector: '#bundle' });

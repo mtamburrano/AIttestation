@@ -1,0 +1,209 @@
+{
+  "environment": {
+    "platform": "macOS-15.7.9-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "node": "v22.23.1",
+    "date": "2026-09-24",
+    "resources": "Fresh temporary test vaults; synthetic prompts; random keys; no managed/provider traffic; warm filesystem cache"
+  },
+  "results": [
+    {
+      "prompts": 1000,
+      "pageSize": 4096,
+      "captureMs": 2369.0827090000002,
+      "startupMs": 2.152125000000069,
+      "recentMs": 19.237959000000046,
+      "pagedMs": 7.728500000000167,
+      "searchMs": 2.7968329999998787,
+      "commonSearchMs": 6.510874999999942,
+      "peakRssMiB": 106.84375,
+      "rssMiB": 106.84375,
+      "diskMiB": 8.21484375,
+      "startupAccess": {
+        "recordsRead": 0,
+        "objectsRead": 0,
+        "headersRead": 1
+      },
+      "recentAccess": {
+        "recordsRead": 25,
+        "objectsRead": 40,
+        "headersRead": 0
+      },
+      "pageAccess": {
+        "recordsRead": 15,
+        "objectsRead": 15,
+        "headersRead": 0
+      },
+      "searchAccess": {
+        "recordsRead": 7,
+        "objectsRead": 7,
+        "headersRead": 0
+      }
+    },
+    {
+      "prompts": 1000,
+      "pageSize": 8192,
+      "captureMs": 2341.773,
+      "startupMs": 3.1601250000003347,
+      "recentMs": 19.94175000000041,
+      "pagedMs": 8.190666999999848,
+      "searchMs": 2.888708000000406,
+      "commonSearchMs": 6.502875000000131,
+      "peakRssMiB": 105.609375,
+      "rssMiB": 105.609375,
+      "diskMiB": 7.9296875,
+      "startupAccess": {
+        "recordsRead": 0,
+        "objectsRead": 0,
+        "headersRead": 1
+      },
+      "recentAccess": {
+        "recordsRead": 25,
+        "objectsRead": 40,
+        "headersRead": 0
+      },
+      "pageAccess": {
+        "recordsRead": 15,
+        "objectsRead": 15,
+        "headersRead": 0
+      },
+      "searchAccess": {
+        "recordsRead": 7,
+        "objectsRead": 7,
+        "headersRead": 0
+      }
+    },
+    {
+      "prompts": 1000,
+      "pageSize": 16384,
+      "captureMs": 2381.297084,
+      "startupMs": 1.9765409999999974,
+      "recentMs": 17.7365420000001,
+      "pagedMs": 8.377292000000125,
+      "searchMs": 2.9086670000001504,
+      "commonSearchMs": 6.591957999999977,
+      "peakRssMiB": 105.328125,
+      "rssMiB": 105.328125,
+      "diskMiB": 7.625,
+      "startupAccess": {
+        "recordsRead": 0,
+        "objectsRead": 0,
+        "headersRead": 1
+      },
+      "recentAccess": {
+        "recordsRead": 25,
+        "objectsRead": 40,
+        "headersRead": 0
+      },
+      "pageAccess": {
+        "recordsRead": 15,
+        "objectsRead": 15,
+        "headersRead": 0
+      },
+      "searchAccess": {
+        "recordsRead": 7,
+        "objectsRead": 7,
+        "headersRead": 0
+      }
+    },
+    {
+      "prompts": 1000,
+      "pageSize": 32768,
+      "captureMs": 2571.861208,
+      "startupMs": 2.1922920000001795,
+      "recentMs": 22.07995800000026,
+      "pagedMs": 8.369583000000148,
+      "searchMs": 2.9067089999998643,
+      "commonSearchMs": 6.406792000000223,
+      "peakRssMiB": 113,
+      "rssMiB": 113,
+      "diskMiB": 7.8125,
+      "startupAccess": {
+        "recordsRead": 0,
+        "objectsRead": 0,
+        "headersRead": 1
+      },
+      "recentAccess": {
+        "recordsRead": 25,
+        "objectsRead": 40,
+        "headersRead": 0
+      },
+      "pageAccess": {
+        "recordsRead": 15,
+        "objectsRead": 15,
+        "headersRead": 0
+      },
+      "searchAccess": {
+        "recordsRead": 7,
+        "objectsRead": 7,
+        "headersRead": 0
+      }
+    },
+    {
+      "prompts": 10000,
+      "pageSize": 4096,
+      "captureMs": 24430.647125000003,
+      "startupMs": 2.080792000000656,
+      "recentMs": 17.729624999999942,
+      "pagedMs": 7.049083999998402,
+      "searchMs": 2.7351660000022093,
+      "commonSearchMs": 7.023208999999042,
+      "peakRssMiB": 156.109375,
+      "rssMiB": 155.03125,
+      "diskMiB": 81.12109375,
+      "startupAccess": {
+        "recordsRead": 0,
+        "objectsRead": 0,
+        "headersRead": 1
+      },
+      "recentAccess": {
+        "recordsRead": 25,
+        "objectsRead": 40,
+        "headersRead": 0
+      },
+      "pageAccess": {
+        "recordsRead": 15,
+        "objectsRead": 15,
+        "headersRead": 0
+      },
+      "searchAccess": {
+        "recordsRead": 7,
+        "objectsRead": 7,
+        "headersRead": 0
+      }
+    },
+    {
+      "prompts": 50000,
+      "pageSize": 4096,
+      "captureMs": 131425.741458,
+      "startupMs": 3.2625410000036936,
+      "recentMs": 17.45745800001896,
+      "pagedMs": 6.296624999988126,
+      "searchMs": 3.8511669999861624,
+      "commonSearchMs": 6.167167000006884,
+      "peakRssMiB": 156.671875,
+      "rssMiB": 156.671875,
+      "diskMiB": 406.40625,
+      "startupAccess": {
+        "recordsRead": 0,
+        "objectsRead": 0,
+        "headersRead": 1
+      },
+      "recentAccess": {
+        "recordsRead": 25,
+        "objectsRead": 40,
+        "headersRead": 0
+      },
+      "pageAccess": {
+        "recordsRead": 15,
+        "objectsRead": 15,
+        "headersRead": 0
+      },
+      "searchAccess": {
+        "recordsRead": 7,
+        "objectsRead": 7,
+        "headersRead": 0
+      }
+    }
+  ]
+}

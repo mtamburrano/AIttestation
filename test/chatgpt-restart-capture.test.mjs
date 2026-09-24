@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { Vault } from '../spikes/vault/vault.mjs';
-import { LIMITS } from '../spikes/vault/format.mjs';
 import { ChatGPTRecordingSession } from '../spikes/browser/chatgpt/session.mjs';
 import { ResidentEngine, ENGINE_COMMAND_PROFILE } from '../spikes/browser/chatgpt/engine.mjs';
 import { EngineStateStore } from '../spikes/browser/chatgpt/engine-store.mjs';
@@ -101,7 +100,7 @@ test('first new-tab capture survives restart, 18 pending retry jobs and transien
   assert.ok(!codes.includes('ENGINE_CAPTURE_DISABLED'));
 });
 
-for (const failure of ['sqlite-busy', 'record-limit', 'descriptor', 'post-commit', 'state-pointer', 'reconciliation']) {
+for (const failure of ['sqlite-busy', 'storage-full', 'descriptor', 'post-commit', 'state-pointer', 'reconciliation']) {
   test(`durable ${failure} failure is distinguishable without losing exact receipt semantics or signed history`, async t => {
     const root = await mkdtemp('/private/tmp/attestamp-restart-failure-test-');
     const vault = new Vault(join(root, 'vault'), randomBytes(32), undefined, { create: true });
@@ -120,27 +119,26 @@ for (const failure of ['sqlite-busy', 'record-limit', 'descriptor', 'post-commit
     f = await recordingFixture(root, { vault, network, diagnostics: debug.diagnostics, debugSession: debug, newChat: true,
       managed: { status: () => ({ state: 'NOT_CONFIGURED' }), submit: async () => { throw unavailable(); } } });
     await f.runtime.engine.drain(); await f.recording(true);
-    const capture = vault.capture.bind(vault), inspect = vault.inspect.bind(vault);
+    const capture = vault.capture.bind(vault), lookup = vault.lookupRecords.bind(vault);
     const observe = f.runtime.session.observeNormal.bind(f.runtime.session);
     f.runtime.session.observeNormal = input => { try { return observe(input); } catch (error) { thrown = error; throw error; } };
     if (failure === 'sqlite-busy') {
       locker = new DatabaseSync(join(root, 'vault', 'vault.sqlite')); locker.exec('BEGIN IMMEDIATE');
-    } else if (failure === 'record-limit') {
-      while (vault.inspect().records.length < LIMITS.objects) capture(Buffer.from('SYNTHETIC_RETAINED_STATE'));
+    } else if (failure === 'storage-full') {
+      vault.capture = () => { throw Object.assign(Error('SYNTHETIC_DISK_FULL'), { code: 'ERR_SQLITE_ERROR', errcode: 13 }); };
     } else if (failure === 'state-pointer') {
       t.mock.method(EngineStateStore.prototype, 'save', async () => { throw Object.assign(Error('PRIVATE_PATH_CANARY'), { code: 'ENOSPC' }); });
     } else {
       vault.capture = (bytes, options) => {
         if (options?.type !== 'observation' || !bytes.includes('normal-request-observed')) return capture(bytes, options);
         if (failure === 'post-commit') capture(bytes, options);
-        if (failure === 'reconciliation') vault.inspect = () => { throw Object.assign(Error('PRIVATE_REBUILD_CANARY'), { code: 'INVALID' }); };
+        if (failure === 'reconciliation') vault.lookupRecords = () => { vault.lookupRecords = lookup; throw Object.assign(Error('PRIVATE_REBUILD_CANARY'), { code: 'INVALID' }); };
         throw new TypeError('PRIVATE_PROMPT_ERROR_CANARY');
       };
     }
     const before = f.runtime.session.receipts.list().length;
     f.send('PRIVATE_NEW_CAPTURE_CANARY');
-    await until(() => failure === 'record-limit' ? f.runtime.engine.state().captureUnavailableReason === 'VAULT_CAPACITY_EXHAUSTED'
-      : !f.runtime.engine.state().available);
+    await until(() => !f.runtime.engine.state().available);
     await until(() => f.pages.get(17).feedback.includes('Prompt saved') || f.pages.get(17).feedback.includes('confirmation pending')
       || f.pages.get(17).feedback.includes('capacity exhausted'));
     const delivery = f.deliveries[0].observation;
@@ -149,20 +147,17 @@ for (const failure of ['sqlite-busy', 'record-limit', 'descriptor', 'post-commit
     assert.equal(f.runtime.session.captureReceipt(randomUUID(), delivery.source).state, 'SAVE_PENDING');
     assert.equal(f.pages.get(17).requests.length, 1); assert.equal(f.deliveries.length, 1); assert.equal(f.prevention, 0);
     if (failure === 'sqlite-busy') { assert.equal(thrown.code, 'ERR_SQLITE_ERROR'); assert.equal(thrown.errcode, 5); }
-    if (failure === 'record-limit') {
-      assert.equal(f.runtime.engine.state().available, true);
-      assert.equal(f.results[0].result.state, 'VAULT_CAPACITY_EXHAUSTED');
-    }
+    if (failure === 'storage-full') assert.equal(thrown.errcode, 13);
     const report = JSON.parse(debug.export()), events = report.segments.flatMap(segment => segment.events);
     const codes = events.map(event => event.code);
     for (const code of ['BRIDGE_CONNECTED', 'BRIDGE_AUTHENTICATED', 'BRIDGE_HELLO', 'REQUEST_MATCHED', 'DURABLE_SAVE_DISPATCHED',
-      failure === 'record-limit' ? 'VAULT_CAPACITY_EXHAUSTED' : 'ENGINE_CAPTURE_DISABLED']) assert.ok(codes.includes(code), code);
+      'ENGINE_CAPTURE_DISABLED']) assert.ok(codes.includes(code), code);
     const expected = failure === 'sqlite-busy' ? 'CAPTURE_FAILURE_STORAGE_BUSY'
-      : failure === 'record-limit' ? 'VAULT_CAPACITY_EXHAUSTED'
+      : failure === 'storage-full' ? 'CAPTURE_FAILURE_STORAGE_FULL'
         : failure === 'state-pointer' ? 'CAPTURE_FAILURE_STORAGE_FULL' : 'CAPTURE_FAILURE_TYPE';
     assert.ok(codes.includes(expected));
     assert.ok(codes.includes(failure === 'state-pointer' ? 'VAULT_WRITE_FAILED'
-      : failure === 'record-limit' ? 'VAULT_CAPACITY_EXHAUSTED' : failure === 'sqlite-busy' ? 'CAPTURE_TEXT_WRITE_FAILED' : 'CAPTURE_DESCRIPTOR_WRITE_FAILED'));
+      : ['storage-full', 'sqlite-busy'].includes(failure) ? 'CAPTURE_TEXT_WRITE_FAILED' : 'CAPTURE_DESCRIPTOR_WRITE_FAILED'));
     if (failure === 'reconciliation') {
       assert.ok(codes.indexOf('CAPTURE_FAILURE_TYPE') < codes.indexOf('CAPTURE_RECONCILIATION_FAILED'));
       assert.ok(codes.includes('CAPTURE_FAILURE_INVALID'));
@@ -170,7 +165,7 @@ for (const failure of ['sqlite-busy', 'record-limit', 'descriptor', 'post-commit
     if (!saved) { assert.ok(codes.includes('CAPTURE_GAP')); assert.ok(!codes.includes('NORMAL_PROMPT_SAVED')); }
     assert.doesNotMatch(JSON.stringify(report), /PRIVATE_.*CANARY|SYNTHETIC_RESTART|chatgpt\.com|vault\.sqlite|TypeError/);
     events.forEach(validateDiagnosticEvent);
-    locker?.close(); locker = null; vault.capture = capture; vault.inspect = inspect; t.mock.restoreAll();
+    locker?.close(); locker = null; vault.capture = capture; vault.lookupRecords = lookup; t.mock.restoreAll();
     assert.equal(f.runtime.session.receipts.list().length, before + Number(saved));
     assert.deepEqual(vault.inspect().records.slice(0, immutable.length), immutable);
     await f.restart();

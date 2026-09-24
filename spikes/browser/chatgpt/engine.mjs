@@ -20,7 +20,7 @@ export class ResidentEngine {
   #newChatTokens = new Map();
   #retiredTokens = new Map();
   #anchorRetries = new Map();
-  #anchorCursor = 0; #durableVersions = 0;
+  #anchorCursor = 0; #anchorBoundary = 0;
   #anchorScheduled = false;
   #capacityExhausted = false;
 
@@ -38,7 +38,7 @@ export class ResidentEngine {
     this.#refreshCapacity();
     // Recovery has no engine pointer and stays OFF. Only durable observations,
     // never old Send journals, can contribute bounded pending anchor work.
-    this.#durableVersions = this.#session.versionCount;
+    this.#anchorBoundary = this.#session.anchorCheckpoint;
     this.#pumpAnchors();
     return this;
   }
@@ -52,7 +52,7 @@ export class ResidentEngine {
       recording: this.#state.recording, migration: this.#state.migration,
       captureUnavailableReason: this.#capacityExhausted ? 'VAULT_CAPACITY_EXHAUSTED' : null,
       capabilities: this.#adapter.capabilities, scopes,
-      operations: this.#session.status().versions.slice(-512).map(version => ({ id: version.id, scope: version.scope,
+      operations: this.#session.status({ limit: 5 }).versions.map(version => ({ id: version.id, scope: version.scope,
         observation: true, state: 'PROMPT_SAVED', result: version })) });
   }
   subscribe(listener) {
@@ -202,7 +202,7 @@ export class ResidentEngine {
         emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId }); throw error;
       }
       if (!prior && version.id === eventId) {
-        this.#durableVersions = this.#session.versionCount;
+        this.#anchorBoundary = this.#session.anchorCheckpoint;
         this.#pumpAnchors();
       }
       this.#publish();
@@ -223,15 +223,14 @@ export class ResidentEngine {
   }
   #runAnchors() {
     if (this.#closed || this.#refreshCapacity()) return;
-    const versions = this.#session.status().versions;
-    // A runtime gets one bounded batch per pending observation, regardless of
-    // earlier outages. Cumulative attempts never permanently abandon evidence.
-    // Walk insertion-ordered durable history once per runtime. Overflow waits
-    // in the vault. Retries share the same bounded queue and workers. The
-    // committed boundary excludes a capture whose metadata is still saving.
-    while (this.#anchorCursor < this.#durableVersions && this.#anchorQueue.length + this.#anchoring.size + this.#anchorRetries.size < 512) {
-      const version = versions[this.#anchorCursor++];
-      if (!version.legacy && version.anchor === 'PENDING') this.#anchorQueue.push({ id: version.id, retry: 0 });
+    const room = Math.min(32, 512 - this.#anchorQueue.length - this.#anchoring.size - this.#anchorRetries.size);
+    // Seek the pending index; completed history never enters the runtime queue.
+    if (room > 0 && this.#session.hasManagedAnchoring) {
+      const page = this.#session.pendingPage(this.#anchorCursor, room, { before: this.#anchorBoundary + 1 });
+      for (const version of page.versions) {
+        this.#anchorCursor = version.sequence;
+        if (!version.legacy && version.anchor === 'PENDING') this.#anchorQueue.push({ id: version.id, retry: 0 });
+      }
     }
     while (!this.#closed && !this.#refreshCapacity() && this.#anchoring.size < 2 && this.#anchorQueue.length) {
       const { id, retry } = this.#anchorQueue.shift();

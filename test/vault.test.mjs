@@ -49,7 +49,7 @@ test('exact bytes, private dedup, independent openings and persisted historical 
   const other = new Vault(join(root, 'other'), randomBytes(32), undefined, { create: true }); t.after(() => other.close());
   const otherRecord = other.capture(bytes); assert.notEqual(otherRecord.commitment, first.commitment);
 });
-for (const phase of ['before-write', 'after-objects', 'before-commit', 'after-commit', 'acknowledged']) {
+for (const phase of ['before-write', 'after-objects', 'after-index', 'before-commit', 'after-commit', 'acknowledged']) {
   test(`real process kill ${phase}: atomic capture recovery`, t => {
     const { root, directory, key, vault } = resource(t);
     vault.capture(bytes); vault.close();
@@ -106,7 +106,8 @@ test('authenticated inventory catches complete event/blob deletion and missing o
   const backup = vault.exportRecovery(), original = parseCanonical(backup.package);
   const wrapAAD = aad('PAP/wrapped-dek/v1', original.vaultId, 'recovery-manifest', original.snapshotId, original.packageId, original.snapshotId);
   const payloadAAD = aad('PAP/recovery-manifest/v1', original.vaultId, 'recovery-manifest', original.snapshotId, original.packageId, original.snapshotId);
-  const dek = decrypt(key, original.encryptedManifest.wrappedKey, wrapAAD, 32);
+  const snapshotKey = decrypt(backup.recoveryKey, original.wrappedVMK, aad('PAP/recovery-vmk/v1', original.vaultId, 'vmk', 'vmk', original.packageId, original.snapshotId), 32);
+  const dek = decrypt(snapshotKey, original.encryptedManifest.wrappedKey, wrapAAD, 32);
   const manifest = parseCanonical(decrypt(dek, original.encryptedManifest.payload, payloadAAD));
   for (const mutation of ['event-set', 'opening', 'wrapped-key']) {
     const p = structuredClone(original), m = structuredClone(manifest);
@@ -117,7 +118,7 @@ test('authenticated inventory catches complete event/blob deletion and missing o
     for (const blob of p.blobs) {
       const object = m.index.objects.find(o => o.id === blob.id);
       const objectAAD = aad('PAP/wrapped-dek/v1', p.vaultId, 'evidence', object.digest);
-      const objectKey = decrypt(key, blob.box.wrappedKey, objectAAD, 32);
+      const objectKey = decrypt(snapshotKey, blob.box.wrappedKey, objectAAD, 32);
       blob.box.wrappedKey = encrypt(freshVMK, objectKey, objectAAD, nonce());
       const item = m.inventory.find(item => item.id === blob.id);
       item.ciphertextDigest = b64(hash(encoded(blob.box))); item.encodedLength = String(encoded(blob.box).length);
@@ -148,12 +149,12 @@ test('rotation rewraps without changing ciphertext or signatures; historical bac
   vault.close(); assert.throws(() => new Vault(directory, key), { code: 'UNRECOVERABLE' });
   const reopened = new Vault(directory, rotated); t.after(() => reopened.close()); assert.equal(reopened.verifyAll().count, 1);
 });
-test('VMK invocation bound and missing reservation state fail closed', t => {
+test('wrapping keys advance past the legacy invocation boundary and missing reservation state fails closed', t => {
   const { directory, vault } = resource(t); vault.capture(bytes);
   const db = new DatabaseSync(join(directory, 'vault.sqlite')); t.after(() => db.close());
   db.exec(`UPDATE usage SET counter=${2 ** 20}`);
-  assert.throws(() => vault.capture(bytes), { code: 'LIMIT_EXCEEDED' });
-  vault.rotate(randomBytes(32)); assert.equal(vault.capture(bytes).manifest.sequence, '2');
+  assert.equal(vault.capture(bytes).manifest.sequence, '2');
+  vault.rotate(randomBytes(32)); assert.equal(vault.capture(bytes).manifest.sequence, '3');
   db.exec('DELETE FROM usage'); assert.throws(() => vault.capture(bytes), { code: 'UNRECOVERABLE' });
 });
 test('corruption, absent content, selective disclosure and missing openings never appear fully verified', t => {

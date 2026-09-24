@@ -46,10 +46,17 @@ export function integrationStatus(state, installation, connected) {
 export async function dashboardState(runtime, filter = {}) {
   const installation = await runtime.maintenance?.status() ?? { integration: 'NOT_CONFIGURED', releaseClass: 'DEVELOPMENT' };
   const state = runtime.engine.state();
+  const { attentionOnly = false, before = Number.MAX_SAFE_INTEGER, search = '' } = filter;
+  if (typeof attentionOnly !== 'boolean') throw Error('Invalid history filter');
+  const page = runtime.session.receipts.page({ attentionOnly, before, search, limit: 5 });
+  const history = promptHistory(page.receipts, state.operations);
+  history.counts = page.counts;
+  history.page = { attentionOnly, before, next: page.next, search, total: attentionOnly ? page.counts.needsAttention : page.counts.prompts };
+  history.truncated = page.next !== null;
   return { profile: 'pap-dashboard/2', runtimeEpoch: state.runtimeEpoch, revision: state.revision,
     adapterProfile: state.adapterProfile, available: state.available, recording: state.recording,
     captureUnavailableReason: state.captureUnavailableReason,
     ...(runtime.debugSession ? { debugSession: runtime.debugSession.status() } : {}),
     integration: integrationStatus(state, installation, runtime.browserState() !== null),
-    history: promptHistory(runtime.session.receipts.list(), state.operations, filter) };
+    history };
 }

@@ -8,7 +8,7 @@ const wire = value => Buffer.from(canonical(value));
 export function storePublicProof(vault, proof) {
   const bytes = wire(proof), digest = objectDigest(bytes);
   if (bytes.length > RECIPIENT_LIMITS.proof) throw Error('Public proof size limit');
-  if (vault.inspect().objects.some(object => object.digest === digest)) {
+  if (vault.hasObject(digest)) {
     if (!vault.read(digest).equals(bytes)) throw Error('Public proof storage mismatch');
   } else vault.capture(bytes, { type: 'public-proof' });
   return { proofDigest: publicProofDigest(bytes), proofObject: digest };
@@ -22,13 +22,28 @@ export function storeAnchor(vault, envelope) {
 }
 
 export class LocalReceipts {
-  #vault; #preview = null; #cachedHistory = null; #revision = null;
+  #vault; #preview = null; #cachedHistory = null; #revision = null; #query = null;
   constructor(vault) { this.#vault = vault; }
 
-  #history() {
+  #history(options = {}) {
     const revision = this.#vault.revision;
-    if (revision !== undefined && revision === this.#revision) return this.#cachedHistory;
-    const records = this.#vault.inspect().records;
+    if (options.ids && (!Array.isArray(options.ids) || options.ids.length > RECIPIENT_LIMITS.records)) throw Error('Receipt selection limit');
+    const query = JSON.stringify(options);
+    if (revision !== undefined && revision === this.#revision && query === this.#query) return this.#cachedHistory;
+    const page = options.ids ? { records: options.ids.map(id => this.#vault.getRecord(id)).filter(Boolean), next: null }
+      : this.#vault.recordPage({ kind: 'prompt', limit: 100, ...options });
+    const initial = [...page.records];
+    if (!options.ids && !options.search && !options.attentionOnly) initial.push(...this.#vault.recordPage({ kind: 'derivative', limit: 5 }).records, ...this.#vault.recordPage({ kind: 'unassociated', limit: 5 }).records);
+    const selected = new Map(initial.map(record => [record.manifest.eventId, record]));
+    for (const record of initial) if (record.manifest.type === 'observation') {
+      const bytes = this.#vault.read(record.manifest.evidence[0].objectDigest);
+      const value = signedObservation(record, bytes, verifyRecord(record, bytes));
+      if (!value) continue;
+      const text = value.textRecord ? this.#vault.getRecord(value.textRecord) : null;
+      if (text) selected.set(text.manifest.eventId, text);
+      for (const related of this.#vault.lookupRecords('related', record.recordDigest)) selected.set(related.manifest.eventId, related);
+    }
+    const records = [...selected.values()].sort((a, b) => Number(a.manifest.sequence) - Number(b.manifest.sequence));
     const byId = new Map(records.map(record => [record.manifest.eventId, record]));
     const observations = records.filter(r => r.manifest.type === 'observation').map(record => {
       const bytes = this.#vault.read(record.manifest.evidence[0].objectDigest);
@@ -74,19 +89,26 @@ export class LocalReceipts {
       textRecordId: record.manifest.eventId, recordIds: [record.manifest.eventId], related: [],
       recordDigest: record.recordDigest, derivative: true,
     });
-    this.#revision = revision; this.#cachedHistory = { records, groups };
+    this.#revision = revision; this.#query = query; this.#cachedHistory = { records, groups, next: page.next };
     return this.#cachedHistory;
   }
 
-  list() {
-    return structuredClone(this.#history().groups.map(({ related: _related, ...group }) => group));
+  list(options = {}) {
+    return structuredClone(this.#history(options).groups.map(({ related: _related, ...group }) => group));
+  }
+
+  page(options = {}) {
+    if (Object.keys(options).some(key => !['before', 'limit', 'attentionOnly', 'search', 'kind'].includes(key))) throw Error('Invalid receipt page');
+    const history = this.#history({ limit: 5, ...options });
+    return { receipts: structuredClone(history.groups.map(({ related: _related, ...group }) => group)),
+      next: history.next, counts: this.#vault.historyCounts() };
   }
 
   prepare({ ids, includeEvidence = true }) {
     this.#preview = null;
     if (!Array.isArray(ids) || !ids.length || ids.length > RECIPIENT_LIMITS.records
         || new Set(ids).size !== ids.length || typeof includeEvidence !== 'boolean') throw Error('Select distinct receipts');
-    const { groups } = this.#history();
+    const { groups } = this.#history({ ids });
     const selected = ids.map(id => { const group = groups.find(group => group.id === id); if (!group) throw Error('Unknown receipt'); return group; });
     const recordIds = [...new Set(selected.flatMap(group => group.recordIds))];
     const disclosure = parseCanonical(this.#vault.exportDisclosure(recordIds, { includeEvidence }));
@@ -127,7 +149,7 @@ export class LocalReceipts {
 
   redact({ id, text }) {
     if (typeof text !== 'string' || !text.isWellFormed() || Buffer.byteLength(text) > LIMITS.field) throw Error('Redacted text limit');
-    const { groups, records } = this.#history(), group = groups.find(group => group.id === id);
+    const { groups, records } = this.#history({ ids: [id] }), group = groups.find(group => group.id === id);
     if (!group) throw Error('Select one source receipt');
     if (group.unassociatedCancellation) throw Error('Unassociated cancellation has no source prompt to redact');
     const source = records.find(record => record.manifest.eventId === group.textRecordId);

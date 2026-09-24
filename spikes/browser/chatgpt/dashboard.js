@@ -6,7 +6,7 @@ history.replaceState(null, '', '/dashboard');
 if (['history', 'settings', 'integrations'].includes(section)) $(section).scrollIntoView();
 let state, busy = false, closed = false, acceptedPreview = null, selectionRevision = 0, supportId = null, recovery = null, recoveryTimer, updateAvailable = false;
 const selected = new Set();
-let attentionOnly = false, historyOffset = 0, actionFeedback = null;
+let attentionOnly = false, historyBefore = Number.MAX_SAFE_INTEGER, historyCursors = [], historySearch = '', actionFeedback = null;
 let acknowledgedDebugSession = null;
 const states = {
   VAULT_CAPACITY_EXHAUSTED: ['Local evidence capacity exhausted', 'New capture is unavailable. History, selective export, the verifier and encrypted recovery remain available. Turn OFF to stop requesting recording.'],
@@ -67,7 +67,7 @@ function action(id, run) {
       const hidden = feedback.closest('[hidden]');
       if (hidden) hidden.after(feedback);
       const bounds = feedback.getBoundingClientRect();
-      if (bounds.top < 0 || bounds.bottom > innerHeight) feedback.scrollIntoView({ block: 'nearest' });
+      if (bounds.top < 0 || bounds.bottom > innerHeight) feedback.scrollIntoView({ block: 'center' });
       feedback.focus({ preventScroll: true });
     }
   };
@@ -127,12 +127,12 @@ function render(value) {
   for (const [id, key] of [['prompt-count', 'prompts'], ['conversation-count', 'conversations'], ['anchor-count', 'pendingAnchors'], ['attention-count', 'needsAttention']]) $(id).textContent = counts[key];
   $('history-note').textContent = `${counts.unassigned} prompts have no stable conversation identity. Counts include only retained observations and historical evidence, not complete provider history.`;
   const page = state.history.page;
-  historyOffset = page.offset;
+  historyBefore = page.before;
   $('filter-attention').setAttribute('aria-pressed', String(attentionOnly));
   $('all-prompts').hidden = !attentionOnly;
-  $('history-filter').textContent = `${attentionOnly ? 'Needs attention' : 'All prompts'} · ${page.total ? `${page.offset + 1}–${Math.min(page.offset + 200, page.total)} of ${page.total}` : 'No matching prompts'}. Pending anchors are counted separately.`;
-  $('history-newer').hidden = page.offset === 0;
-  $('history-older').hidden = page.offset + 200 >= page.total;
+  $('history-filter').textContent = `${attentionOnly ? 'Needs attention' : 'All prompts'} · ${page.total ? `${state.history.prompts.length} shown · ${page.total} retained` : 'No matching prompts'}. Pending anchors are counted separately.`;
+  $('history-newer').hidden = historyCursors.length === 0;
+  $('history-older').hidden = page.next === null;
   $('prompts').replaceChildren();
   for (const prompt of state.history.prompts) {
     const row = node('article', '', 'prompt');
@@ -159,7 +159,7 @@ function render(value) {
 
 }
 async function refresh() {
-  try { const value = await api('/dashboard/state', { attentionOnly, offset: historyOffset }); if (!closed) { render(value); controls(); } }
+  try { const value = await api('/dashboard/state', { attentionOnly, before: historyBefore, search: historySearch }); if (!closed) { render(value); controls(); } }
   catch { if (state) state.available = false; $('effective-state').textContent = 'Engine connection unavailable';
     if (actionFeedback) notify('Status unavailable. Reopen Attestamp and refresh. Current recording is not confirmed.');
     if (state?.debugSession) {
@@ -169,10 +169,13 @@ async function refresh() {
     $('effective-help').textContent = 'Reopen Attestamp and refresh. Current recording is not confirmed.'; controls(); }
 }
 action('refresh', refresh);
-action('filter-attention', async () => { attentionOnly = !attentionOnly; historyOffset = 0; await refresh(); });
-action('all-prompts', async () => { attentionOnly = false; historyOffset = 0; await refresh(); });
-action('history-newer', async () => { historyOffset = Math.max(0, historyOffset - 200); await refresh(); });
-action('history-older', async () => { historyOffset += 200; await refresh(); });
+action('filter-attention', async () => { attentionOnly = !attentionOnly; historyBefore = Number.MAX_SAFE_INTEGER; historyCursors = []; await refresh(); });
+action('all-prompts', async () => { attentionOnly = false; historyBefore = Number.MAX_SAFE_INTEGER; historyCursors = []; await refresh(); });
+action('history-search-button', async () => {
+  historySearch = $('history-search').value.trim(); historyBefore = Number.MAX_SAFE_INTEGER; historyCursors = []; await refresh();
+});
+action('history-newer', async () => { historyBefore = historyCursors.pop() ?? Number.MAX_SAFE_INTEGER; await refresh(); });
+action('history-older', async () => { historyCursors.push(historyBefore); historyBefore = state.history.page.next; await refresh(); });
 action('recording', () => command('SET_RECORDING', { enabled: !state.recording }));
 for (const kind of ['enable', 'disable']) action(kind, async () => {
   await api(`/installation/${kind}`); await refresh();
@@ -237,7 +240,10 @@ action('prepare-recovery', async () => {
   clearRecovery(); recovery = await api('/dashboard/recovery', { confirmed: true }); $('recovery').hidden = false;
   recoveryTimer = setTimeout(clearRecovery, 60000);
 });
-action('save-recovery', async () => download(recovery.package, 'attestamp-encrypted-recovery.json'));
+action('save-recovery', async () => {
+  if (recovery.downloadURL) { const link = document.createElement('a'); link.href = recovery.downloadURL; link.download = 'attestamp-encrypted-recovery.pap-recovery'; link.click(); }
+  else download(recovery.package, 'attestamp-encrypted-recovery.json');
+});
 action('save-recovery-key', async () => download(Uint8Array.from(atob(recovery.recoveryKey), value => value.charCodeAt(0)), 'attestamp-recovery.key', 'application/octet-stream'));
 action('clear-recovery', async () => clearRecovery());
 action('preview-support', async () => { supportId = null; const preview = await api('/diagnostics/preview', { operationIds: [], components: [] }); supportId = preview.previewId; $('support').textContent = JSON.stringify(preview.report, null, 2); });
@@ -266,9 +272,9 @@ action('debug-session-new', async () => {
   acknowledgedDebugSession = null; $('debug-session-acknowledge').checked = false;
   try {
     await api('/debug-session/new', request);
+    await refresh();
     notify('Fresh debug session created with no retained events. Resume debug recording when ready.');
-  } catch (error) { notify(error.message); }
-  finally { await refresh(); }
+  } catch (error) { await refresh(); notify(error.message); }
 });
 action('close', async () => {
   await api('/close'); closed = true; clearInterval(timer); invalidatePreview(); clearRecovery();

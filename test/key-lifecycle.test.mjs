@@ -118,9 +118,9 @@ test('vault rotation reports transient retirement failure and retries it on open
   assert.equal(reopened.verifyAll().count, 1);
 });
 
-test('legacy vault adoption and additive schema migration survive interruption and rollback reader', t => {
+test('legacy vault adoption and indexed migration survive interruption and reject rollback writers', t => {
   const { path } = directory(t), vaultKey = randomBytes(32), signer = identity();
-  const legacy = new Vault(path, vaultKey, signer, { create: true });
+  const legacy = new Vault(path, vaultKey, signer, { create: true, readerVersion: 3 });
   const record = legacy.capture(Buffer.from('pre-upgrade evidence'));
   const oldBundle = legacy.exportDisclosure([record.manifest.eventId]); legacy.close();
   const db = new DatabaseSync(join(path, 'vault.sqlite'));
@@ -134,9 +134,10 @@ test('legacy vault adoption and additive schema migration survive interruption a
 
   const keyStore = new MemoryKeyStore();
   const upgraded = DurableVault.adoptLegacy(path, vaultKey, signer, { keyStore });
-  assert.equal(upgraded.schemaInfo().writerVersion, 3); upgraded.close();
-  const rollback = new Vault(path, vaultKey, signer, { readerVersion: 1 });
-  assert.equal(rollback.verifyAll().count, 1); rollback.close();
+  assert.equal(upgraded.schemaInfo().writerVersion, 4); upgraded.close();
+  assert.throws(() => new Vault(path, vaultKey, signer, { readerVersion: 1 }), { code: 'UNSUPPORTED' });
+  const reopened = DurableVault.open(path, { keyStore });
+  assert.deepEqual(reopened.inspect().records, [record]); reopened.close();
   assert.equal(verifyDisclosure(oldBundle).records[0].integrity, 'VALID');
 });
 

@@ -42,7 +42,6 @@ export class ChatGPTRecordingSession {
   }
 
   async init() {
-    this.#restoreObservations();
     emit(this.#diagnostics, 'ENGINE_STARTED');
     return this;
   }
@@ -74,8 +73,37 @@ export class ChatGPTRecordingSession {
       mode: value.mode, descriptorId: record.manifest.eventId, recordDigest: record.recordDigest,
       state: 'PROMPT_SAVED', anchor: 'PENDING', timestamp: 'INDETERMINATE', anchorAttempts: 0, assuranceHistory: [] };
   }
-  #restoreObservations(preserved = new Map()) {
-    const records = this.vault.inspect().records;
+  #loadVersion(id, field = 'subject') {
+    const cached = field === 'subject' ? this.#versions.get(id) : this.#providerMessages.get(id);
+    if (cached) return cached;
+    const selected = this.vault.lookupRecords(field, id);
+    let descriptor, alias;
+    for (const record of selected) {
+      const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
+      if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) descriptor = record;
+      else if (value.kind === 'request-deduplicated' && value.eventId === id) alias = { record, value };
+    }
+    if (!descriptor && alias) {
+      const version = this.#loadVersion(alias.value.version);
+      if (!version) throw Error('INVALID_CAPTURE_HISTORY');
+      descriptor = this.vault.getRecord(version.descriptorId);
+    }
+    if (!descriptor) return null;
+    const value = parseCanonical(this.vault.read(descriptor.manifest.evidence[0].objectDigest));
+    const text = this.vault.getRecord(value.textRecord);
+    if (!text) throw Error('INVALID_CAPTURE_HISTORY');
+    const records = [text, descriptor, ...this.vault.lookupRecords('related', descriptor.recordDigest)];
+    if (alias && !records.some(r => r.manifest.eventId === alias.record.manifest.eventId)) records.push(alias.record);
+    // A bounded working set holds only receipts currently used by views/workers.
+    if (this.#versions.size >= 64) { this.#versions.clear(); this.#providerMessages.clear(); this.#aliases.clear(); }
+    const preserved = new Map(this.#versions);
+    this.#versions.delete(value.eventId);
+    this.#restoreObservations(preserved, records);
+    const version = this.#versions.get(value.eventId);
+    if (version) version.anchorAttempts = Math.max(version.anchorAttempts, this.vault.readState(`anchor-attempt:${value.eventId}`)?.count ?? 0);
+    return version;
+  }
+  #restoreObservations(preserved, records) {
     const byId = new Map(records.map(record => [record.manifest.eventId, record]));
     const observations = [];
     for (const record of records.filter(value => value.manifest.type === 'observation')) {
@@ -117,10 +145,12 @@ export class ChatGPTRecordingSession {
       if (value.kind === 'request-deduplicated') {
         keys(value, ['profile', 'kind', 'version', 'recordDigest', 'eventId', 'source', 'request', 'inputMethod']);
         validateCaptureSource(value.source); validateRequest(value.request);
-        if (!isUUID(value.eventId) || this.#aliases.has(value.eventId) || this.#versions.has(value.eventId)
+        if (!isUUID(value.eventId) || this.#versions.has(value.eventId)
+            || record.manifest.signingPublicKey !== byId.get(version.descriptorId)?.manifest.signingPublicKey
             || value.inputMethod !== 'provider-request' || value.request.messageId !== version.request?.messageId
             || value.request.conversationId !== null && version.request.conversationId !== null
               && value.request.conversationId !== version.request.conversationId) throw Error('INVALID_CAPTURE_HISTORY');
+        if (this.#aliases.size >= 64) this.#aliases.clear();
         this.#aliases.set(value.eventId, { version, source: value.source, request: value.request, inputMethod: value.inputMethod });
         continue;
       }
@@ -152,9 +182,8 @@ export class ChatGPTRecordingSession {
       emitCaptureFailure(this.#diagnostics, error, refs);
       // A write may have committed before its caller observed an error. Rebuild
       // the exact-ID receipt index; absence still leaves the caller uncertain.
-      const preserved = new Map(this.#versions);
       this.#versions.clear(); this.#providerMessages.clear(); this.#aliases.clear();
-      try { this.#restoreObservations(preserved); }
+      try { this.#loadVersion(input?.eventId); }
       catch (reconciliationError) {
         emit(this.#diagnostics, 'CAPTURE_RECONCILIATION_FAILED', refs);
         emitCaptureFailure(this.#diagnostics, reconciliationError, refs);
@@ -165,6 +194,7 @@ export class ChatGPTRecordingSession {
   }
   #observeNormal(input) {
     const { eventId, source, text } = input;
+    this.#loadVersion(eventId);
     const alias = this.#aliases.get(eventId);
     if (alias && input.kind === 'acknowledgement') throw Error('CAPTURE_CORRELATION_CONFLICT');
     if (alias && canonical(alias.source) !== canonical(source)) throw Error('CAPTURE_REPLAY_CONFLICT');
@@ -184,7 +214,7 @@ export class ChatGPTRecordingSession {
       return this.#public(prior);
     }
     if (prior) return this.#public(prior);
-    const repeated = this.#providerMessages.get(input.request.messageId);
+    const repeated = this.#loadVersion(input.request.messageId, 'message');
     if (repeated) {
       // Provider message IDs survive fetch retries, route changes, tabs and
       // engine restarts. A retry cannot rewrite the original source or text.
@@ -196,6 +226,7 @@ export class ChatGPTRecordingSession {
       this.#captureRecord(wire({ profile: 'pap-chatgpt-observation/1', kind: 'request-deduplicated',
         version: repeated.id, recordDigest: repeated.recordDigest, eventId, source,
         request: input.request, inputMethod: input.inputMethod }), { type: 'observation' }, 'CAPTURE_ALIAS_WRITE_FAILED', eventId);
+      if (this.#aliases.size >= 64) this.#aliases.clear();
       this.#aliases.set(eventId, { version: repeated, source: structuredClone(source),
         request: structuredClone(input.request), inputMethod: input.inputMethod });
       return this.#public(repeated);
@@ -210,21 +241,23 @@ export class ChatGPTRecordingSession {
       mode: 'ON', boundary: 'provider_fetch', coverage: 'UTF8_NEW_USER_MESSAGE',
       releaseClass: 'RETROSPECTIVE_OBSERVATION', attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
     const record = this.#normalEvent(value), version = this.#observedVersion(record, value, text);
+    if (this.#versions.size >= 64) { this.#versions.clear(); this.#providerMessages.clear(); this.#aliases.clear(); }
     this.#versions.set(eventId, version); this.#providerMessages.set(input.request.messageId, version);
     emit(this.#diagnostics, 'VAULT_CAPTURED', { operationId: eventId, captureId: captured.manifest.eventId });
     emit(this.#diagnostics, 'NORMAL_PROMPT_SAVED', { operationId: eventId, captureId: captured.manifest.eventId });
     return this.#public(version);
   }
-  #version(id) { const value = this.#versions.get(id); if (!value) throw Error('Unknown version'); return value; }
+  #version(id) { const value = this.#loadVersion(id); if (!value) throw Error('Unknown version'); return value; }
   #public(value) {
     const { payload: _payload, ...visible } = value;
     return structuredClone(visible);
   }
-  version(id) { const value = this.#versions.get(id); return value ? this.#public(value) : null; }
-  get versionCount() { return this.#versions.size; }
+  version(id) { const value = this.#loadVersion(id); return value ? this.#public(value) : null; }
+  get versionCount() { return this.vault.historyCounts().prompts; }
   captureReceipt(eventId, source = null) {
     if (!isUUID(eventId)) throw Error('INVALID_CAPTURE_RECEIPT');
     if (source) validateCaptureSource(source);
+    this.#loadVersion(eventId);
     const alias = this.#aliases.get(eventId), version = alias?.version ?? this.#versions.get(eventId);
     const saved = version && (!source || canonical(alias?.source ?? version.source) === canonical(source));
     return { profile: 'pap-chatgpt-capture/5', eventId, kind: 'request-observed',
@@ -251,7 +284,8 @@ export class ChatGPTRecordingSession {
     return { report: structuredClone(report), receiptId: receipt.manifest.eventId };
   }
 
-  managedStatus() { return this.#managed?.status() ?? { state: 'NOT_CONFIGURED' }; }
+  get hasManagedAnchoring() { return typeof this.#managed?.submit === 'function'; }
+  managedStatus() { return this.#managed?.status?.() ?? { state: this.#managed ? 'CONFIGURED' : 'NOT_CONFIGURED' }; }
   connectManaged({ accessCode }) {
     if (!this.#managed) throw managedError('NOT_CONFIGURED');
     return this.#managed.connect(accessCode);
@@ -269,8 +303,7 @@ export class ChatGPTRecordingSession {
       let attempted = false;
       const beforeSubmit = () => {
         if (attempted) return;
-        this.#event({ kind: 'anchor-attempt', version: id, recordDigest: version.recordDigest,
-          number: version.anchorAttempts + 1 });
+        this.vault.writeState(`anchor-attempt:${id}`, { count: version.anchorAttempts + 1 });
         version.anchorAttempts++; attempted = true;
       };
       if (managed) {
@@ -360,7 +393,21 @@ export class ChatGPTRecordingSession {
     }, { operationId: id });
   }
 
-  status() { return { versions: [...this.#versions.values()].map(value => this.#public(value)) }; }
+  status({ limit = 100 } = {}) {
+    const records = this.vault.recordPage({ kind: 'prompt', limit }).records.reverse();
+    return { versions: records.map(record => {
+      const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
+      return this.version(value.eventId);
+    }).filter(Boolean) };
+  }
+  get anchorCheckpoint() { return this.vault.recordCount; }
+  pendingPage(after = 0, limit = 32, { before = Number.MAX_SAFE_INTEGER } = {}) {
+    const page = this.vault.recordPage({ kind: 'prompt', pending: true, after, before, limit, ascending: true });
+    return { versions: page.records.map(record => {
+      const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
+      return { ...this.version(value.eventId), sequence: Number(record.manifest.sequence) };
+    }), next: page.next };
+  }
   async drain() { while (this.#tails.size) await Promise.all(this.#tails.values()); }
   close() { this.#closed = true; if (this.#ownsVault) this.vault.close(); emit(this.#diagnostics, 'ENGINE_CLOSED'); }
 }

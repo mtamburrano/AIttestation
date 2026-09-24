@@ -260,7 +260,14 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
   const session = await new ChatGPTRecordingSession(directory, adapter, options).init();
   const status = session.status.bind(session), anchor = session.anchorManaged.bind(session);
   const version = session.version.bind(session);
-  Object.defineProperty(session, 'versionCount', { get: () => versions.length + status().versions.length });
+  const pendingPage = session.pendingPage.bind(session);
+  Object.defineProperty(session, 'anchorCheckpoint', { get: () => 512 + vault.recordCount });
+  session.pendingPage = (after, limit, { before }) => {
+    const durable = pendingPage(Math.max(0, after - 512), limit, { before: Math.max(1, before - 512) });
+    const all = [...versions.map((value, index) => ({ ...value, sequence: index + 1 })),
+      ...durable.versions.map(value => ({ ...value, sequence: value.sequence + 512 }))];
+    return { versions: all.filter(value => value.sequence > after && value.sequence < before).slice(0, limit) };
+  };
   session.version = id => versions.find(value => value.id === id) ?? version(id);
   session.status = () => ({ versions: [...versions, ...status().versions] });
   session.anchorManaged = async request => {
