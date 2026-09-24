@@ -9,6 +9,7 @@ const keychainReasons = new Map([
   ['App-bound Keychain operation failed', 'KEYCHAIN_OPERATION_FAILED'],
 ]);
 const codes = new Set(['UNKNOWN', 'LOCKED', 'UNRECOVERABLE', 'INVALID', 'UNSUPPORTED_PATH',
+  'VAULT_CAPACITY_EXHAUSTED',
   'ENOENT', 'EACCES', 'EPERM', 'ENOSPC', 'CHROME_LAUNCH_FAILED', 'CHROME_LAUNCH_PATH_MISMATCH',
   'CHROME_LAUNCH_NOT_CONFIRMED', 'CLOSE_OTHER_CHROME_COPY', ...keychainReasons.values()]);
 

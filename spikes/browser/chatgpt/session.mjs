@@ -200,6 +200,9 @@ export class ChatGPTRecordingSession {
         request: structuredClone(input.request), inputMethod: input.inputMethod });
       return this.#public(repeated);
     }
+    // Text without its signed descriptor is not a saved prompt. Check the pair
+    // before either synchronous write; unrelated later writes still fail closed.
+    this.vault.requireRecordCapacity(2);
     const captured = this.#captureRecord(Buffer.from(text, 'utf8'), undefined, 'CAPTURE_TEXT_WRITE_FAILED', eventId);
     const value = { profile: NORMAL_OBSERVATION_PROFILE, kind: 'normal-request-observed', eventId, source,
       inputMethod: input.inputMethod, request: input.request,
@@ -261,6 +264,7 @@ export class ChatGPTRecordingSession {
     return this.#serial(async () => {
       const started = performance.now(), version = this.#version(id);
       if (this.#closed || version.legacy || version.anchor !== 'PENDING') throw Error('Anchor work unavailable');
+      this.vault.requireRecordCapacity();
       if (version.anchorAttempts >= Number.MAX_SAFE_INTEGER) throw Error('ANCHOR_RETRY_LIMIT');
       let attempted = false;
       const beforeSubmit = () => {
@@ -288,6 +292,7 @@ export class ChatGPTRecordingSession {
               transactionId: submitted.transactionId, claim: 'SUBMISSION_ONLY; independent confirmation required' });
           }
         } catch (error) {
+          if (error?.code === 'VAULT_CAPACITY_EXHAUSTED') throw error;
           const safe = managedError(error.code);
           emit(this.#diagnostics, ['NOT_CONFIGURED', 'ACCOUNT_REQUIRED', 'UNPAID', 'QUOTA_EXHAUSTED',
             'RATE_LIMITED', 'SERVICE_UNAVAILABLE', 'SUBMISSION_INTERRUPTED'].includes(safe.code)

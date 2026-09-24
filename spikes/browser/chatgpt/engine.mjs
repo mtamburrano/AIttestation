@@ -22,6 +22,7 @@ export class ResidentEngine {
   #anchorRetries = new Map();
   #anchorCursor = 0; #durableVersions = 0;
   #anchorScheduled = false;
+  #capacityExhausted = false;
 
   constructor(directory, session, adapter, runtimeEpoch, diagnostics = null) {
     this.#session = session; this.#adapter = adapter; this.#epoch = runtimeEpoch; this.#diagnostics = diagnostics;
@@ -32,7 +33,9 @@ export class ResidentEngine {
     this.#unsubscribe = this.#adapter.onChange(() => {
       this.capturePolicy(); this.#publish();
     });
-    await this.#commit();
+    // A fresh runtime epoch already invalidates old commands and sources.
+    // Opening readable history must not consume another signed evidence record.
+    this.#refreshCapacity();
     // Recovery has no engine pointer and stays OFF. Only durable observations,
     // never old Send journals, can contribute bounded pending anchor work.
     this.#durableVersions = this.#session.versionCount;
@@ -40,12 +43,14 @@ export class ResidentEngine {
     return this;
   }
   state() {
+    this.#refreshCapacity();
     const scopes = this.#adapter.scopes().map(source => ({ ...source,
-      effectiveRecording: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
+      effectiveRecording: !this.#state.recording ? 'OFF' : this.#closed || this.#failed || this.#capacityExhausted
         || !this.#adapter.offersCapture(source.scope) ? 'UNAVAILABLE' : 'ON' }));
     return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, adapterProfile: CHATGPT_ADAPTER_PROFILE,
       revision: this.#state.revision, available: !this.#closed && !this.#failed,
       recording: this.#state.recording, migration: this.#state.migration,
+      captureUnavailableReason: this.#capacityExhausted ? 'VAULT_CAPACITY_EXHAUSTED' : null,
       capabilities: this.#adapter.capabilities, scopes,
       operations: this.#session.status().versions.slice(-512).map(version => ({ id: version.id, scope: version.scope,
         observation: true, state: 'PROMPT_SAVED', result: version })) });
@@ -58,9 +63,35 @@ export class ResidentEngine {
   #publish() {
     for (const listener of this.#listeners) { try { listener(this.state()); } catch {} }
   }
+  #refreshCapacity(refs = {}) {
+    if (this.#closed || this.#failed) return this.#capacityExhausted;
+    if (!this.#capacityExhausted && this.#session.vault.remainingRecordCapacity < 2) {
+      this.#capacityExhausted = true;
+      this.#captureTokens.clear(); this.#newChatTokens.clear(); this.#retiredTokens.clear();
+      this.#anchorQueue = [];
+      for (const timer of this.#anchorRetries.values()) clearTimeout(timer);
+      this.#anchorRetries.clear();
+      emit(this.#diagnostics, 'VAULT_CAPACITY_EXHAUSTED', refs);
+    }
+    return this.#capacityExhausted;
+  }
   async #commit(refs = {}) {
     this.#state.revision++;
-    try { await this.#store.save(structuredClone(this.#state)); }
+    try {
+      if (this.#refreshCapacity(refs)) {
+        if (this.#state.recording) return false;
+        await this.#store.revokeRecording();
+      } else {
+        try { await this.#store.save(structuredClone(this.#state)); }
+        catch (error) {
+          if (error?.code !== 'VAULT_CAPACITY_EXHAUSTED') throw error;
+          this.#refreshCapacity(refs);
+          if (this.#state.recording) return false;
+          await this.#store.revokeRecording();
+        }
+      }
+      return true;
+    }
     catch (error) {
       this.#failed = true; this.#captureTokens.clear();
       emit(this.#diagnostics, 'VAULT_WRITE_FAILED', refs);
@@ -73,7 +104,8 @@ export class ResidentEngine {
     const next = this.#control.then(operation); this.#control = next.catch(() => {}); return next;
   }
   capturePolicy() {
-    const sources = this.#adapter.scopes().filter(source => !this.#closed && !this.#failed && this.#state.recording
+    this.#refreshCapacity();
+    const sources = this.#adapter.scopes().filter(source => !this.#closed && !this.#failed && !this.#capacityExhausted && this.#state.recording
       && this.#adapter.observationEligible(source.scope));
     for (const [scope, entry] of this.#retiredTokens) {
       if (this.#closed || this.#failed || !this.#state.recording || performance.now() >= entry.expires
@@ -101,8 +133,9 @@ export class ResidentEngine {
     });
   }
   captureStates() {
+    this.#refreshCapacity();
     return this.#adapter.scopes().map(source => ({ tabId: source.tabId,
-      state: !this.#state.recording ? 'OFF' : this.#closed || this.#failed
+      state: !this.#state.recording ? 'OFF' : this.#capacityExhausted ? 'VAULT_CAPACITY_EXHAUSTED' : this.#closed || this.#failed
         || !this.#adapter.offersCapture(source.scope) ? 'RECORDING_UNAVAILABLE' : 'READY' }));
   }
   observe(input, { newChatContinuation = false, requestContinuation = false } = {}) {
@@ -123,6 +156,8 @@ export class ResidentEngine {
     return this.#serial(async () => {
       const { eventId, source } = observation;
       this.capturePolicy();
+      if (source.runtimeEpoch !== this.#epoch || !this.#state.recording || this.#closed || this.#failed) reject('CAPTURE_NOT_ENABLED');
+      if (this.#capacityExhausted) { this.#publish(); reject('VAULT_CAPACITY_EXHAUSTED'); }
       const active = this.#captureTokens.get(source.scope);
       const entry = active ?? (newChatContinuation ? this.#newChatTokens.get(source.scope)
         : continuingRequest ? this.#retiredTokens.get(source.scope) : null);
@@ -154,7 +189,9 @@ export class ResidentEngine {
         version = this.#session.observeNormal(observation);
         if (!prior && version.id === eventId) await this.#commit({ operationId: eventId });
       } catch (error) {
-        if (observation.kind === 'request-observed' && !['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
+        if (error?.code === 'VAULT_CAPACITY_EXHAUSTED') {
+          this.#refreshCapacity({ operationId: eventId }); this.#publish();
+        } else if (observation.kind === 'request-observed' && !['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT'].includes(error.message)) {
           this.#failed = true; this.#captureTokens.clear(); this.#publish();
           emit(this.#diagnostics, 'ENGINE_CAPTURE_DISABLED', { operationId: eventId });
         }
@@ -174,7 +211,7 @@ export class ResidentEngine {
     });
   }
   #pumpAnchors() {
-    if (this.#closed || this.#anchorScheduled) return;
+    if (this.#closed || this.#refreshCapacity() || this.#anchorScheduled) return;
     this.#anchorScheduled = true;
     // Even an immediately rejected sponsor must yield between batches so its
     // durable attempt writes cannot monopolize capture replies and controls.
@@ -185,7 +222,7 @@ export class ResidentEngine {
     this.#work.add(work); work.then(() => this.#work.delete(work));
   }
   #runAnchors() {
-    if (this.#closed) return;
+    if (this.#closed || this.#refreshCapacity()) return;
     const versions = this.#session.status().versions;
     // A runtime gets one bounded batch per pending observation, regardless of
     // earlier outages. Cumulative attempts never permanently abandon evidence.
@@ -196,7 +233,7 @@ export class ResidentEngine {
       const version = versions[this.#anchorCursor++];
       if (!version.legacy && version.anchor === 'PENDING') this.#anchorQueue.push({ id: version.id, retry: 0 });
     }
-    while (!this.#closed && this.#anchoring.size < 2 && this.#anchorQueue.length) {
+    while (!this.#closed && !this.#refreshCapacity() && this.#anchoring.size < 2 && this.#anchorQueue.length) {
       const { id, retry } = this.#anchorQueue.shift();
       const version = this.#session.version(id);
       if (!version || version.anchor !== 'PENDING') continue;
@@ -207,6 +244,7 @@ export class ResidentEngine {
           this.#retryAnchor(id, retry);
         }
       }).catch(error => {
+        if (error?.code === 'VAULT_CAPACITY_EXHAUSTED') this.#refreshCapacity({ operationId: id });
         emit(this.#diagnostics, 'CONFIRMATION_PENDING', { operationId: id });
         if (error?.code === 'PENDING_FAST_CONFIRMATION') this.#retryAnchor(id, retry);
       }).finally(() => {
@@ -217,7 +255,7 @@ export class ResidentEngine {
   }
   #retryAnchor(id, retry) {
     const version = this.#session.version(id);
-    if (this.#closed || retry >= 2 || !version || version.anchor !== 'PENDING') return;
+    if (this.#closed || this.#refreshCapacity() || retry >= 2 || !version || version.anchor !== 'PENDING') return;
     // This job can only invoke Algorand sponsorship/confirmation. The saved
     // transaction and cumulative attempt journal remain owned by the session.
     const timer = setTimeout(() => {
@@ -254,11 +292,15 @@ export class ResidentEngine {
       }
       if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
       if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
+      if (this.#refreshCapacity() && command.enabled) reject('VAULT_CAPACITY_EXHAUSTED');
+      const previousRecording = this.#state.recording;
       if (this.#state.recording !== command.enabled) { this.#captureTokens.clear(); this.#newChatTokens.clear(); this.#retiredTokens.clear(); }
       this.#state.recording = command.enabled;
       // Publish revocation immediately; acknowledge the setting only after fsync.
       this.#publish();
-      await this.#commit();
+      if (!await this.#commit() && command.enabled) {
+        this.#state.recording = previousRecording; this.#publish(); reject('VAULT_CAPACITY_EXHAUSTED');
+      }
       const ack = { profile: ENGINE_EVENT_PROFILE, commandId: command.commandId, runtimeEpoch: this.#epoch,
         revision: this.#state.revision, recording: this.#state.recording };
       this.#commands.set(command.commandId, { fingerprint, ack });

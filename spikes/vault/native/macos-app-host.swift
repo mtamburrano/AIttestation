@@ -185,6 +185,7 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
   private var terminationRequested = false
   private let labels = [
     "ENGINE_UNAVAILABLE": "Recording unavailable — restart Attestamp",
+    "VAULT_CAPACITY_EXHAUSTED": "Local evidence capacity exhausted — History and recovery available",
     "CONFIGURATION_CONFLICT": "Chrome configuration needs attention",
     "DISABLED": "Chrome connection disabled — open Integrations",
     "DISCONNECTED": "Chrome disconnected — open Integrations",
@@ -220,7 +221,8 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
     result.target = self; result.representedObject = value; return result
   }
   private func render() {
-    statusItem.button?.title = state == nil ? "Attestamp !" : state?["recording"] as? Bool == true ? "Attestamp ON" : "Attestamp OFF"
+    statusItem.button?.title = state == nil ? "Attestamp !" : state?["recording"] as? Bool == true
+      ? state?["code"] as? String == "VAULT_CAPACITY_EXHAUSTED" ? "Attestamp · Capture unavailable" : "Attestamp ON" : "Attestamp OFF"
     let menu = NSMenu(); menu.delegate = self
     let code = state?["code"] as? String ?? "ENGINE_UNAVAILABLE"
     menu.addItem(item(labels[code]!, nil))
@@ -229,7 +231,8 @@ private final class ResidentMenu: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
     menu.addItem(NSMenuItem.separator())
     let recording = item(state?["recording"] as? Bool == true ? "Turn OFF" : "Turn ON", #selector(toggleRecording))
-    recording.isEnabled = state?["available"] as? Bool == true; menu.addItem(recording)
+    recording.isEnabled = state?["available"] as? Bool == true
+      && (code != "VAULT_CAPACITY_EXHAUSTED" || state?["recording"] as? Bool == true); menu.addItem(recording)
     menu.addItem(NSMenuItem.separator())
     for (title, section) in [("Prompt history…", "history"), ("Integrations…", "integrations"),
       ("Settings and recovery…", "settings"), ("Open free verifier…", "verifier")] {

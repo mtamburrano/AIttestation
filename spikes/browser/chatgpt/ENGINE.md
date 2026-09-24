@@ -125,6 +125,27 @@ durable write, atomic rename and directory fsync. Interrupted migration can leav
 an unreferenced snapshot; retry deterministically migrates the original pointer.
 No old journal, grant, attempt or provider action is executed.
 
+Startup loads and migrates the pointed state without appending a new snapshot;
+the new runtime epoch invalidates prior commands and source tokens. The current
+vault guardrail permits 512 signed records, including internal state and anchor
+records. Fewer than two free slots makes new prompt capture unavailable because
+both exact text and its signed observation must fit. A fixed
+`VAULT_CAPACITY_EXHAUSTED` code distinguishes this condition from parser limits,
+disk errors and uncertain saves. Capture checks the pair before writing text.
+The engine remains available for History, selective export, independent verifier
+access and encrypted recovery; automatic anchor work is suspended. A capture
+whose text and descriptor filled the last slots still has an exact saved receipt,
+even though there is no room for an additional engine snapshot.
+
+At capacity, OFF atomically writes and fsyncs an owner-only
+`engine-recording-off` revocation latch outside the signed evidence inventory.
+The latch can only force OFF. Explicit ON must persist its signed state and pointer
+before removing and fsyncing the latch. An interruption before latch removal
+preserves OFF on restart. No retained evidence is deleted or rewritten to reclaim space.
+Restoring a full recovery snapshot preserves the capacity condition. An earlier
+checkpoint with space is writable after explicit ON, but does not represent newer
+history; the full retained vault and its recovery snapshot must remain preserved.
+
 | Previous state | New preference |
 | --- | --- |
 | No pointer, including a restored recovery vault | OFF |

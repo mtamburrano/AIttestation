@@ -1,6 +1,7 @@
 const PROFILE = 'pap-chatgpt-panel/2';
 export function recordingStatus(state) {
   if (!state) return 'Recording control unavailable';
+  if (state.captureUnavailableReason === 'VAULT_CAPACITY_EXHAUSTED') return `${state.recording ? 'ON requested' : 'OFF'} · Local evidence capacity exhausted. New capture unavailable. Open History to export or save encrypted recovery.`;
   if (!state.recording) return 'Attestamp is OFF';
   if (!state.available) return 'ON requested · Recording unavailable';
   if (state.unavailableSources) return 'ON · Some supported tabs are unavailable';
@@ -25,6 +26,11 @@ export class SidePanelModel {
         if (fresh?.error || fresh?.state?.profile !== PROFILE) throw Error('unavailable');
         this.state = fresh.state; this.error = 'Recording changed in another view. Check the current state and try again.'; return;
       }
+      if (result?.error === 'VAULT_CAPACITY_EXHAUSTED') {
+        const fresh = await this.transport({ kind: 'PAP_PANEL_REQUEST', profile: PROFILE, action: 'STATE' });
+        if (fresh?.error || fresh?.state?.profile !== PROFILE) throw Error('unavailable');
+        this.state = fresh.state; this.error = 'Local evidence capacity exhausted. New capture is unavailable.'; return;
+      }
       if (result?.error || action !== 'OPEN_DASHBOARD' && result?.state?.profile !== PROFILE) throw Error('unavailable');
       if (result.state) this.state = result.state;
       this.error = '';
@@ -37,7 +43,7 @@ export class SidePanelModel {
     return this.refreshing;
   }
   toggle() {
-    if (!this.state?.available || this.busy) return;
+    if (!this.state?.available || this.busy || this.state.captureUnavailableReason && !this.state.recording) return;
     return this.request('COMMAND', { profile: 'pap-resident-command/2', kind: 'SET_RECORDING',
       adapterProfile: this.state.adapterProfile, runtimeEpoch: this.state.runtimeEpoch,
       commandId: crypto.randomUUID(), expectedRevision: this.state.revision, enabled: !this.state.recording });

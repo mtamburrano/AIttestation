@@ -30,7 +30,8 @@ export function integrationStatus(state, installation, connected) {
   const configured = installation.integration === 'ENABLED';
   const active = state.scopes.filter(scope => scope.effectiveRecording === 'ON');
   const unavailable = state.scopes.some(scope => scope.effectiveRecording === 'UNAVAILABLE');
-  const code = !state.available ? 'ENGINE_UNAVAILABLE' : !configured ? installation.integration === 'CONFLICT'
+  const code = !state.available ? 'ENGINE_UNAVAILABLE' : state.captureUnavailableReason === 'VAULT_CAPACITY_EXHAUSTED'
+    ? 'VAULT_CAPACITY_EXHAUSTED' : !configured ? installation.integration === 'CONFLICT'
     ? 'CONFIGURATION_CONFLICT' : 'DISABLED' : !state.recording ? 'OFF' : !connected ? 'DISCONNECTED'
       : unavailable ? 'COVERAGE_UNAVAILABLE' : active.length ? 'SOURCES_READY' : 'WAITING_FOR_TABS';
   return { id: 'chrome-chatgpt', installation: connected ? 'DETECTED' : 'NOT_VERIFIED',
@@ -47,6 +48,7 @@ export async function dashboardState(runtime, filter = {}) {
   const state = runtime.engine.state();
   return { profile: 'pap-dashboard/2', runtimeEpoch: state.runtimeEpoch, revision: state.revision,
     adapterProfile: state.adapterProfile, available: state.available, recording: state.recording,
+    captureUnavailableReason: state.captureUnavailableReason,
     ...(runtime.debugSession ? { debugSession: runtime.debugSession.status() } : {}),
     integration: integrationStatus(state, installation, runtime.browserState() !== null),
     history: promptHistory(runtime.session.receipts.list(), state.operations, filter) };

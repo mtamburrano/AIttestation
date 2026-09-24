@@ -9,6 +9,7 @@ const selected = new Set();
 let attentionOnly = false, historyOffset = 0, actionFeedback = null;
 let acknowledgedDebugSession = null;
 const states = {
+  VAULT_CAPACITY_EXHAUSTED: ['Local evidence capacity exhausted', 'New capture is unavailable. History, selective export, the verifier and encrypted recovery remain available. Turn OFF to stop requesting recording.'],
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
   CONFIGURATION_CONFLICT: ['Connection needs attention', 'An existing Chrome configuration was left untouched. Check your private setup before enabling.'],
   DISABLED: ['Chrome connection disabled', 'Enable the connection below, then open the Attestamp panel in Chrome.'],
@@ -37,7 +38,7 @@ function currentDebugAcknowledgment(debug = state?.debugSession) {
 function controls() {
   for (const button of document.querySelectorAll('button')) button.disabled = busy || closed;
   for (const id of ['enable', 'disable', 'prepare-remove']) $(id).disabled ||= !state?.integration.manageable;
-  for (const id of ['recording']) $(id).disabled ||= !state?.available;
+  for (const id of ['recording']) $(id).disabled ||= !state?.available || Boolean(state?.captureUnavailableReason && !state.recording);
   $('save-export').disabled ||= !acceptedPreview || !currentSelection(acceptedPreview.selection); $('save-support').disabled ||= !supportId;
   $('store').disabled ||= !state?.integration.storeAvailable;
   $('check-update').disabled ||= !state?.integration.updatesAvailable;
@@ -118,7 +119,9 @@ function render(value) {
       : debug.sessionId ? 'Resume debug recording' : 'Start debug recording';
   }
   const [title, help] = states[state.integration.code] ?? states.ENGINE_UNAVAILABLE;
-  $('effective-state').textContent = title; $('effective-help').textContent = help;
+  $('effective-state').textContent = state.integration.code === 'VAULT_CAPACITY_EXHAUSTED'
+    ? `${state.recording ? 'ON requested' : 'OFF'} · ${title}` : title;
+  $('effective-help').textContent = help;
   $('recording').textContent = state.recording ? 'Turn OFF' : 'Turn ON';
   const counts = state.history.counts;
   for (const [id, key] of [['prompt-count', 'prompts'], ['conversation-count', 'conversations'], ['anchor-count', 'pendingAnchors'], ['attention-count', 'needsAttention']]) $(id).textContent = counts[key];

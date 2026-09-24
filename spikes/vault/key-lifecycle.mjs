@@ -249,6 +249,8 @@ export class DurableVault {
   capture(bytes, options) { return this.#require().capture(bytes, options); }
   inspect() { return this.#require().inspect(); }
   get revision() { return this.#require().revision; }
+  get remainingRecordCapacity() { return this.#require().remainingRecordCapacity; }
+  requireRecordCapacity(count) { return this.#require().requireRecordCapacity(count); }
   read(digest) { return this.#require().read(digest); }
   verifyAll() { return this.#require().verifyAll(); }
   exportDisclosure(recordIds, options) { return this.#require().exportDisclosure(recordIds, options); }

@@ -23,6 +23,15 @@ export function lockResidentEngine(directory) {
 export class EngineStateStore {
   constructor(directory, vault) { this.directory = directory; this.vault = vault; }
   async load() {
+    const snapshot = await this.#loadSnapshot();
+    try {
+      const off = await readFile(join(this.directory, 'engine-recording-off'), 'utf8');
+      if (off !== 'OFF\n') throw Error('INVALID_RECORDING_REVOCATION');
+      return { profile: 'pap-resident-state/2', state: { ...migrateRecordingState(snapshot), recording: false } };
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    return snapshot;
+  }
+  async #loadSnapshot() {
     let id;
     try { id = await readFile(join(this.directory, 'engine-pointer'), 'utf8'); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -34,13 +43,26 @@ export class EngineStateStore {
   }
   async save(state) {
     const record = this.vault.capture(Buffer.from(canonical({ profile: 'pap-resident-state/2', state })));
-    const temporary = join(this.directory, `engine-pointer-${randomUUID()}.tmp`);
+    await this.#write('engine-pointer', record.manifest.eventId);
+    if (state.recording) {
+      await unlink(join(this.directory, 'engine-recording-off')).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      await this.#syncDirectory();
+    }
+  }
+  // This latch can only revoke consent. Clearing it requires a new durable ON
+  // record, so exhaustion and interrupted writes cannot silently resume capture.
+  async revokeRecording() { await this.#write('engine-recording-off', 'OFF\n'); }
+  async #syncDirectory() {
+    const directory = await open(this.directory, 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+  }
+  async #write(name, content) {
+    const temporary = join(this.directory, `${name}-${randomUUID()}.tmp`);
     try {
       const file = await open(temporary, 'wx', 0o600);
-      try { await file.writeFile(record.manifest.eventId); await file.sync(); } finally { await file.close(); }
-      await rename(temporary, join(this.directory, 'engine-pointer'));
-      const directory = await open(this.directory, 'r');
-      try { await directory.sync(); } finally { await directory.close(); }
+      try { await file.writeFile(content); await file.sync(); } finally { await file.close(); }
+      await rename(temporary, join(this.directory, name));
+      await this.#syncDirectory();
     } finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   }
 }

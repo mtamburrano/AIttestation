@@ -86,6 +86,11 @@ export class Vault {
   get vaultId() { return this.#db.prepare('SELECT vault_id FROM meta WHERE id=1').get().vault_id; }
   get keyId() { return this.#db.prepare('SELECT key_hash FROM meta WHERE id=1').get().key_hash; }
   get revision() { this.#readIndex(); return this.#revision; }
+  get remainingRecordCapacity() { return LIMITS.objects - this.#readIndex().records.length; }
+  requireRecordCapacity(count = 1) {
+    if (!Number.isSafeInteger(count) || count < 1) fail('INVALID');
+    if (this.remainingRecordCapacity < count) fail('VAULT_CAPACITY_EXHAUSTED');
+  }
   get signingPublicKey() { return this.#signing ? this.#signing.publicKey.export({ format: 'jwk' }).x : null; }
   schemaInfo() {
     if (!this.#db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vault_schema'").get()) {
@@ -192,7 +197,7 @@ export class Vault {
   capture(input, options = {}) {
     const bytes = Buffer.from(input); if (bytes.length > LIMITS.object) fail('LIMIT_EXCEEDED', 'Object size');
     const index = this.#readIndex({ mutable: true });
-    if (index.records.length >= LIMITS.objects) fail('LIMIT_EXCEEDED', 'Record count');
+    if (index.records.length >= LIMITS.objects) fail('VAULT_CAPACITY_EXHAUSTED');
     const digest = objectDigest(bytes), additions = [];
     if (index.objects.some(o => o.digest === digest)) {
       if (!this.read(digest).equals(bytes)) fail('INVALID', 'Deduplication content mismatch');

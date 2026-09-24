@@ -99,7 +99,8 @@ export class ChromeBridgeController {
         emit(this.#diagnostics, 'CAPTURE_GAP');
         if (this.#connected) this.#write({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId,
           result: { profile: CHATGPT_CAPTURE_PROFILE, eventId: observation.eventId, kind: observation.kind,
-            state: error.code === 'UNSUPPORTED_PATH' || ['CAPTURE_NOT_ENABLED', 'CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT',
+            state: error.code === 'VAULT_CAPACITY_EXHAUSTED' ? 'VAULT_CAPACITY_EXHAUSTED'
+              : error.code === 'UNSUPPORTED_PATH' || ['CAPTURE_NOT_ENABLED', 'CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT',
               'INVALID_CAPTURE_OBSERVATION'].includes(error.message) ? 'CAPTURE_REJECTED' : 'SAVE_PENDING' } });
       }).catch(() => {}).finally(() => { this.#observations--; });
       return;

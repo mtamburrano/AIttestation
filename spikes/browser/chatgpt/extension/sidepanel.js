@@ -6,7 +6,7 @@ function render() {
   const state = model.state;
   const update = (id, key, value) => { if ($(id)[key] !== value) $(id)[key] = value; };
   update('recording', 'textContent', state?.recording ? 'Turn OFF' : 'Turn ON');
-  update('recording', 'disabled', model.busy || !state?.available);
+  update('recording', 'disabled', model.busy || !state?.available || Boolean(state?.captureUnavailableReason && !state.recording));
   update('connection', 'textContent', recordingStatus(state));
   update('error', 'textContent', model.error);
 }

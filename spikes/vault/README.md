@@ -121,6 +121,14 @@ records, 256 MiB total decoded evidence, 384 MiB encoded transport and nesting d
 UTF-8/base64url fail closed. Names are never interpreted as paths; no decompression,
 remote references or active content execution is supported.
 
+The record limit is a bounded-storage guardrail. A rejected append reports the
+fixed `VAULT_CAPACITY_EXHAUSTED` code before changing signed evidence. Existing
+history, selective disclosure, verification and encrypted recovery remain usable
+at 512 records. Restoring a full snapshot preserves all records and remains full;
+recovery never drops evidence to manufacture capacity. The resident app opens
+without appending a startup record and supports durable OFF while capture is
+unavailable; see [engine persistence](../browser/chatgpt/ENGINE.md).
+
 Run `node --test test/vault.test.mjs test/key-lifecycle.test.mjs`. Tests use only
 newly created temporary vaults, fresh in-memory or temporary-file test stores, separate synthetic
 credentials and child processes. Coverage includes real SIGKILL boundaries,

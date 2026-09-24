@@ -85,13 +85,14 @@ function showRecording(state) {
     document.documentElement.append(feedback);
   }
   const labels = { READY: 'Attestamp · ON', SAVING: 'Attestamp · Saving prompt…', PROMPT_SAVED: 'Attestamp · Prompt saved',
+    VAULT_CAPACITY_EXHAUSTED: 'Attestamp · Local evidence capacity exhausted · New capture unavailable',
     SAVE_PENDING: 'Attestamp · Save confirmation pending · Check History',
     GAP: 'Attestamp · Recording gap', RECORDING_UNAVAILABLE: 'Attestamp · Recording unavailable' };
   feedback.textContent = labels[state] ?? ''; feedback.hidden = !labels[state];
 }
 function render(state = lastReported) {
   lastReported = state;
-  showRecording(state === 'OFF' ? 'OFF' : !surface().surfaceSupported ? 'RECORDING_UNAVAILABLE' : state);
+  showRecording(['OFF', 'VAULT_CAPACITY_EXHAUSTED'].includes(state) ? state : !surface().surfaceSupported ? 'RECORDING_UNAVAILABLE' : state);
 }
 function policyCurrent(policy) {
   return !stopped && capturePolicy?.token === policy.token && policy.expectedUrl === location.href
@@ -159,7 +160,7 @@ function setCapturePolicy(message) {
     }
     if (!continuing.length) clearTimeout(advisoryTimer);
     if (!next && !bindings.size) transportControl('clear');
-    render(state === 'OFF' ? 'OFF' : latest ? latest.feedback : hadRequest && !next ? 'SAVE_PENDING' : state);
+    render(['OFF', 'VAULT_CAPACITY_EXHAUSTED'].includes(state) ? state : latest ? latest.feedback : hadRequest && !next ? 'SAVE_PENDING' : state);
   } else if (state !== policyState) { policyState = state; render(state); }
   if (capturePolicy && policyCurrent(capturePolicy)) transportControl('arm', activeBinding);
 }

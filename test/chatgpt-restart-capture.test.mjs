@@ -139,24 +139,30 @@ for (const failure of ['sqlite-busy', 'record-limit', 'descriptor', 'post-commit
     }
     const before = f.runtime.session.receipts.list().length;
     f.send('PRIVATE_NEW_CAPTURE_CANARY');
-    await until(() => !f.runtime.engine.state().available);
-    await until(() => f.pages.get(17).feedback.includes('Prompt saved') || f.pages.get(17).feedback.includes('confirmation pending'));
+    await until(() => failure === 'record-limit' ? f.runtime.engine.state().captureUnavailableReason === 'VAULT_CAPACITY_EXHAUSTED'
+      : !f.runtime.engine.state().available);
+    await until(() => f.pages.get(17).feedback.includes('Prompt saved') || f.pages.get(17).feedback.includes('confirmation pending')
+      || f.pages.get(17).feedback.includes('capacity exhausted'));
     const delivery = f.deliveries[0].observation;
     const saved = ['post-commit', 'state-pointer'].includes(failure);
     assert.equal(f.runtime.session.captureReceipt(delivery.eventId, delivery.source).state, saved ? 'PROMPT_SAVED' : 'SAVE_PENDING');
     assert.equal(f.runtime.session.captureReceipt(randomUUID(), delivery.source).state, 'SAVE_PENDING');
     assert.equal(f.pages.get(17).requests.length, 1); assert.equal(f.deliveries.length, 1); assert.equal(f.prevention, 0);
     if (failure === 'sqlite-busy') { assert.equal(thrown.code, 'ERR_SQLITE_ERROR'); assert.equal(thrown.errcode, 5); }
-    if (failure === 'record-limit') assert.equal(thrown.code, 'LIMIT_EXCEEDED');
+    if (failure === 'record-limit') {
+      assert.equal(f.runtime.engine.state().available, true);
+      assert.equal(f.results[0].result.state, 'VAULT_CAPACITY_EXHAUSTED');
+    }
     const report = JSON.parse(debug.export()), events = report.segments.flatMap(segment => segment.events);
     const codes = events.map(event => event.code);
-    for (const code of ['BRIDGE_CONNECTED', 'BRIDGE_AUTHENTICATED', 'BRIDGE_HELLO', 'REQUEST_MATCHED', 'DURABLE_SAVE_DISPATCHED', 'ENGINE_CAPTURE_DISABLED']) assert.ok(codes.includes(code), code);
+    for (const code of ['BRIDGE_CONNECTED', 'BRIDGE_AUTHENTICATED', 'BRIDGE_HELLO', 'REQUEST_MATCHED', 'DURABLE_SAVE_DISPATCHED',
+      failure === 'record-limit' ? 'VAULT_CAPACITY_EXHAUSTED' : 'ENGINE_CAPTURE_DISABLED']) assert.ok(codes.includes(code), code);
     const expected = failure === 'sqlite-busy' ? 'CAPTURE_FAILURE_STORAGE_BUSY'
-      : failure === 'record-limit' ? 'CAPTURE_FAILURE_LIMIT'
+      : failure === 'record-limit' ? 'VAULT_CAPACITY_EXHAUSTED'
         : failure === 'state-pointer' ? 'CAPTURE_FAILURE_STORAGE_FULL' : 'CAPTURE_FAILURE_TYPE';
     assert.ok(codes.includes(expected));
     assert.ok(codes.includes(failure === 'state-pointer' ? 'VAULT_WRITE_FAILED'
-      : ['sqlite-busy', 'record-limit'].includes(failure) ? 'CAPTURE_TEXT_WRITE_FAILED' : 'CAPTURE_DESCRIPTOR_WRITE_FAILED'));
+      : failure === 'record-limit' ? 'VAULT_CAPACITY_EXHAUSTED' : failure === 'sqlite-busy' ? 'CAPTURE_TEXT_WRITE_FAILED' : 'CAPTURE_DESCRIPTOR_WRITE_FAILED'));
     if (failure === 'reconciliation') {
       assert.ok(codes.indexOf('CAPTURE_FAILURE_TYPE') < codes.indexOf('CAPTURE_RECONCILIATION_FAILED'));
       assert.ok(codes.includes('CAPTURE_FAILURE_INVALID'));
@@ -167,11 +173,9 @@ for (const failure of ['sqlite-busy', 'record-limit', 'descriptor', 'post-commit
     locker?.close(); locker = null; vault.capture = capture; vault.inspect = inspect; t.mock.restoreAll();
     assert.equal(f.runtime.session.receipts.list().length, before + Number(saved));
     assert.deepEqual(vault.inspect().records.slice(0, immutable.length), immutable);
-    if (failure !== 'record-limit') {
-      await f.restart();
-      assert.equal(f.runtime.session.captureReceipt(delivery.eventId).state, saved ? 'PROMPT_SAVED' : 'SAVE_PENDING');
-      assert.equal(f.runtime.session.receipts.list().length, before + Number(saved));
-    }
+    await f.restart();
+    assert.equal(f.runtime.session.captureReceipt(delivery.eventId).state, saved ? 'PROMPT_SAVED' : 'SAVE_PENDING');
+    assert.equal(f.runtime.session.receipts.list().length, before + Number(saved));
   });
 }
 
