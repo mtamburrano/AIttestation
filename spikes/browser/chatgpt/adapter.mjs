@@ -65,6 +65,8 @@ export class ChatGPTChromeAdapter {
     });
   }
 
+  get installationId() { return this.#extensionId; }
+
   pair(connection) {
     const invalid = !connection || connection.extensionId !== this.#extensionId
         || connection.adapterProfile !== CHATGPT_ADAPTER_PROFILE

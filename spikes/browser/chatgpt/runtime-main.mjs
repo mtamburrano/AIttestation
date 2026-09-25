@@ -25,6 +25,7 @@ export async function startPackagedChatGPT({
   diagnostics, controllerTimeoutMs, debugSession = null,
   openDashboard, desktopChannel = null,
 } = {}) {
+  keyStore ??= new MacOSKeychainStore();
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
   let installedRelease = null, releaseCandidate = null;
   if (installation === undefined) {
@@ -49,7 +50,7 @@ export async function startPackagedChatGPT({
     const config = parseCanonical((await readFile(new URL('managed-config.json', import.meta.url), 'utf8')).trim(), 4096);
     if (Object.keys(config).join(',') !== 'origin') throw Error('Invalid packaged managed service configuration');
     if (config.origin !== null) {
-      managed = new ManagedAnchoringClient({ origin: config.origin, keyStore: keyStore ?? new MacOSKeychainStore() });
+      managed = new ManagedAnchoringClient({ origin: config.origin, keyStore });
       if (trust.network !== MANAGED_NETWORK || trust.genesis !== MANAGED_GENESIS
           || trust.operators.some(operator => new URL(operator.endpoint).origin === config.origin)) {
         throw Error('Managed service cannot supply independent anchor confirmation');
@@ -61,8 +62,8 @@ export async function startPackagedChatGPT({
   if (!vault) {
     const vaultDirectory = join(supportDirectory, 'vault');
     vault = existsSync(join(vaultDirectory, 'vault.sqlite'))
-      ? DurableVault.open(vaultDirectory, keyStore === undefined ? {} : { keyStore })
-      : DurableVault.create(vaultDirectory, keyStore === undefined ? {} : { keyStore });
+      ? DurableVault.open(vaultDirectory, { keyStore })
+      : DurableVault.create(vaultDirectory, { keyStore });
     ownedVault = true;
   }
   let bridge, dashboard, desktop, recipient, recipientStarting;

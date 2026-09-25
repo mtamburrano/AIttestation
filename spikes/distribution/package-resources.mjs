@@ -1,6 +1,6 @@
 // This contract is loaded from the trusted checkout, never from an inspected
 // bundle. Source membership is separately authenticated by the reviewed digest.
-export const applicationResourceDirectories = ['diagnostics', 'vault', 'anchor', 'browser', 'recipient', 'distribution'];
+export const applicationResourceDirectories = ['core', 'platform', 'diagnostics', 'vault', 'anchor', 'browser', 'recipient', 'distribution'];
 export const managedResourceFiles = ['spikes/managed/client.mjs', 'spikes/managed/protocol.mjs'];
 export const recipientSourceResources = [
   'spikes/vault/format.mjs', 'spikes/vault/records.mjs', 'spikes/anchor/verifier.mjs', 'spikes/anchor/merkle.mjs', 'spikes/anchor/native-verifier.mjs',
