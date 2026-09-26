@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Attestamp for ChatGPT — Firefox",
+  "short_name": "Attestamp",
+  "version": "2.3.5",
+  "description": "Connect supported ChatGPT tabs to the Attestamp desktop app for ON/OFF best-effort prompt recording and private local evidence.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": [
+    "nativeMessaging",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*"
+  ],
+  "background": {
+    "scripts": [
+      "service-worker.js"
+    ]
+  },
+  "action": {
+    "default_title": "Open Attestamp"
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+  },
+  "incognito": "not_allowed",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "fetch-observer.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "sidebar_action": {
+    "default_panel": "sidepanel.html",
+    "default_title": "Attestamp"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "attestamp-chatgpt@attestamp.app",
+      "strict_min_version": "153.0",
+      "data_collection_permissions": {
+        "required": [
+          "websiteContent",
+          "personalCommunications",
+          "websiteActivity",
+          "browsingActivity"
+        ]
+      }
+    }
+  }
+}

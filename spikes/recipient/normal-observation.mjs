@@ -10,9 +10,13 @@ const id = value => bounded(value, 128) && /^[A-Za-z0-9_-]+$/.test(value);
 const invalid = () => { throw Error('INVALID_CAPTURE_OBSERVATION'); };
 
 export function validateCaptureSource(source) {
+  return validateBrowserSource(source, 'pap-chatgpt-chrome/9');
+}
+
+export function validateBrowserSource(source, adapterProfile) {
   keys(source, ['adapterProfile', 'pageContract', 'runtimeEpoch', 'browserSessionId', 'scope',
     'tabId', 'windowId', 'tabEpoch', 'documentId', 'destination']);
-  if (source.adapterProfile !== 'pap-chatgpt-chrome/9' || source.pageContract !== 'chatgpt-web-text/2026-09-21.1'
+  if (source.adapterProfile !== adapterProfile || source.pageContract !== 'chatgpt-web-text/2026-09-21.1'
       || !isUUID(source.scope) || !bounded(source.runtimeEpoch, 128) || !bounded(source.browserSessionId, 128)
       || !Number.isSafeInteger(source.tabId) || source.tabId < 0
       || !Number.isSafeInteger(source.windowId) || source.windowId < 0

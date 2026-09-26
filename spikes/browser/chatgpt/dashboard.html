@@ -27,6 +27,16 @@
 <dl id="integration-facts"></dl><p id="integration-help"></p><div class="actions"><button id="enable">Enable connection</button><button id="disable">Disable connection</button><button id="prepare-remove">Remove connection…</button><button id="store">Open Chrome Web Store</button></div>
 <div id="removal" hidden><p>Evidence and keys will stay on this Mac. You can export selected prompts above before removing the connection.</p><label>Keep your evidence <select id="removal-choice"><option value="keep-local">Keep evidence on this Mac</option><option value="exported">I also saved my selected exports</option></select></label><button id="remove">Confirm removal</button><button id="cancel-remove">Keep connection</button></div>
 <p>ON records supported normal Sends automatically across enabled ChatGPT tabs. It is prospective and best effort; no old drafts or history are imported. OFF stops new recording while saved evidence and bounded pending anchoring remain available.</p>
+</article>
+<article><h3>Coding clients and Firefox</h3><p>Enable each connection explicitly. Coding clients record the exact text exposed by their local submission hook; Firefox records supported ChatGPT request text. Replies, attachments and remote sessions are outside these connections.</p>
+<div id="other-integrations"></div>
+<label>Connection <select id="integration-client"><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="firefox-chatgpt">Firefox · ChatGPT</option></select></label>
+<label>Client executable <input id="integration-executable" autocomplete="off" placeholder="Optional absolute path for a custom installation"></label>
+<label>Script interpreter <input id="integration-interpreter" autocomplete="off" placeholder="Absolute Node or Bun path, only for script installations"></label>
+<label>Configuration folder <input id="integration-root" autocomplete="off" placeholder="Optional absolute path for a custom user configuration"></label>
+<div class="actions"><button id="integration-preview">Review setup or repair</button><button id="integration-disable">Stop recording this connection</button><button id="integration-remove">Review removal</button></div>
+<div id="integration-preview-box" hidden><p id="integration-consent-text"></p><pre id="integration-changes"></pre><label><input id="integration-consent" type="checkbox"> Apply these changes to my user configuration</label><button id="integration-apply" disabled>Apply reviewed changes</button></div>
+<p>Codex requires its own hook trust review. Restart a client if it has not picked up the change. A Firefox extension loaded temporarily is removed at browser restart; persistent installation requires a Mozilla-signed extension. Evidence and keys remain available after disabling or removing a connection.</p>
 </article></section>
 <section id="settings"><h2>Settings</h2><h3>Feedback</h3><p>Successful saves appear quietly in the Chrome panel or recording indicator. System success notifications are off. No prompt text appears in notifications.</p>
 <h3>App updates</h3><p id="update-state">Private builds use the documented private setup. Automatic updates are off.</p><button id="check-update">Check for updates</button><button id="download-update" disabled>Download verified update</button>

@@ -10,7 +10,7 @@ const bridgeError = message => Object.assign(Error(message), { code: 'UNSUPPORTE
 /**
  * Duplicates the accepted Unix socket into a fixed-purpose native validator.
  * On macOS, LOCAL_PEERPID remains attached to the duplicated descriptor; the
- * helper checks the live relay -> signed browser host -> Google Chrome ancestry
+ * helper checks the live relay -> signed browser host -> vendor browser ancestry
  * before returning the browser/platform identity used by the adapter.
  */
 export function attestNativePeer(socket, {
@@ -52,4 +52,3 @@ export function attestNativePeer(socket, {
     });
   });
 }
-

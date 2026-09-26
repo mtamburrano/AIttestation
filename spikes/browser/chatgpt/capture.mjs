@@ -16,13 +16,13 @@ export const REQUEST_DIAGNOSTIC_CODES = Object.freeze(['REQUEST_NOT_OBSERVED', '
   'REQUEST_PROMPT_INVALID', 'REQUEST_MEDIA_IGNORED', 'REQUEST_CONVERSATION_UNAVAILABLE', 'REQUEST_CONVERSATION_DIFFERENT', 'REQUEST_MESSAGE_REJECTED', 'REQUEST_MESSAGE_MISSING', 'REQUEST_DEDUPLICATED', 'DURABLE_SAVE_DISPATCHED']);
 export const CAPTURE_DIAGNOSTIC_CODES = Object.freeze([...CAPTURE_REJECTION_CODES, ...TRANSPORT_DIAGNOSTIC_CODES, ...REQUEST_DIAGNOSTIC_CODES]);
 
-export function validateCapture(input) {
+export function validateCapture(input, { captureProfile = CHATGPT_CAPTURE_PROFILE, validateSource = validateCaptureSource } = {}) {
   const kind = input?.kind;
   if (!['request-observed', 'acknowledgement'].includes(kind)) throw Error('INVALID_CAPTURE_OBSERVATION');
   keys(input, ['profile', 'kind', 'token', 'eventId', 'source',
     ...(kind === 'request-observed' ? ['text', 'inputMethod', 'request'] : ['acknowledgement'])]);
-  if (input.profile !== CHATGPT_CAPTURE_PROFILE || !isUUID(input.token) || !isUUID(input.eventId)) throw Error('INVALID_CAPTURE_OBSERVATION');
-  validateCaptureSource(input.source);
+  if (input.profile !== captureProfile || !isUUID(input.token) || !isUUID(input.eventId)) throw Error('INVALID_CAPTURE_OBSERVATION');
+  validateSource(input.source);
   if (kind === 'request-observed') {
     validateText(input.text); validateRequest(input.request);
     if (!input.text.length || input.inputMethod !== 'provider-request') throw Error('INVALID_CAPTURE_OBSERVATION');
@@ -30,9 +30,9 @@ export function validateCapture(input) {
   return structuredClone(input);
 }
 
-export function validateCaptureReceipt(input) {
+export function validateCaptureReceipt(input, { captureProfile = CHATGPT_CAPTURE_PROFILE, validateSource = validateCaptureSource } = {}) {
   keys(input, ['profile', 'eventId', 'source']);
-  if (input.profile !== CHATGPT_CAPTURE_PROFILE || !isUUID(input.eventId)) throw Error('INVALID_CAPTURE_RECEIPT');
-  validateCaptureSource(input.source);
+  if (input.profile !== captureProfile || !isUUID(input.eventId)) throw Error('INVALID_CAPTURE_RECEIPT');
+  validateSource(input.source);
   return structuredClone(input);
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -29,6 +29,7 @@ async function fixture(t) {
     await copyFile(join(repository, 'spikes/distribution', name), join(root, 'spikes/distribution', name));
   }
   await copyFile(join(repository, 'spikes/vault/format.mjs'), join(root, 'spikes/vault/format.mjs'));
+  await cp(join(repository, 'spikes/coding/vendor'), join(root, 'spikes/coding/vendor'), { recursive: true });
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
   await writeFile(join(root, 'spikes/distribution/THIRD_PARTY_NOTICES.md'), 'Synthetic test notices\n');
   await writeFile(join(moduleRoot, 'go.mod'), 'module synthetic-preflight-test\ngo 1.25.1\n');

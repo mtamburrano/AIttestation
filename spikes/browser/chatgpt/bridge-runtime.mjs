@@ -4,13 +4,17 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { canonical, keys, parseCanonical, unb64 } from '../../vault/format.mjs';
-import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID } from './adapter.mjs';
+import { ChatGPTFirefoxAdapter } from '../firefox/adapter.mjs';
+import { FIREFOX_EXTENSION_ID } from '../shared/profiles.mjs';
+import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID, CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
 import { ChromeBridgeController } from './bridge.mjs';
 import { startRecordingCore } from '../../core/runtime.mjs';
 import { SourceRegistry } from '../../core/source-registry.mjs';
 import { ChatGPTCaptureAdmission } from './admission.mjs';
+import { browserControl } from './control.mjs';
+import { ChatGPTRecordingSession } from './session.mjs';
 import { EngineStateStore, lockResidentEngine } from './engine-store.mjs';
-import { NATIVE_BRIDGE_PROFILE, rendezvousRecord } from './native-host.mjs';
+import { NATIVE_BRIDGE_PROFILE, FIREFOX_NATIVE_BRIDGE_PROFILE, rendezvousRecord } from './native-host.mjs';
 import { LocalDiagnostics, emit } from '../../diagnostics/local.mjs';
 
 const MAX_LINE_BYTES = 512 * 1024;
@@ -81,7 +85,7 @@ const stop = server => new Promise(resolveStop => server.close(resolveStop));
  * Chrome native messaging -> controller -> adapter -> recording session.
  */
 export async function startChromeRecordingRuntime(directory, {
-  extensionId = CHATGPT_EXTENSION_ID, fastTrust, vault = null, vaultKey = null,
+  extensionId = CHATGPT_EXTENSION_ID, firefoxExtensionId = FIREFOX_EXTENSION_ID, fastTrust, vault = null, vaultKey = null,
   collectFast, verifyFast, verifyArchive, managed = null, fault, controllerTimeoutMs = 5_000,
   rendezvousPath = join(directory, 'browser-bridge.json'), socketPath = null,
   now = Date.now, attestPeer = attestNativePeer, peerValidatorPath,
@@ -105,19 +109,28 @@ export async function startChromeRecordingRuntime(directory, {
 
   const connections = new Map();
   let closed = false, integrationDisabled = !integrationEnabled;
-  let currentToken = randomBytes(32), expiresAt = 0, refreshTimer, publishTail = Promise.resolve();
+  let refreshTimer, publishTail = Promise.resolve();
+  const browserTokens = new Map();
   let pairedResolve;
   const paired = new Promise(resolvePaired => { pairedResolve = resolvePaired; });
   const extensionOrigin = `chrome-extension://${extensionId}/`;
+  const firefoxOrigin = `firefox-extension:${firefoxExtensionId}`;
+  const firefoxRendezvousPath = join(directory, 'firefox-bridge.json');
+  const browserDefinitions = new Map([
+    [extensionOrigin, { profile: NATIVE_BRIDGE_PROFILE, product: 'Google Chrome', integrationId: 'chrome-chatgpt', id: extensionId, path: rendezvousPath, Adapter: ChatGPTChromeAdapter }],
+    [firefoxOrigin, { profile: FIREFOX_NATIVE_BRIDGE_PROFILE, product: 'Firefox', integrationId: 'firefox-chatgpt', id: firefoxExtensionId, path: firefoxRendezvousPath, Adapter: ChatGPTFirefoxAdapter }],
+  ]);
   const adapter = new ChatGPTChromeAdapter({ extensionId, diagnostics: events, runtimeEpoch });
   const sources = new SourceRegistry(new ChatGPTCaptureAdmission(adapter, runtimeEpoch));
+  let initialChromePeer = sources.primary;
   const core = await startRecordingCore({ directory, sources, runtimeEpoch, diagnostics: events,
+    createSession: options => new ChatGPTRecordingSession(directory, adapter, options),
     platform: { lock: lockResidentEngine, stateStore: (path, selectedVault) => new EngineStateStore(path, selectedVault) },
     integrations: [
       { id: 'chrome-chatgpt', previouslyEnabled: true, supported: true },
-      { id: 'codex', previouslyEnabled: false, supported: false, unavailableReason: 'SUBMISSION_GENERATION_UNAVAILABLE' },
-      { id: 'claude-code', previouslyEnabled: false, supported: false, unavailableReason: 'SUBMISSION_GENERATION_UNAVAILABLE' },
-      { id: 'firefox-chatgpt', previouslyEnabled: false, supported: false },
+      { id: 'codex', previouslyEnabled: false, supported: true },
+      { id: 'claude-code', previouslyEnabled: false, supported: true },
+      { id: 'firefox-chatgpt', previouslyEnabled: false, supported: true },
     ],
     vault, vaultKey, fastTrust, managed,
     ...(collectFast === undefined ? {} : { collectFast }),
@@ -125,26 +138,29 @@ export async function startChromeRecordingRuntime(directory, {
     ...(verifyArchive === undefined ? {} : { verifyArchive }),
     ...(fault === undefined ? {} : { fault }),
   });
-  const { session, engine } = core;
+  const { session } = core, engine = browserControl(core.engine, adapter);
   engine.subscribe(() => {
     for (const connection of connections.values()) connection.controller?.publishCapturePolicy();
   });
 
-  const publishRendezvous = () => {
+  const publishRendezvous = origin => {
     const operation = publishTail.then(async () => {
       if (closed) return;
-      currentToken = randomBytes(32); expiresAt = now() + RENDEZVOUS_LIFETIME_MS;
-      await atomicOwnerWrite(rendezvousPath, rendezvousRecord({
-        extensionOrigin, socketPath: selectedSocket, runtimeEpoch,
-        expiresAt: new Date(expiresAt).toISOString(), token: currentToken,
-      }));
+      for (const [selectedOrigin, definition] of browserDefinitions) {
+        if (origin && selectedOrigin !== origin) continue;
+        const token = randomBytes(32), expiresAt = now() + RENDEZVOUS_LIFETIME_MS;
+        browserTokens.set(selectedOrigin, { token, expiresAt });
+        await atomicOwnerWrite(definition.path, rendezvousRecord({ profile: definition.profile,
+          extensionOrigin: selectedOrigin, socketPath: selectedSocket, runtimeEpoch,
+          expiresAt: new Date(expiresAt).toISOString(), token }));
+      }
     });
     publishTail = operation.catch(() => {});
     return operation;
   };
 
   const server = createServer({ pauseOnConnect: true }, socket => {
-    if (closed || integrationDisabled || connections.size >= 8) { socket.destroy(); return; }
+    if (closed || connections.size >= 8) { socket.destroy(); return; }
     const connection = { controller: null, source: null, state: null };
     connections.set(socket, connection);
     const connectionEvents = events.scope({ bridgeId: randomUUID() }), connectedAt = performance.now();
@@ -164,19 +180,25 @@ export async function startChromeRecordingRuntime(directory, {
           if (!authenticated) {
             const auth = parseLine(line, true);
             keys(auth, ['kind', 'profile', 'extensionOrigin', 'runtimeEpoch', 'token']);
-            const supplied = unb64(auth.token, 32);
-            if (!currentToken || auth.kind !== 'PAP_BRIDGE_AUTH' || auth.profile !== NATIVE_BRIDGE_PROFILE
-                || auth.extensionOrigin !== extensionOrigin || auth.runtimeEpoch !== runtimeEpoch
-                || now() >= expiresAt || !timingSafeEqual(supplied, currentToken)) return fail();
-            authenticated = true; clearTimeout(authTimer); currentToken = null;
+            const supplied = unb64(auth.token, 32), definition = browserDefinitions.get(auth.extensionOrigin);
+            const credentials = browserTokens.get(auth.extensionOrigin);
+            if (!definition || definition.product !== peerIdentity.browser.product || !credentials
+                || definition.integrationId === 'chrome-chatgpt' && integrationDisabled
+                || auth.kind !== 'PAP_BRIDGE_AUTH' || auth.profile !== definition.profile
+                || auth.runtimeEpoch !== runtimeEpoch || now() >= credentials.expiresAt
+                || !timingSafeEqual(supplied, credentials.token)) return fail();
+            authenticated = true; clearTimeout(authTimer); browserTokens.delete(auth.extensionOrigin);
+            connection.integrationId = definition.integrationId;
             authTimer = setTimeout(() => fail('BRIDGE_HELLO_TIMEOUT'), HELLO_TIMEOUT_MS);
             emit(connectionEvents, 'BRIDGE_AUTHENTICATED', { durationMs: performance.now() - connectedAt });
-            const first = ![...connections.values()].some(value => value.source);
-            const peerAdapter = first ? adapter : new ChatGPTChromeAdapter({ extensionId, diagnostics: connectionEvents, runtimeEpoch });
-            connection.source = first && sources.primary ? sources.primary : sources.attach({
-              integrationId: 'chrome-chatgpt', installationId: extensionId,
+            const useInitial = definition.integrationId === 'chrome-chatgpt' && initialChromePeer;
+            const soleChrome = definition.integrationId === 'chrome-chatgpt' && ![...connections.values()].some(value => value.controller && value.integrationId === 'chrome-chatgpt');
+            const peerAdapter = useInitial || soleChrome ? adapter : new definition.Adapter({ extensionId: definition.id, diagnostics: connectionEvents, runtimeEpoch });
+            connection.source = useInitial ? initialChromePeer : sources.attach({
+              integrationId: definition.integrationId, installationId: definition.id,
               boundary: new ChatGPTCaptureAdmission(peerAdapter, runtimeEpoch),
             });
+            if (useInitial) initialChromePeer = null;
             const capture = engine.captureChannel(connection.source);
             connectionController = new ChromeBridgeController(peerAdapter, message => {
               if (socket.destroyed) throw bridgeError('Browser bridge disconnected');
@@ -187,12 +209,12 @@ export async function startChromeRecordingRuntime(directory, {
               socket.write(body);
             }, { timeoutMs: controllerTimeoutMs, localBrowser: peerIdentity.browser,
               localPlatform: peerIdentity.platform, diagnostics: connectionEvents,
-              engine: { ...capture, state: () => engine.state(), command: (...args) => engine.command(...args) }, openDashboard });
+              engine: { ...browserControl(core.engine, peerAdapter), ...capture }, openDashboard });
             connection.controller = connectionController;
-            socket.write(`${canonical({ kind: 'PAP_BRIDGE_READY', profile: NATIVE_BRIDGE_PROFILE, runtimeEpoch })}\n`);
+            socket.write(`${canonical({ kind: 'PAP_BRIDGE_READY', profile: definition.profile, runtimeEpoch })}\n`);
             // Consume the just-used token. A replacement is published for an
             // independently authenticated peer or reconnect.
-            publishRendezvous().catch(() => socket.destroy());
+            publishRendezvous(auth.extensionOrigin).catch(() => socket.destroy());
             continue;
           }
           const message = parseLine(line);
@@ -217,7 +239,7 @@ export async function startChromeRecordingRuntime(directory, {
       keys(identity, ['browser', 'platform']);
       keys(identity.browser, ['product', 'channel', 'major']);
       keys(identity.platform, ['product', 'arch', 'version']);
-      if (closed || integrationDisabled || socket.destroyed) return fail();
+      if (closed || identity?.browser?.product === 'Google Chrome' && integrationDisabled || socket.destroyed) return fail();
       peerIdentity = structuredClone(identity);
       authTimer = setTimeout(() => fail('BRIDGE_AUTH_TIMEOUT'), AUTH_TIMEOUT_MS);
       socket.on('data', receive); socket.resume();
@@ -241,13 +263,14 @@ export async function startChromeRecordingRuntime(directory, {
   }
 
   return {
-    adapter, session, engine, diagnostics, runtimeEpoch, rendezvousPath, socketPath: selectedSocket,
+    adapter, session, engine, coreEngine: core.engine, sources, diagnostics, runtimeEpoch, rendezvousPath, firefoxRendezvousPath, socketPath: selectedSocket,
     waitForPairing: () => paired,
-    browserState: () => structuredClone([...connections.values()].find(peer => peer.state)?.state ?? null),
+    browserState: () => structuredClone([...connections.values()].find(peer => peer.integrationId === 'chrome-chatgpt' && peer.state)?.state ?? null),
     browserStates: () => [...connections.values()].filter(peer => peer.state).map(peer => structuredClone(peer.state)),
     disableIntegration() {
       integrationDisabled = true; adapter.disconnect();
       for (const [socket, peer] of connections) {
+        if (peer.integrationId !== 'chrome-chatgpt') continue;
         peer.controller?.disconnect(); if (peer.source) sources.detach(peer.source);
         peer.state = null; socket.destroy();
       }
@@ -263,9 +286,9 @@ export async function startChromeRecordingRuntime(directory, {
       await stop(server);
       await publishTail;
       try { await unlink(selectedSocket); } catch {}
-      try {
-        const record = parseCanonical(await readFile(rendezvousPath), 16 * 1024);
-        if (record.runtimeEpoch === runtimeEpoch) await unlink(rendezvousPath);
+      for (const path of [rendezvousPath, firefoxRendezvousPath]) try {
+        const record = parseCanonical(await readFile(path), 16 * 1024);
+        if (record.runtimeEpoch === runtimeEpoch) await unlink(path);
       } catch {}
       await core.close();
     },

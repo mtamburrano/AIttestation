@@ -1,6 +1,6 @@
 # Distribution dependency inspection
 
-The packaging code adds no third-party JavaScript dependency. Node is a bundled
+The app bundles smol-toml 1.9.0 (BSD-3-Clause) for syntax-aware user hook configuration. Its exact npm tarball SHA-512, distributed parser SHA-256 and license are pinned in `spikes/coding/vendor/smol-toml/provenance.json` and verified by the dependency inventory. Consumer setup runs no package manager. Node is a bundled
 runtime, so its embedded components remain dependencies. The generated inventory
 records the exact Node binary digest, runtime version, embedded versions and all
 direct/indirect Go pins with go.sum checksums, the local Go input tree, shipping
@@ -10,6 +10,7 @@ an operator's review; they do not replace independent release approval.
 
 | Component | Pin | Boundary / inspection |
 | --- | --- | --- |
+| smol-toml | 1.9.0 | Bounded local TOML parsing; vendored parser and complete BSD-3-Clause notice; no transitive runtime dependencies |
 | Node | Binary-specific inventory; release baseline v24.21.0 | Local app, HTTP and SQLite; bundled Node-LICENSE.txt and supplemental V8 notices are bound to the inventory |
 | go-algorand-sdk/v2 | v2.12.0 | Transaction/proof encoding and decoding; module MIT notice retained |
 | go-stateproof-verification | v1.0.0 | Archival proof verification; module MIT notice retained |

@@ -45,8 +45,12 @@
       "world": "ISOLATED"
     },
     {
-      "matches": ["https://chatgpt.com/*"],
-      "js": ["fetch-observer.js"],
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "fetch-observer.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }

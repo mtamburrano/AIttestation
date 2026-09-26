@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { AGENT_PROFILE, AGENT_OPT_IN, agentAccount, agentBuildPath, initializeAgent,
   validateAgent, validateAgentLaunch, validateAgentState } from '../spikes/development/agent-environment.mjs';
-import { agentNativeSources, replaceAgentInput } from '../spikes/development/agent-artifact.mjs';
+import { agentNativeSources, replaceAgentInput, specializeAgentArtifact } from '../spikes/development/agent-artifact.mjs';
 import { initializeAgentConfig, resolveAgentConfig } from '../spikes/development/agent-config.mjs';
 import { agentCommand, agentOwnerAction, bootstrapAgent, boundedAgentPreflight, inspectAgentBuild, preflightAgent, probeAgentKeychain } from '../spikes/development/agent.mjs';
 import { agentExtensionReady, probeAgentLogin } from '../spikes/development/agent-browser.mjs';
@@ -273,10 +273,10 @@ test('agent extension readiness follows current Chromium disable reasons and fai
 
 test('agent vault, bridge registration, launch cleanup and key service leave retained resources byte-identical', async t => {
   const f = await fixture(t), requests = [], storage = new Map([['ai.provenance.evidence-vault\0retained', 'untouched']]);
-  let source = await readFile(new URL('../spikes/vault/key-lifecycle.mjs', import.meta.url), 'utf8');
+  let source = await readFile(new URL('../spikes/platform/macos/key-store.mjs', import.meta.url), 'utf8');
   source = replaceAgentInput(source, "const DEFAULT_SERVICE = 'ai.provenance.evidence-vault';",
     `const DEFAULT_SERVICE = ${JSON.stringify(f.paths.keychainService)};`);
-  for (const file of ['format.mjs', 'vault.mjs']) source = source.replace(`'./${file}'`, JSON.stringify(new URL(`../spikes/vault/${file}`, import.meta.url).href));
+  source = source.replace("'../../vault/format.mjs'", JSON.stringify(new URL('../spikes/vault/format.mjs', import.meta.url).href));
   const modulePath = join(f.home, 'isolated-keystore.mjs'); await writeFile(modulePath, source);
   const { MacOSKeychainStore } = await import(pathToFileURL(modulePath));
   const keyStore = new MacOSKeychainStore({ run: request => {
@@ -722,9 +722,34 @@ test('production inputs contain no agent switch and private specializations fail
   for (const name of (await readdir(new URL('../spikes/development', import.meta.url))).filter(name => name.startsWith('agent'))) {
     assert.equal(copyApplicationResource(`spikes/development/${name}`), false);
   }
-  const keyStore = await readFile(new URL('../spikes/vault/key-lifecycle.mjs', import.meta.url), 'utf8');
+  const keyStore = await readFile(new URL('../spikes/platform/macos/key-store.mjs', import.meta.url), 'utf8');
   assert.match(keyStore, /DEFAULT_SERVICE = 'ai.provenance.evidence-vault'/);
   assert.doesNotMatch(keyStore, /AGENT|agent-mode|ai\.provenance\.agent\./);
+});
+
+test('private artifact routes new native connections to its own support namespace', {
+  skip: process.platform !== 'darwin' || process.arch !== 'arm64', timeout: 60000,
+}, async t => {
+  const f = await fixture(t), contents = join(f.home, 'Isolated.app/Contents'), work = join(f.home, 'compile');
+  await mkdir(join(contents, 'MacOS'), { recursive: true }); await mkdir(work);
+  for (const path of ['platform/macos/key-store.mjs', 'browser/firefox/native-host.mjs']) {
+    const destination = join(contents, 'Resources/spikes', path);
+    await mkdir(join(destination, '..'), { recursive: true });
+    await copyFile(new URL(`../spikes/${path}`, import.meta.url), destination);
+  }
+  const compiles = [];
+  await specializeAgentArtifact(new URL('../', import.meta.url).pathname, contents, work, f.agent, f.paths,
+    (command, args) => compiles.push({ command, args }));
+  const hook = compiles.find(value => value.args.includes(join(work, 'agent-hook-receiver.swift')));
+  assert.ok(hook);
+  execFileSync(hook.command, hook.args, { env: { PATH: '/usr/bin:/bin', TMPDIR: work }, timeout: 45000, stdio: 'pipe' });
+  const source = await readFile(join(work, 'agent-hook-receiver.swift'), 'utf8');
+  assert.ok(source.includes(Buffer.from(f.paths.support).toString('base64')));
+  assert.ok(!source.includes('Library/Application Support/Private Provenance'));
+  const relay = await readFile(join(contents, 'Resources/spikes/browser/firefox/native-host.mjs'), 'utf8');
+  assert.ok(relay.includes(JSON.stringify(join(f.paths.support, 'firefox-bridge.json'))));
+  assert.ok(!relay.includes("'Application Support'"));
+  assert.deepEqual(await fileInventory(f.retained), f.baseline);
 });
 
 test('private native variants compile and guard account, explicit launch and isolated locks; production binary has no agent authority', {

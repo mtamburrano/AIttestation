@@ -68,7 +68,9 @@ private func validateBundledProcess(_ process: pid_t, identifier: String, execut
   }
 }
 
-private func validateChrome(_ process: pid_t) throws -> Bundle {
+private func validateBrowser(_ process: pid_t, firefox: Bool) throws -> Bundle {
+  let chromeIdentifier = firefox ? "org.mozilla.firefox" : "com.google.Chrome"
+  let chromeTeamIdentifier = firefox ? "43AQ936H96" : "EQHXZ8M8AV"
   let (dynamicCode, _, information, executable) = try liveCode(for: process)
   let requirementText = "anchor apple generic and identifier \"\(chromeIdentifier)\" and certificate leaf[subject.OU] = \"\(chromeTeamIdentifier)\""
   var requirement: SecRequirement?
@@ -105,9 +107,11 @@ private func validatedIdentity() throws -> [String: Any] {
   try validateBundledProcess(peer, identifier: relayIdentifier,
     executable: contents.appendingPathComponent("MacOS/node"))
   let browserHost = try parentPID(of: peer)
-  try validateBundledProcess(browserHost, identifier: browserHostIdentifier,
-    executable: contents.appendingPathComponent("MacOS/provenance-browser-host"))
-  let chrome = try validateChrome(parentPID(of: browserHost))
+  let (_, _, _, hostPath) = try liveCode(for: browserHost)
+  let firefox = hostPath.lastPathComponent == "provenance-firefox-host"
+  try validateBundledProcess(browserHost, identifier: firefox ? "ai.provenance.consumer.firefox-host" : browserHostIdentifier,
+    executable: contents.appendingPathComponent(firefox ? "MacOS/provenance-firefox-host" : "MacOS/provenance-browser-host"))
+  let chrome = try validateBrowser(parentPID(of: browserHost), firefox: firefox)
   guard let fullVersion = chrome.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
         let first = fullVersion.split(separator: ".").first,
         let major = Int(first), major > 0 else { throw ValidationFailure.rejected }
@@ -116,7 +120,7 @@ private func validatedIdentity() throws -> [String: Any] {
   guard architecture == "arm64" else { throw ValidationFailure.rejected }
   return [
     "profile": validationProfile,
-    "browser": ["product": "Google Chrome", "channel": "stable", "major": major],
+    "browser": ["product": firefox ? "Firefox" : "Google Chrome", "channel": "stable", "major": major],
     "platform": ["product": "macOS", "arch": architecture,
       "version": "\(system.majorVersion).\(system.minorVersion).\(system.patchVersion)"],
   ]

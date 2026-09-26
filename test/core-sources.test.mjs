@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { SourceRegistry } from '../spikes/core/source-registry.mjs';
 import { IntegrationRegistry } from '../spikes/core/integration-registry.mjs';
 import { startRecordingCore } from '../spikes/core/runtime.mjs';
-import { ENGINE_COMMAND_PROFILE } from '../spikes/core/recording-engine.mjs';
+import { ENGINE_COMMAND_PROFILE, RECORDING_CONTROL_PROFILE } from '../spikes/core/recording-engine.mjs';
 import { EngineStateStore, lockResidentEngine } from '../spikes/browser/chatgpt/engine-store.mjs';
 import { ChatGPTCaptureAdmission } from '../spikes/browser/chatgpt/admission.mjs';
 import { ChatGPTChromeAdapter, CHATGPT_EXTENSION_ID, CHATGPT_ADAPTER_PROFILE, CHATGPT_PAGE_CONTRACT } from '../spikes/browser/chatgpt/adapter.mjs';
@@ -36,7 +36,7 @@ async function fixture(t) {
     integrations: peers.map(peer => ({ id: peer.integrationId, previouslyEnabled: true, supported: true })),
     platform: { lock: lockResidentEngine, stateStore: (path, selected) => new EngineStateStore(path, selected) } });
   t.after(async () => { await core.close(); vault.close(); key.fill(0); await rm(root, { recursive: true, force: true }); });
-  const recording = enabled => core.engine.command({ profile: ENGINE_COMMAND_PROFILE, adapterProfile: CHATGPT_ADAPTER_PROFILE,
+  const recording = enabled => core.engine.command({ profile: ENGINE_COMMAND_PROFILE, controlProfile: RECORDING_CONTROL_PROFILE,
     runtimeEpoch: epoch, commandId: randomUUID(), expectedRevision: core.engine.state().revision,
     kind: 'SET_RECORDING', enabled }, { surface: 'desktop' });
   const channels = peers.map(peer => core.engine.captureChannel(peer));

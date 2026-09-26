@@ -3,6 +3,8 @@ import { canonical, parseCanonical, objectDigest, pack, keys, LIMITS } from '../
 import { publicProofDigest, verifyRecord } from '../vault/records.mjs';
 import { PORTABLE_PROFILE, RECIPIENT_LIMITS, verifyPortable, signedObservation, linksCancellation, linksNormalMessage, CLAIMS } from './portable.mjs';
 
+import { promptObservation } from './observation-codecs.mjs';
+
 const wire = value => Buffer.from(canonical(value));
 
 export function storePublicProof(vault, proof) {
@@ -55,9 +57,7 @@ export class LocalReceipts {
       if (!byDigest.has(digest)) byDigest.set(digest, []);
       byDigest.get(digest).push(entry);
     }
-    const groups = observations.filter(entry => entry.value.kind === 'frozen-text-version'
-      || ['pap-chatgpt-observation/2', 'pap-chatgpt-observation/3', 'pap-chatgpt-observation/4', 'pap-chatgpt-observation/5', 'pap-chatgpt-observation/6'].includes(entry.value.profile)
-        && ['normal-send-intent', 'normal-request-observed'].includes(entry.value.kind)).map(({ record, value }) => {
+    const groups = observations.filter(entry => promptObservation(entry.value)).map(({ record, value }) => {
       const text = byId.get(value.textRecord);
       if (!text || text.manifest.evidence[0].objectDigest !== value.textObject) throw Error('Receipt text reference missing');
       const related = (byDigest.get(record.recordDigest) ?? []).filter(entry => entry.value.recordDigest === record.recordDigest
@@ -66,6 +66,7 @@ export class LocalReceipts {
         && (!['normal-message-observed', 'normal-acknowledgement'].includes(entry.value.kind) || linksNormalMessage(entry.record, entry.value, record, value)));
       return { id: record.manifest.eventId, title: `${value.mode} · ${record.manifest.localClaimedTime}`,
         prompt: { mode: value.mode, savedAt: record.manifest.localClaimedTime,
+          observationProfile: value.profile, source: value.source ?? null,
           scope: value.source?.scope ?? value.scope ?? null, destination: value.source?.destination ?? null,
           outcome: related.findLast(entry => entry.value.kind === 'release-outcome')?.value.state ?? null,
           cancelled: related.some(entry => entry.value.kind === 'release-cancelled'),

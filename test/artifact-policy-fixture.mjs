@@ -75,7 +75,8 @@ export async function fixture(t, channel = 'release-candidate') {
       await write(`${bundle}/Contents/Resources/THIRD_PARTY_NOTICES.md`, 'Synthetic notices');
     }
   }
-  for (const name of ['provenance-browser-host', 'provenance-bridge-peer-validator', ...(!signed ? ['provenance-keychain-helper'] : [])]) {
+  for (const name of ['provenance-browser-host', 'provenance-bridge-peer-validator', 'provenance-firefox-host',
+    'provenance-hook-receiver', 'provenance-hook-peer-validator', ...(!signed ? ['provenance-keychain-helper'] : [])]) {
     await write(`${app}/Contents/MacOS/${name}`, binaries);
   }
   for (const name of ['verify', 'fast-verify', 'fast-observe']) await write(`${resources}/spikes/anchor/algorand/bin/${name}`, binaries);
@@ -90,9 +91,23 @@ export async function fixture(t, channel = 'release-candidate') {
     sourceBytes.set(`spikes/${path}`, `// Synthetic approved source for ${path}\n`);
   }
   sourceBytes.set('spikes/browser/chatgpt/runtime-main.mjs', "import './bridge-runtime.mjs';\n");
+  const firefoxManifest = JSON.parse(await readFile(new URL('../spikes/browser/firefox/extension/manifest.json', import.meta.url)));
+  sourceBytes.set('spikes/browser/firefox/extension/manifest.json', canonical(firefoxManifest));
+  for (const path of ['service-worker.js', 'content-script.js', 'fetch-observer.js', 'sidepanel.html', 'sidepanel.js',
+    'sidepanel-model.js', 'sidepanel-channel.js', 'sidepanel.css', ...Object.values(firefoxManifest.icons)]) {
+    sourceBytes.set(`spikes/browser/firefox/extension/${path}`, 'Synthetic Firefox extension bytes');
+  }
+  sourceBytes.set('spikes/coding/SETUP.md', 'Synthetic Attestamp connections guide');
+  sourceBytes.set('spikes/coding/VALIDATION.md', 'Synthetic Attestamp validation coverage');
+  const vendor = JSON.parse(await readFile(new URL('../spikes/coding/vendor/smol-toml/provenance.json', import.meta.url)));
+  for (const path of ['index.cjs', 'LICENSE']) {
+    const bytes = `Synthetic licensed ${path}`; vendor.files[path] = sha256(bytes);
+    sourceBytes.set(`spikes/coding/vendor/smol-toml/${path}`, bytes);
+  }
+  sourceBytes.set('spikes/coding/vendor/smol-toml/provenance.json', canonical(vendor));
   // Keep the synthetic producer independent of the verifier's resource list.
   const recipientSources = ['vault/format.mjs', 'vault/records.mjs', 'anchor/verifier.mjs', 'anchor/merkle.mjs', 'anchor/native-verifier.mjs',
-    'recipient/portable.mjs', 'recipient/normal-observation.mjs', 'recipient/chatgpt-route.mjs', 'recipient/strict-observation.mjs', 'recipient/qualified-observation.mjs', 'recipient/dom-observation.mjs', 'recipient/legacy-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
+    'recipient/portable.mjs', 'recipient/observation-codecs.mjs', 'recipient/firefox-observation.mjs', 'recipient/hook-observation.mjs', 'recipient/normal-observation.mjs', 'recipient/chatgpt-route.mjs', 'recipient/strict-observation.mjs', 'recipient/qualified-observation.mjs', 'recipient/dom-observation.mjs', 'recipient/legacy-observation.mjs', 'recipient/verify.mjs', 'recipient/server.mjs', 'recipient/main.mjs',
     'recipient/recipient.html', 'recipient/recipient.js', 'recipient/recipient.css'];
   for (const path of recipientSources) {
     const bytes = path === 'recipient/main.mjs' ? "import './server.mjs';\n" : `// Synthetic approved source for ${path}\n`;
@@ -109,6 +124,12 @@ export async function fixture(t, channel = 'release-candidate') {
     .map(([path, bytes]) => [path.slice('spikes/browser/chatgpt/extension/'.length), bytes]);
   const { key: ignored, ...upload } = manifest; storeEntries.find(([name]) => name === 'manifest.json')[1] = canonical(upload);
   await write('Chrome-Web-Store-upload.zip', zip(storeEntries));
+  const firefoxEntries = [...sourceBytes].filter(([path]) => path.startsWith('spikes/browser/firefox/extension/'))
+    .map(([path, bytes]) => [path.slice('spikes/browser/firefox/extension/'.length), bytes]);
+  for (const [path, bytes] of firefoxEntries) await write(`Firefox Extension/${path}`, bytes);
+  await write('attestamp-firefox-unsigned.xpi', zip(firefoxEntries));
+  await write('Mac Connections.md', sourceBytes.get('spikes/coding/SETUP.md'));
+  await write('VALIDATION.md', sourceBytes.get('spikes/coding/VALIDATION.md'));
   await json('NativeMessagingHosts/ai.provenance.consumer.json', { name: 'ai.provenance.consumer',
     description: 'Private Provenance fixed-purpose ChatGPT bridge', path: `${output}/${app}/Contents/MacOS/provenance-browser-host`,
     type: 'stdio', allowed_origins: ['chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/'] });
@@ -119,7 +140,7 @@ export async function fixture(t, channel = 'release-candidate') {
   const goFiles = { 'bin/go': binaries, LICENSE: 'Synthetic Go license', PATENTS: 'Synthetic Go patents', VERSION: 'go1.27.1',
     'go.env': 'Synthetic defaults', 'src/runtime/runtime.go': 'Synthetic source', 'pkg/include/textflag.h': 'Synthetic header',
     'lib/time/zoneinfo.zip': 'Synthetic library', ...Object.fromEntries(['compile', 'link', 'asm', 'cgo'].map(name => [`pkg/tool/darwin_arm64/${name}`, binaries])) };
-  const inventory = { profile: 'pap-dependency-inventory/2', javascriptPackages: [],
+  const inventory = { profile: 'pap-dependency-inventory/2', javascriptPackages: [vendor],
     node: { version: 'v24.21.0', sha256: sha256(binaries), components: { node: '24.21.0' }, licenseSha256: sha256('Synthetic Node license') },
     goToolchain: signed ? { sha256: sha256(binaries), version: 'go version go1.27.1 darwin/arm64',
       licenseSha256: sha256(goFiles.LICENSE), patentsSha256: sha256(goFiles.PATENTS), inputs: tree(goFiles) } : null,

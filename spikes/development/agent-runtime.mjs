@@ -34,6 +34,8 @@ try {
   const network = restrictFixtureNetwork(paths.root);
   debugSession = new OwnerDebugSession(paths.control);
   runtime = await startPackagedChatGPT({ supportDirectory: paths.support, keyStore, managed: null, installation,
+    integrationHomes: { codex: join(paths.root, 'codex'), 'claude-code': join(paths.root, 'claude'),
+      firefox: join(paths.root, 'mozilla-native-hosts') },
     diagnostics: debugSession.diagnostics, debugSession,
     collectFast: async () => { throw Error('AGENT_SPONSOR_DISABLED'); },
     desktopChannel: process.argv.includes('--resident') ? { requestFD: 6, responseFD: 7 } : null,

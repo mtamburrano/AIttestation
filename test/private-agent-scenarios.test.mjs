@@ -39,7 +39,7 @@ async function fixture(t) {
     now: () => clock, wait: async ms => { clock += ms; },
     control: async (_paths, action, args = []) => {
       events.push(action);
-      if (action === 'history') return { counts: { prompts: texts.length }, page: { total: texts.length, offset: 0 }, prompts: texts.map((_, index) => row(index)) };
+      if (action === 'history') return { counts: { prompts: texts.length }, page: { total: texts.length, before: Number.MAX_SAFE_INTEGER, next: null }, prompts: texts.map((_, index) => row(index)) };
       if (action === 'receipt') { const index = Number(args[0].split('-')[1]); return preview(index, texts[index]); }
       if (action === 'state') return { runtimeEpoch: String(epoch) };
       if (action === 'dashboard') return { available: true, recording: true, SECRET: 'do not export', history: { counts: { prompts: texts.length } } };
@@ -109,8 +109,8 @@ test('missing capture, extra rows, restart loss and cancellation fail with evide
     const original = f.dependencies.control;
     f.dependencies.signal = abort.signal;
     f.dependencies.control = async (paths, action, args) => {
-      if (action === 'history' && fault === 'missing' && f.texts.length) return { counts: { prompts: 0 }, page: { total: 0, offset: 0 }, prompts: [] };
-      if (action === 'history' && fault === 'extra' && f.texts.length) return { counts: { prompts: 2 }, page: { total: 2, offset: 0 }, prompts: [row(0), row(1)] };
+      if (action === 'history' && fault === 'missing' && f.texts.length) return { counts: { prompts: 0 }, page: { total: 0, before: Number.MAX_SAFE_INTEGER, next: null }, prompts: [] };
+      if (action === 'history' && fault === 'extra' && f.texts.length) return { counts: { prompts: 2 }, page: { total: 2, before: Number.MAX_SAFE_INTEGER, next: null }, prompts: [row(0), row(1)] };
       const result = await original(paths, action, args);
       if (action === 'receipt' && restarted && fault === 'restart-loss') result.texts[0].preview = 'WRONG_BYTES';
       return result;
@@ -187,11 +187,14 @@ test('oracle rejects substring matches, wrong endpoints, wrong identity, truncat
 
 test('history baseline is paginated, bounded and rejects changed totals or duplicate rows', async () => {
   const rows = Array.from({ length: 201 }, (_, index) => row(index));
-  const control = async (_action, [offset]) => ({ counts: { prompts: 201 }, page: { total: 201, offset: Number(offset) },
-    prompts: rows.slice(Number(offset), Number(offset) + 200) });
+  const control = async (_action, [cursor]) => {
+    const end = Number(cursor) || rows.length, start = Math.max(0, end - 5);
+    return { counts: { prompts: 201 }, page: { total: 201, before: Number(cursor) || Number.MAX_SAFE_INTEGER, next: start || null },
+      prompts: rows.slice(start, end) };
+  };
   assert.equal((await scenarioHistory(control)).length, 201);
   await assert.rejects(scenarioHistory(async () => ({ counts: { prompts: 10001 } })), /HISTORY_LIMIT/);
-  await assert.rejects(scenarioHistory(async () => ({ counts: { prompts: 2 }, page: { total: 2, offset: 0 }, prompts: [row(0), row(0)] })), /HISTORY_MISMATCH/);
+  await assert.rejects(scenarioHistory(async () => ({ counts: { prompts: 2 }, page: { total: 2, before: Number.MAX_SAFE_INTEGER, next: null }, prompts: [row(0), row(0)] })), /HISTORY_MISMATCH/);
 });
 
 async function scenarioCDPFixture({ bodyMode = 'inline', deferExistingResponse = false, existingResponseStatus = 200 } = {}) {

@@ -9,11 +9,11 @@ const routeMarker = /\/\/ BEGIN GENERATED CONVERSATION ROUTES[\s\S]*?\/\/ END GE
 async function routeSource() {
   return (await readFile(new URL('../../recipient/chatgpt-route.mjs', directory), 'utf8')).replace(/^export /gm, '');
 }
-async function routeBlock() {
+export async function routeBlock() {
   return '// BEGIN GENERATED CONVERSATION ROUTES\n// Edit recipient/chatgpt-route.mjs, then run build-observer.mjs.\n'
     + await routeSource() + '// END GENERATED CONVERSATION ROUTES';
 }
-async function observerBundle() {
+export async function observerBundle() {
   const modules = [await routeSource()];
   for (const name of files) {
     const source = await readFile(new URL(`transport/${name}.mjs`, directory), 'utf8');
@@ -32,13 +32,5 @@ export async function assertObserverBundle() {
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.includes('--check')) await assertObserverBundle();
-  else {
-    await writeFile(path, await observerBundle());
-    const routes = await routeBlock();
-    for (const target of routeTargets) {
-      const file = new URL(target, directory), source = await readFile(file, 'utf8');
-      if (!routeMarker.test(source)) throw Error('MISSING_ROUTE_BUNDLE');
-      await writeFile(file, source.replace(routeMarker, () => routes));
-    }
-  }
+  else await (await import('../shared/build-extensions.mjs')).buildBrowserExtensions();
 }

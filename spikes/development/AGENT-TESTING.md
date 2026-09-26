@@ -239,6 +239,8 @@ node spikes/development/agent-cli.mjs failure-bundle codex01 --agent-mode
 node spikes/development/agent-cli.mjs stop codex01 --agent-mode
 ```
 
+History returns five prompts per page. Pass `history.page.next` as the numeric cursor for the next page; `0` starts at the newest prompts.
+
 State, dashboard/history queries and recording controls reuse the existing
 authenticated APIs. Recording commands bind to the current engine epoch and
 revision. A conflict fails without replay. Waits use exact conditions:

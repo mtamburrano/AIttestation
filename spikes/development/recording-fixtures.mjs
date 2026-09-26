@@ -54,7 +54,7 @@ export async function recordingProductFixture(directory, scenario, diagnostics, 
         await until(() => /confirmation pending/.test(f.pages.get(17).feedback));
         await until(() => f.results.length > 0);
         check(f.results[0].result.state === 'SAVE_PENDING' && f.deliveries.length === 1);
-        operationId = f.deliveries[0].observation.eventId; observed = 'SAVE_PENDING';
+        operationId = f.deliveries[0].observation.eventId; observed = 'CAPTURE_GAP';
       }
       check(f.runtime.session.receipts.list().length === 0 && f.anchorCalls === 0 && f.confirmed === 0);
       check(!f.results.some(value => value.result.state === 'PROMPT_SAVED'));

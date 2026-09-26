@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { canonical } from '../../vault/format.mjs';
-import { CHATGPT_ADAPTER_PROFILE } from './adapter.mjs';
+import { captureCodec } from '../../recipient/observation-codecs.mjs';
 import { CHATGPT_CAPTURE_PROFILE, validateCapture, validateCaptureReceipt } from './capture.mjs';
 
 const reject = code => { throw Object.assign(Error(code), { code }); };
@@ -12,9 +12,10 @@ export class ChatGPTCaptureAdmission {
   #captureTokens = new Map(); #newChatTokens = new Map(); #retiredTokens = new Map();
   #receipts = new Map();
   constructor(adapter, runtimeEpoch) { this.#adapter = adapter; this.#epoch = runtimeEpoch; }
-  get integrationId() { return 'chrome-chatgpt'; }
+  get integrationId() { return this.#adapter.integrationId; }
   get installationId() { return this.#adapter.installationId; }
-  get controlProfile() { return CHATGPT_ADAPTER_PROFILE; }
+  get controlProfile() { return this.#adapter.controlProfile; }
+  get codec() { return captureCodec(this.#adapter.captureProfile); }
   get capabilities() { return this.#adapter.capabilities; }
   onChange(listener) { return this.#adapter.onChange(listener); }
   scopes() { return this.#adapter.scopes(); }
@@ -46,7 +47,7 @@ export class ChatGPTCaptureAdmission {
     }
     return sources.map(source => {
       if (!this.#captureTokens.has(source.scope)) this.#captureTokens.set(source.scope, { token: randomUUID(), source });
-      return { profile: CHATGPT_CAPTURE_PROFILE, token: this.#captureTokens.get(source.scope).token,
+      return { profile: this.#adapter.captureProfile, token: this.#captureTokens.get(source.scope).token,
         runtimeEpoch: this.#epoch, browserSessionId: source.browserSessionId, scope: source.scope,
         tabId: source.tabId, windowId: source.windowId, tabEpoch: source.tabEpoch,
         expectedUrl: source.url, destination: source.destination };
@@ -54,7 +55,7 @@ export class ChatGPTCaptureAdmission {
   }
   prepare(input, { newChatContinuation = false, requestContinuation = false } = {}) {
     let observation, admittedSource = false;
-    observation = validateCapture(input);
+    observation = validateCapture(input, this.codec);
     const entry = this.#captureTokens.get(observation.source.scope);
     if (entry?.token === observation.token) {
       this.#adapter.assertObservationSource(observation.source);
@@ -98,16 +99,16 @@ export class ChatGPTCaptureAdmission {
     this.#receipts.set(eventId, canonical(source));
   }
   receipt(input, session) {
-    const query = validateCaptureReceipt(input);
+    const query = validateCaptureReceipt(input, this.codec);
     if (this.#receipts.get(query.eventId) !== canonical(query.source)) {
-      return { profile: CHATGPT_CAPTURE_PROFILE, eventId: query.eventId, kind: 'request-observed', state: 'SAVE_PENDING' };
+      return { profile: this.#adapter.captureProfile, eventId: query.eventId, kind: 'request-observed', state: 'SAVE_PENDING' };
     }
     return session.captureReceipt(query.eventId, query.source);
   }
-  save(observation, session) { return session.observeNormal(observation); }
+  save(observation, session) { return session.observe(observation); }
   primary(observation) { return observation.kind === 'request-observed'; }
   saved(observation, version) {
-    return { profile: CHATGPT_CAPTURE_PROFILE, eventId: observation.eventId, kind: observation.kind,
+    return { profile: this.#adapter.captureProfile, eventId: observation.eventId, kind: observation.kind,
       state: 'PROMPT_SAVED', receiptId: version.descriptorId,
       ...(version.id !== observation.eventId ? { deduplicated: true } : {}) };
   }

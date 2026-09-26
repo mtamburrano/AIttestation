@@ -9,12 +9,9 @@ import { verifyAnchorAsync } from '../anchor/verifier.mjs';
 import { FAST_CONFIRM_PROFILE, FAST_CONFIRM_WAIT_MS, collectFastEvidence, verifyFastConfirmationAsync } from '../anchor/algorand/fast-confirm.mjs';
 import { LocalReceipts, storeAnchor, storePublicProof } from '../recipient/local.mjs';
 import { managedError, TRANSACTION_PATTERN } from '../managed/protocol.mjs';
-import { NORMAL_OBSERVATION_PROFILE, validateNormalObservation, validateCaptureSource, validateRequest, isUUID } from '../recipient/normal-observation.mjs';
-import { STRICT_OBSERVATION_PROFILE, validateStrictObservation } from '../recipient/strict-observation.mjs';
-import { QUALIFIED_OBSERVATION_PROFILE, validateQualifiedObservation } from '../recipient/qualified-observation.mjs';
-import { DOM_OBSERVATION_PROFILE, validateDOMObservation } from '../recipient/dom-observation.mjs';
-
-import { LEGACY_NORMAL_OBSERVATION_PROFILE, validateLegacyNormalObservation } from '../recipient/legacy-observation.mjs';
+import { isUUID, validateRequest } from '../recipient/normal-observation.mjs';
+import { observationCodec, captureCodec, sourceCodec, promptObservation, observationMessageKey, RECORDING_EVENT_PROFILE, HISTORICAL_EVENT_PROFILE } from '../recipient/observation-codecs.mjs';
+import { validateHookText } from '../recipient/hook-observation.mjs';
 
 const wire = value => Buffer.from(canonical(value));
 
@@ -57,17 +54,20 @@ export class RecordingSession {
     settled.then(() => { if (this.#tails.get(scope) === settled) this.#tails.delete(scope); });
     return next;
   }
-  #event(value) { return this.vault.capture(wire({ profile: 'pap-chatgpt-observation/1', ...value }), { type: 'observation' }); }
+  #event(value) {
+    const version = this.#version(value.version), codec = observationCodec(version.observationProfile);
+    return this.vault.capture(wire({ profile: codec?.eventProfile ?? HISTORICAL_EVENT_PROFILE, ...value }), { type: 'observation' });
+  }
   #captureRecord(bytes, options, failureCode, eventId) {
     try { return this.vault.capture(bytes, options); }
     catch (error) { emit(this.#diagnostics, failureCode, { operationId: eventId }); throw error; }
   }
-  #normalEvent(value) {
-    return this.#captureRecord(wire(validateNormalObservation({ profile: NORMAL_OBSERVATION_PROFILE, ...value })),
+  #observationEvent(value, codec) {
+    return this.#captureRecord(wire(codec.validate(value)),
       { type: 'observation' }, 'CAPTURE_DESCRIPTOR_WRITE_FAILED', value.eventId);
   }
   #observedVersion(record, value, text) {
-    return { id: value.eventId, observation: true, legacy: value.profile === LEGACY_NORMAL_OBSERVATION_PROFILE,
+    return { id: value.eventId, observation: true, legacy: observationCodec(value.profile)?.legacy === true,
       observationProfile: value.profile, request: value.request, source: value.source, inputMethod: value.inputMethod,
       payload: { text }, scope: value.source.scope,
       mode: value.mode, descriptorId: record.manifest.eventId, recordDigest: record.recordDigest,
@@ -80,8 +80,8 @@ export class RecordingSession {
     let descriptor, alias;
     for (const record of selected) {
       const value = parseCanonical(this.vault.read(record.manifest.evidence[0].objectDigest));
-      if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) descriptor = record;
-      else if (value.kind === 'request-deduplicated' && value.eventId === id) alias = { record, value };
+      if (promptObservation(value)) descriptor = record;
+      else if (['request-deduplicated', 'hook-deduplicated'].includes(value.kind) && value.eventId === id) alias = { record, value };
     }
     if (!descriptor && alias) {
       const version = this.#loadVersion(alias.value.version);
@@ -112,12 +112,10 @@ export class RecordingSession {
       if (checked.integrity !== 'VALID' || checked.keyAttribution !== 'SIGNATURE_VALID') throw Error('INVALID_CAPTURE_HISTORY');
       const value = parseCanonical(bytes);
       observations.push({ record, value });
-      if (![NORMAL_OBSERVATION_PROFILE, STRICT_OBSERVATION_PROFILE, QUALIFIED_OBSERVATION_PROFILE, DOM_OBSERVATION_PROFILE, LEGACY_NORMAL_OBSERVATION_PROFILE].includes(value.profile)) continue;
-      (value.profile === NORMAL_OBSERVATION_PROFILE ? validateNormalObservation
-        : value.profile === STRICT_OBSERVATION_PROFILE ? validateStrictObservation
-        : value.profile === QUALIFIED_OBSERVATION_PROFILE ? validateQualifiedObservation
-        : value.profile === DOM_OBSERVATION_PROFILE ? validateDOMObservation : validateLegacyNormalObservation)(value);
-      if (['normal-send-intent', 'normal-request-observed'].includes(value.kind)) {
+      const codec = observationCodec(value.profile);
+      if (!codec) continue;
+      codec.validate(value);
+      if (promptObservation(value)) {
         const text = byId.get(value.textRecord);
         if (!text || text.manifest.evidence[0].objectDigest !== value.textObject
             || text.manifest.signingPublicKey !== record.manifest.signingPublicKey
@@ -125,7 +123,8 @@ export class RecordingSession {
         const content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(this.vault.read(value.textObject));
         const version = Object.assign(preserved.get(value.eventId) ?? {}, this.#observedVersion(record, value, content));
         this.#versions.set(value.eventId, version);
-        if (value.request && !this.#providerMessages.has(value.request.messageId)) this.#providerMessages.set(value.request.messageId, version);
+        const messageKey = observationMessageKey(value);
+        if (messageKey && !this.#providerMessages.has(messageKey)) this.#providerMessages.set(messageKey, version);
       } else {
         const version = this.#versions.get(value.eventId);
         if (!version || value.recordDigest !== version.recordDigest || canonical(value.source) !== canonical(version.source)
@@ -141,10 +140,21 @@ export class RecordingSession {
     }
     for (const { record, value } of observations) {
       const version = this.#versions.get(value.version);
-      if (!version?.observation || value.profile !== 'pap-chatgpt-observation/1' || value.recordDigest !== version.recordDigest) continue;
+      if (!version?.observation || ![HISTORICAL_EVENT_PROFILE, RECORDING_EVENT_PROFILE].includes(value.profile) || value.recordDigest !== version.recordDigest) continue;
+      if (value.kind === 'hook-deduplicated') {
+        keys(value, ['profile', 'kind', 'version', 'recordDigest', 'eventId', 'source', 'inputMethod']);
+        sourceCodec(value.source).validateSource(value.source);
+        if (!isUUID(value.eventId) || this.#versions.has(value.eventId)
+            || !observationCodec(version.observationProfile)?.hook
+            || observationMessageKey({ profile: version.observationProfile, source: value.source }) !== observationMessageKey({ profile: version.observationProfile, source: version.source })
+            || record.manifest.signingPublicKey !== byId.get(version.descriptorId)?.manifest.signingPublicKey) throw Error('INVALID_CAPTURE_HISTORY');
+        if (this.#aliases.size >= 64) this.#aliases.clear();
+        this.#aliases.set(value.eventId, { version, source: value.source, inputMethod: value.inputMethod });
+        continue;
+      }
       if (value.kind === 'request-deduplicated') {
         keys(value, ['profile', 'kind', 'version', 'recordDigest', 'eventId', 'source', 'request', 'inputMethod']);
-        validateCaptureSource(value.source); validateRequest(value.request);
+        sourceCodec(value.source).validateSource(value.source); validateRequest(value.request);
         if (!isUUID(value.eventId) || this.#versions.has(value.eventId)
             || record.manifest.signingPublicKey !== byId.get(version.descriptorId)?.manifest.signingPublicKey
             || value.inputMethod !== 'provider-request' || value.request.messageId !== version.request?.messageId
@@ -173,8 +183,8 @@ export class RecordingSession {
     }
   }
 
-  observeNormal(input) {
-    try { return this.#observeNormal(input); }
+  observe(input) {
+    try { return this.#observe(input); }
     catch (error) {
       if (['CAPTURE_REPLAY_CONFLICT', 'CAPTURE_CORRELATION_CONFLICT', 'Legacy evidence is read-only'].includes(error.message)) throw error;
       const refs = { operationId: input?.eventId };
@@ -192,29 +202,41 @@ export class RecordingSession {
       throw error;
     }
   }
-  #observeNormal(input) {
+  #observe(input) {
+    const codec = captureCodec(input.profile);
     const { eventId, source, text } = input;
     this.#loadVersion(eventId);
     const alias = this.#aliases.get(eventId);
     if (alias && input.kind === 'acknowledgement') throw Error('CAPTURE_CORRELATION_CONFLICT');
     if (alias && canonical(alias.source) !== canonical(source)) throw Error('CAPTURE_REPLAY_CONFLICT');
     const prior = alias?.version ?? this.#versions.get(eventId);
-    if (prior && !alias && prior.observationProfile !== NORMAL_OBSERVATION_PROFILE) throw Error('Legacy evidence is read-only');
+    if (prior && !alias && prior.observationProfile !== codec.profile) throw Error('Legacy evidence is read-only');
     if (prior && (!prior.observation || !alias && canonical(prior.source) !== canonical(source)
-        || input.kind === 'request-observed' && (prior.payload.text !== text || (alias?.inputMethod ?? prior.inputMethod) !== input.inputMethod
-          || canonical(alias?.request ?? prior.request) !== canonical(input.request)))) throw Error('CAPTURE_REPLAY_CONFLICT');
+        || ['request-observed', 'hook-prompt-observed'].includes(input.kind) && (prior.payload.text !== text || (alias?.inputMethod ?? prior.inputMethod) !== input.inputMethod
+          || canonical(alias?.request ?? prior.request ?? null) !== canonical(input.request ?? null)))) throw Error('CAPTURE_REPLAY_CONFLICT');
     if (input.kind === 'acknowledgement') {
       if (!prior || prior.request.conversationId !== null && prior.request.conversationId !== input.acknowledgement.conversationId
           || prior.acknowledgement && canonical(prior.acknowledgement) !== canonical(input.acknowledgement)) throw Error('CAPTURE_CORRELATION_CONFLICT');
       if (!prior.acknowledgement) {
-        this.#normalEvent({ kind: 'normal-acknowledgement', eventId, source, recordDigest: prior.recordDigest,
-          acknowledgement: input.acknowledgement, correlation: 'SAME_FETCH_CALL', providerReceipt: 'UNKNOWN' });
+        this.#observationEvent({ profile: codec.profile, kind: 'normal-acknowledgement', eventId, source, recordDigest: prior.recordDigest,
+          acknowledgement: input.acknowledgement, correlation: 'SAME_FETCH_CALL', providerReceipt: 'UNKNOWN' }, codec);
         prior.acknowledgement = input.acknowledgement;
       }
       return this.#public(prior);
     }
     if (prior) return this.#public(prior);
-    const repeated = this.#loadVersion(input.request.messageId, 'message');
+    codec.validateSource(source); validateHookText(text);
+    if (!isUUID(eventId)) throw Error('INVALID_CAPTURE_OBSERVATION');
+    const messageKey = observationMessageKey({ ...input, profile: codec.profile });
+    const repeated = messageKey ? this.#loadVersion(messageKey, 'message') : null;
+    if (repeated && codec.hook) {
+      if (repeated.payload.text !== text || repeated.observationProfile !== codec.profile) throw Error('CAPTURE_REPLAY_CONFLICT');
+      this.#captureRecord(wire({ profile: codec.eventProfile, kind: 'hook-deduplicated', version: repeated.id,
+        recordDigest: repeated.recordDigest, eventId, source, inputMethod: input.inputMethod }), { type: 'observation' }, 'CAPTURE_ALIAS_WRITE_FAILED', eventId);
+      if (this.#aliases.size >= 64) this.#aliases.clear();
+      this.#aliases.set(eventId, { version: repeated, source: structuredClone(source), inputMethod: input.inputMethod });
+      return this.#public(repeated);
+    }
     if (repeated) {
       // Provider message IDs survive fetch retries, route changes, tabs and
       // engine restarts. A retry cannot rewrite the original source or text.
@@ -223,7 +245,7 @@ export class RecordingSession {
         throw Error('CAPTURE_REPLAY_CONFLICT');
       }
       emit(this.#diagnostics, 'REQUEST_DEDUPLICATED', { operationId: eventId });
-      this.#captureRecord(wire({ profile: 'pap-chatgpt-observation/1', kind: 'request-deduplicated',
+      this.#captureRecord(wire({ profile: codec.eventProfile, kind: 'request-deduplicated',
         version: repeated.id, recordDigest: repeated.recordDigest, eventId, source,
         request: input.request, inputMethod: input.inputMethod }), { type: 'observation' }, 'CAPTURE_ALIAS_WRITE_FAILED', eventId);
       if (this.#aliases.size >= 64) this.#aliases.clear();
@@ -235,14 +257,15 @@ export class RecordingSession {
     // before either synchronous write; unrelated later writes still fail closed.
     this.vault.requireRecordCapacity(2);
     const captured = this.#captureRecord(Buffer.from(text, 'utf8'), undefined, 'CAPTURE_TEXT_WRITE_FAILED', eventId);
-    const value = { profile: NORMAL_OBSERVATION_PROFILE, kind: 'normal-request-observed', eventId, source,
-      inputMethod: input.inputMethod, request: input.request,
+    const value = { profile: codec.profile, kind: codec.hook ? 'hook-prompt-observed' : 'normal-request-observed', eventId, source,
+      inputMethod: input.inputMethod, ...(codec.transport ? { request: input.request } : {}),
       textRecord: captured.manifest.eventId, textObject: captured.manifest.evidence[0].objectDigest,
-      mode: 'ON', boundary: 'provider_fetch', coverage: 'UTF8_NEW_USER_MESSAGE',
+      mode: 'ON', boundary: codec.hook ? 'synchronous_user_prompt_submit' : 'provider_fetch',
+      coverage: codec.hook ? 'EXACT_HOOK_PROMPT_UTF8' : 'UTF8_NEW_USER_MESSAGE',
       releaseClass: 'RETROSPECTIVE_OBSERVATION', attachments: 'UNSUPPORTED', providerReceipt: 'UNKNOWN' };
-    const record = this.#normalEvent(value), version = this.#observedVersion(record, value, text);
+    const record = this.#observationEvent(value, codec), version = this.#observedVersion(record, value, text);
     if (this.#versions.size >= 64) { this.#versions.clear(); this.#providerMessages.clear(); this.#aliases.clear(); }
-    this.#versions.set(eventId, version); this.#providerMessages.set(input.request.messageId, version);
+    this.#versions.set(eventId, version); if (messageKey) this.#providerMessages.set(messageKey, version);
     emit(this.#diagnostics, 'VAULT_CAPTURED', { operationId: eventId, captureId: captured.manifest.eventId });
     emit(this.#diagnostics, 'NORMAL_PROMPT_SAVED', { operationId: eventId, captureId: captured.manifest.eventId });
     return this.#public(version);
@@ -256,11 +279,12 @@ export class RecordingSession {
   get versionCount() { return this.vault.historyCounts().prompts; }
   captureReceipt(eventId, source = null) {
     if (!isUUID(eventId)) throw Error('INVALID_CAPTURE_RECEIPT');
-    if (source) validateCaptureSource(source);
+    if (source) sourceCodec(source).validateSource(source);
     this.#loadVersion(eventId);
     const alias = this.#aliases.get(eventId), version = alias?.version ?? this.#versions.get(eventId);
     const saved = version && (!source || canonical(alias?.source ?? version.source) === canonical(source));
-    return { profile: 'pap-chatgpt-capture/5', eventId, kind: 'request-observed',
+    const codec = source ? sourceCodec(source) : observationCodec(version?.observationProfile);
+    return { profile: codec?.captureProfile ?? null, eventId, kind: codec?.hook ? 'hook-prompt-observed' : 'request-observed',
       state: saved ? 'PROMPT_SAVED' : 'SAVE_PENDING',
       ...(saved ? { receiptId: version.descriptorId, ...(alias ? { deduplicated: true } : {}) } : {}) };
   }

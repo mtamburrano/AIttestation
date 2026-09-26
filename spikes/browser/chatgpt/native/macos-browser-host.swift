@@ -3,9 +3,15 @@ import Foundation
 import Security
 
 private let applicationIdentifier = "ai.provenance.consumer.host"
+#if FIREFOX
+private let chromeIdentifier = "org.mozilla.firefox"
+private let chromeTeamIdentifier = "43AQ936H96"
+private let extensionOrigin = "attestamp-chatgpt@attestamp.app"
+#else
 private let chromeIdentifier = "com.google.Chrome"
 private let chromeTeamIdentifier = "EQHXZ8M8AV"
 private let extensionOrigin = "chrome-extension://medilhopfckldjgdnchfkpmfmfnkadca/"
+#endif
 
 private enum HostFailure: Error { case rejected, spawn }
 
@@ -65,7 +71,11 @@ private func ownedHome() throws -> String {
 private func runFixedRelay(origin: String) throws -> Int32 {
   let contents = Bundle.main.bundleURL.appendingPathComponent("Contents", isDirectory: true)
   let node = contents.appendingPathComponent("MacOS/node")
+  #if FIREFOX
+  let script = contents.appendingPathComponent("Resources/spikes/browser/firefox/native-host.mjs")
+  #else
   let script = contents.appendingPathComponent("Resources/spikes/browser/chatgpt/native-host.mjs")
+  #endif
   let process = Process()
   process.executableURL = node
   process.arguments = [script.path, origin]
@@ -81,12 +91,17 @@ private func runFixedRelay(origin: String) throws -> Int32 {
 
 do {
   signal(SIGPIPE, SIG_IGN)
+  #if FIREFOX
+  guard CommandLine.arguments.count == 3, CommandLine.arguments[2] == extensionOrigin,
+        CommandLine.arguments[1].hasSuffix("/ai.provenance.consumer.firefox.json") else { throw HostFailure.rejected }
+  #else
   guard CommandLine.arguments.count == 2, CommandLine.arguments[1] == extensionOrigin else {
     throw HostFailure.rejected
   }
+  #endif
   try validateSignedApplication()
   _ = try parentChromeBundle()
-  let status = try runFixedRelay(origin: CommandLine.arguments[1])
+  let status = try runFixedRelay(origin: extensionOrigin)
   exit(status)
 } catch {
   exit(EXIT_FAILURE)

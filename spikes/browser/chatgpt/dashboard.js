@@ -8,6 +8,7 @@ let state, busy = false, closed = false, acceptedPreview = null, selectionRevisi
 const selected = new Set();
 let attentionOnly = false, historyBefore = Number.MAX_SAFE_INTEGER, historyCursors = [], historySearch = '', actionFeedback = null;
 let acknowledgedDebugSession = null;
+let integrationPlan = null;
 const states = {
   VAULT_CAPACITY_EXHAUSTED: ['Local evidence capacity exhausted', 'New capture is unavailable. History, selective export, the verifier and encrypted recovery remain available. Turn OFF to stop requesting recording.'],
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
@@ -48,6 +49,7 @@ function controls() {
   const canStartFresh = state?.available && state?.debugSession?.state === 'STOPPED' && state.debugSession.sessionId;
   $('debug-session-acknowledge').disabled = busy || closed || !canStartFresh;
   $('debug-session-new').disabled ||= !canStartFresh || !currentDebugAcknowledgment();
+  $('integration-apply').disabled ||= !integrationPlan || !$('integration-consent').checked;
 }
 function action(id, run) {
   $(id).onclick = async () => {
@@ -156,6 +158,14 @@ function render(value) {
     $('integration-facts').append(node('dt', label), node('dd', text));
   }
   $('integration-help').textContent = `${integration.releaseClass ?? 'DEVELOPMENT'} · ${help} Existing Chrome settings are preserved. Removing the connection retains evidence and keys; remove the extension separately in Chrome if desired.`;
+  $('other-integrations').replaceChildren(...(state.integrations ?? []).map(value => {
+    const label = { NOT_CONFIGURED: 'Not configured', CONFIGURATION_CONFLICT: 'Settings changed; review setup again',
+      REPAIR_REQUIRED: 'Setup was interrupted; review setup again', TRUST_REQUIRED: 'Review the hook in Codex, then restart the client',
+      CONFIGURED: 'Configured; restart the client after changes', EXTENSION_INSTALL_REQUIRED: 'Native connection configured; install the Firefox extension separately' }[value.state] ?? 'Connection status unavailable';
+    const row = node('p', `${{ codex: 'Codex', 'claude-code': 'Claude Code', 'firefox-chatgpt': 'Firefox · ChatGPT' }[value.id]}: ${label}. `
+      + (value.enabled ? value.recording ? 'Included in ON recording.' : 'Enabled; global recording is OFF.' : 'Recording disabled.'));
+    return row;
+  }));
 
 }
 async function refresh() {
@@ -283,3 +293,35 @@ action('close', async () => {
 const timer = setInterval(() => { if (!busy && !closed) void refresh(); }, 2000);
 addEventListener('beforeunload', () => { closed = true; clearInterval(timer); invalidatePreview(); clearRecovery(); });
 void refresh();
+
+function clearIntegrationPreview() {
+  integrationPlan = null; $('integration-preview-box').hidden = true; $('integration-consent').checked = false; controls();
+}
+for (const id of ['integration-client', 'integration-executable', 'integration-interpreter', 'integration-root']) $(id).addEventListener('input', clearIntegrationPreview);
+$('integration-consent').addEventListener('change', controls);
+async function previewIntegration(action) {
+  clearIntegrationPreview();
+  const client = $('integration-client').value;
+  const data = { client, action };
+  if (client !== 'firefox-chatgpt' && action === 'install') {
+    if ($('integration-executable').value.trim()) data.clientExecutable = $('integration-executable').value.trim();
+    if ($('integration-interpreter').value.trim()) data.clientInterpreter = $('integration-interpreter').value.trim();
+    if ($('integration-root').value.trim()) data.configRoot = $('integration-root').value.trim();
+  }
+  const plan = await api('/integrations/preview', data);
+  if (!plan.operationId) { notify('This connection is not configured.'); return; }
+  integrationPlan = plan; $('integration-preview-box').hidden = false;
+  $('integration-consent-text').textContent = plan.consent;
+  $('integration-changes').textContent = JSON.stringify(plan.changes, null, 2);
+}
+action('integration-preview', () => previewIntegration('install'));
+action('integration-remove', () => previewIntegration('remove'));
+action('integration-disable', async () => {
+  clearIntegrationPreview(); await api('/integrations/disable', { client: $('integration-client').value }); await refresh();
+});
+action('integration-apply', async () => {
+  if (!integrationPlan || !$('integration-consent').checked) return;
+  const selected = integrationPlan; clearIntegrationPreview();
+  await api('/integrations/apply', { operationId: selected.operationId, consent: true }); await refresh();
+  notify('Reviewed changes applied. Complete the client trust or extension installation step if required.');
+});

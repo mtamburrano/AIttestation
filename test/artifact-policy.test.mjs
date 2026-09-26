@@ -195,6 +195,33 @@ test('panel permission, entrypoint and isolation policy reject even a consistent
   }
 });
 
+test('Firefox archive bytes and consistently resealed identity changes are rejected', async t => {
+  for (const mutate of [null, manifest => { manifest.browser_specific_settings.gecko.id = 'unrelated@example.invalid'; },
+    manifest => { manifest.permissions.push('tabs'); }]) {
+    const f = await fixture(t), base = `${resources}/spikes/browser/firefox/extension`;
+    const archive = storeArchive(await readFile(join(f.output, 'attestamp-firefox-unsigned.xpi')));
+    if (mutate) {
+      const manifest = await f.readJSON(`${base}/manifest.json`); mutate(manifest);
+      const bytes = canonical(manifest); archive.set('manifest.json', Buffer.from(bytes));
+      await f.write(`${base}/manifest.json`, bytes); await f.write('Firefox Extension/manifest.json', bytes);
+      f.source.files.find(item => item.path === 'spikes/browser/firefox/extension/manifest.json').sha256 = sha256(bytes);
+      f.policy.sourceDigest = f.source.sha256 = sha256(canonical(f.source.files));
+    } else archive.set('service-worker.js', Buffer.from('stale Firefox worker'));
+    await f.write('attestamp-firefox-unsigned.xpi', zip([...archive])); await f.seal();
+    rejected(await f.run(), 'STORE_PACKAGE');
+  }
+});
+
+test('a substituted parser version is rejected even with matching source and dependency inventories', async t => {
+  const f = await fixture(t), vendor = f.inventory.javascriptPackages[0];
+  vendor.version = '9.9.9'; const bytes = canonical(vendor), path = 'spikes/coding/vendor/smol-toml/provenance.json';
+  await f.write(`${resources}/${path}`, bytes); f.source.files.find(item => item.path === path).sha256 = sha256(bytes);
+  f.policy.sourceDigest = f.source.sha256 = sha256(canonical(f.source.files));
+  f.provenance.dependencyDigest = sha256(canonical(f.inventory));
+  await f.json('dependency-inventory.json', f.inventory); await f.seal();
+  rejected(await f.run(), 'INVENTORY_LINKAGE');
+});
+
 test('known secret filenames and renamed PEM, DER, JWK, token and approval data are rejected without leaking contents', async t => {
   const key = generateKeyPairSync('ed25519'), marker = 'NEVER-PRINT-THIS-PRIVATE-MARKER';
   for (const [path, bytes] of [

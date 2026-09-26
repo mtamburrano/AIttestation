@@ -28,8 +28,9 @@ export function promptHistory(receipts, operations, { attentionOnly = false, off
 
 export function integrationStatus(state, installation, connected) {
   const configured = installation.integration === 'ENABLED';
-  const active = state.scopes.filter(scope => scope.effectiveRecording === 'ON');
-  const unavailable = state.scopes.some(scope => scope.effectiveRecording === 'UNAVAILABLE');
+  const scopes = state.scopes.filter(scope => !scope.adapterId || scope.adapterId === 'chrome-chatgpt');
+  const active = scopes.filter(scope => scope.effectiveRecording === 'ON');
+  const unavailable = scopes.some(scope => scope.effectiveRecording === 'UNAVAILABLE');
   const code = !state.available ? 'ENGINE_UNAVAILABLE' : state.captureUnavailableReason === 'VAULT_CAPACITY_EXHAUSTED'
     ? 'VAULT_CAPACITY_EXHAUSTED' : !configured ? installation.integration === 'CONFLICT'
     ? 'CONFIGURATION_CONFLICT' : 'DISABLED' : !state.recording ? 'OFF' : !connected ? 'DISCONNECTED'
@@ -58,5 +59,9 @@ export async function dashboardState(runtime, filter = {}) {
     captureUnavailableReason: state.captureUnavailableReason,
     ...(runtime.debugSession ? { debugSession: runtime.debugSession.status() } : {}),
     integration: integrationStatus(state, installation, runtime.browserState() !== null),
+    integrations: runtime.integrationManager ? (await runtime.integrationManager.status()).map(value => ({ ...value,
+      enabled: state.integrations?.find(integration => integration.id === value.id)?.enabled === true,
+      recording: state.recording,
+      connected: value.id === 'firefox-chatgpt' && runtime.browserStates().some(peer => peer.adapterProfile === 'pap-chatgpt-firefox/1') })) : [],
     history };
 }

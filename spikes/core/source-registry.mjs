@@ -1,21 +1,20 @@
 const reject = code => { throw Object.assign(Error(code), { code }); };
-const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(value);
+const identifier = value => typeof value === 'string' && /^[A-Za-z0-9._@-]{1,128}$/.test(value);
 
 // Handles are local capabilities, never deserialized peer IDs. A replacement
 // connection cannot inherit an old channel or its queued admissions.
 export class SourceRegistry {
-  #peers = new Set(); #listeners = new Set(); #primary; #controlProfile; #integrations;
+  #peers = new Set(); #listeners = new Set(); #primary; #integrations;
   constructor(primary = null) {
     if (primary) this.#primary = this.attach({ integrationId: primary.integrationId, installationId: primary.installationId, boundary: primary });
   }
-  get controlProfile() { return this.#controlProfile; }
-  get capabilities() { return this.#primary?.boundary.capabilities ?? {}; }
   get primary() { return this.#primary; }
   configureIntegrations(integrations) {
     if (this.#integrations) reject('INTEGRATIONS_ALREADY_CONFIGURED');
     this.#integrations = integrations;
   }
   integrationStatus() { return this.#integrations?.status() ?? []; }
+  integrationGenerations() { return Object.fromEntries(this.integrationStatus().map(({ id }) => [id, this.#integrations.generation(id)])); }
   setIntegrationEnabled(id, enabled) {
     if (!this.#integrations) reject('INTEGRATIONS_UNAVAILABLE');
     try { this.#integrations.setEnabled(id, enabled); }
@@ -24,7 +23,7 @@ export class SourceRegistry {
     }
   }
   #available(peer) { return !this.#integrations || this.#integrations.available(peer.integrationId); }
-  attach({ integrationId, installationId, boundary }) {
+  attach({ integrationId, installationId, boundary, notify = true }) {
     if (!identifier(integrationId) || !identifier(installationId) || !boundary) reject('INVALID_SOURCE_REGISTRATION');
     if (this.#peers.size >= 8) reject('SOURCE_PEER_LIMIT');
     const peer = Object.freeze({ integrationId, installationId, boundary });
@@ -32,8 +31,7 @@ export class SourceRegistry {
     const unsubscribe = boundary.onChange(() => this.#changed());
     this.#subscriptions.set(peer, unsubscribe);
     this.#primary ??= peer;
-    this.#controlProfile ??= boundary.controlProfile;
-    this.#changed();
+    if (notify) this.#changed();
     return peer;
   }
   #subscriptions = new Map();

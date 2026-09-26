@@ -60,9 +60,9 @@ export async function agentControl(paths, action, args = [], { request = agentRe
   const dashboard = () => call('/dashboard/state');
   if (action === 'state' && !args.length) return call('/engine/state');
   if (['dashboard', 'history'].includes(action) && args.length <= 1) {
-    const offset = args.length ? number(args[0]) : 0;
-    if (!Number.isSafeInteger(offset)) return invalid();
-    const state = await call('/dashboard/state', { offset });
+    const before = args.length ? number(args[0]) : 0;
+    if (!Number.isSafeInteger(before)) return invalid();
+    const state = await call('/dashboard/state', before ? { before } : {});
     return action === 'history' ? state.history : state;
   }
   if (action === 'receipt' && args.length === 1 && /^[A-Za-z0-9_-]{1,128}$/.test(args[0])) {

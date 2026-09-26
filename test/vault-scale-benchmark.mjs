@@ -11,6 +11,9 @@ import { ResidentEngine } from '../spikes/browser/chatgpt/engine.mjs';
 import { dashboardState } from '../spikes/browser/chatgpt/dashboard.mjs';
 import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs';
 import { scaleObservation } from './vault-scale-fixture.mjs';
+import { CHATGPT_CAPTURE_PROFILE } from '../spikes/recipient/normal-observation.mjs';
+import { FIREFOX_CAPTURE_PROFILE, FIREFOX_ADAPTER_PROFILE } from '../spikes/recipient/firefox-observation.mjs';
+import { HOOK_CAPTURE_PROFILE, HOOK_SOURCE_PROFILE } from '../spikes/recipient/hook-observation.mjs';
 
 if (process.argv[2] !== '--child') {
   const results = [];
@@ -22,6 +25,7 @@ if (process.argv[2] !== '--child') {
   }
 } else {
   const count = Number(process.argv[3]), pageSize = Number(process.argv[4]);
+  const mixed = process.argv.includes('--mixed'), installationId = randomUUID(), runtimeEpoch = randomUUID(), scope = randomUUID();
   assert.ok([1000,10000,50000].includes(count));
   const root = mkdtempSync(join(tmpdir(), 'attestamp-scale-benchmark-test-')), directory = join(root, 'vault'), key = randomBytes(32);
   let vault, session, engine;
@@ -31,7 +35,17 @@ if (process.argv[2] !== '--child') {
     vault = new Vault(directory, key, undefined, { create: true, pageSize });
     session = await new ChatGPTRecordingSession(root, adapter, sessionOptions()).init();
     const captureStart = performance.now();
-    for (let n = 0; n < count; n++) session.observeNormal(scaleObservation(n));
+    for (let n = 0; n < count; n++) {
+      const normal = scaleObservation(n);
+      if (!mixed) session.observeNormal(normal);
+      else if (n % 4 < 2) session.observe({ ...normal, profile: n % 4 ? FIREFOX_CAPTURE_PROFILE : CHATGPT_CAPTURE_PROFILE,
+        source: { ...normal.source, ...(n % 4 ? { adapterProfile: FIREFOX_ADAPTER_PROFILE } : {}) } });
+      else session.observe({ profile: HOOK_CAPTURE_PROFILE, kind: 'hook-prompt-observed', eventId: randomUUID(),
+        inputMethod: 'user-prompt-submit-hook', text: normal.text, source: { profile: HOOK_SOURCE_PROFILE,
+          integrationId: n % 4 === 2 ? 'codex' : 'claude-code', installationId, runtimeEpoch, scope,
+          sessionId: `synthetic-scale-${n % 20}`, origin: 'enrolled-local-executable', invocationId: randomUUID(),
+          promptId: n % 4 === 3 ? randomUUID() : null, turnId: n % 4 === 2 ? `turn-${n}` : null } });
+    }
     const captureMs = performance.now() - captureStart;
     assert.equal(vault.recordCount, count * 2);
     session.close(); session = null; vault.close(); vault = null; global.gc?.();
@@ -57,7 +71,7 @@ if (process.argv[2] !== '--child') {
     const commonSearchMs = performance.now() - commonStart;
     assert.equal(common.history.prompts.length, 5);
     for (const access of [recentAccess, pageAccess, searchAccess]) { assert.ok(access.recordsRead <= 40); assert.ok(access.objectsRead <= 60); }
-    console.log(JSON.stringify({ prompts: count, pageSize, captureMs, startupMs, recentMs, pagedMs, searchMs, commonSearchMs,
+    console.log(JSON.stringify({ prompts: count, mixed, pageSize, captureMs, startupMs, recentMs, pagedMs, searchMs, commonSearchMs,
       peakRssMiB: process.resourceUsage().maxRSS / 1024, rssMiB: process.memoryUsage().rss / 2 ** 20,
       diskMiB: diskBytes / 2 ** 20, startupAccess, recentAccess, pageAccess, searchAccess }));
   } finally { engine?.stop(); await engine?.drain(); session?.close(); vault?.close(); key.fill(0); rmSync(root, { recursive: true, force: true }); }

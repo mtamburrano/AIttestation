@@ -34,12 +34,22 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     'spikes/release/fixture.mjs', 'spikes/release/composer.js', 'spikes/browser/chatgpt/product-app.js']);
   const stable = tokens => (tokens ?? []).filter(token => token.startsWith('ai.provenance')
     || token.startsWith('PAP/') || token === 'medilhopfckldjgdnchfkpmfmfnkadca').sort();
+  const newHosts = ['ai.provenance.consumer.firefox-host', 'ai.provenance.consumer.hook-peer-validator', 'ai.provenance.consumer.hook-receiver'];
+  const additions = {
+    'spikes/browser/chatgpt/build-macos.mjs': newHosts,
+    'spikes/distribution/build-macos.mjs': newHosts,
+    'spikes/development/prepare.mjs': newHosts,
+    'spikes/browser/chatgpt/native/macos-peer-validator.swift': ['ai.provenance.consumer.firefox-host'],
+    'spikes/browser/chatgpt/native/macos-browser-host.swift': ['ai.provenance.consumer.firefox.json'],
+  };
   for (const [file, tokens] of Object.entries(baseline.sources)) {
     if (retired.has(file) || !stable(tokens).length) continue;
-    const current = file === 'spikes/demonstrator/verification.mjs' ? 'spikes/recipient/legacy-demo.mjs' : file;
+    const current = file === 'spikes/demonstrator/verification.mjs' ? 'spikes/recipient/legacy-demo.mjs'
+      : file === 'spikes/vault/key-lifecycle.mjs' ? 'spikes/platform/macos/key-store.mjs'
+        : file === 'spikes/vault/vault.mjs' ? 'spikes/vault/legacy-vault.mjs' : file;
     const observed = file === 'spikes/distribution/build-macos.mjs'
       ? [...(sources[file] ?? []), ...(sources['spikes/distribution/release-inputs.mjs'] ?? [])] : sources[current];
-    assert.deepEqual(stable(observed), stable(tokens), `${file}: stable identity or crypto domain changed`);
+    assert.deepEqual(stable(observed), stable([...tokens, ...additions[file] ?? []]), `${file}: stable identity or crypto domain changed`);
   }
   for (const [file, expected] of Object.entries(baseline.json)) {
     const actual = JSON.parse(await read(file));
@@ -48,7 +58,7 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
     }
     const migrated = structuredClone(expected);
     if (file === 'spikes/browser/chatgpt/extension/manifest.json') {
-      migrated.version = '2.3.4';
+      migrated.version = '2.3.5';
       migrated.content_scripts = [
         { matches: ['https://chatgpt.com/*'], js: ['content-script.js'], run_at: 'document_start', world: 'ISOLATED' },
         { matches: ['https://chatgpt.com/*'], js: ['fetch-observer.js'], run_at: 'document_start', world: 'MAIN' },
@@ -79,7 +89,7 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
   assert.equal(JSON.parse(await read('package.json')).name, 'private-provenance-spikes');
   for (const file of ['spikes/browser/chatgpt/native/macos-browser-host.swift',
     'spikes/browser/chatgpt/native/macos-peer-validator.swift']) {
-    const source = await read(file);
+    const source = (await read(file)).replace(/#if FIREFOX[\s\S]*?#else([\s\S]*?)#endif/g, '$1');
     assert.equal(source.match(/^private let chromeIdentifier = "([^"]+)"$/m)?.[1], 'com.google.Chrome');
     assert.equal(source.match(/^private let chromeTeamIdentifier = "([^"]+)"$/m)?.[1], 'EQHXZ8M8AV');
   }

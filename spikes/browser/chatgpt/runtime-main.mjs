@@ -15,6 +15,12 @@ import { DesktopUpdater } from '../../distribution/updater.mjs';
 import { RELEASE_CHANNELS, validateInstalledRelease, validateReleaseCandidate } from '../../distribution/config.mjs';
 import { startRecipient } from '../../recipient/server.mjs';
 import { startDesktopChannel } from './desktop-channel.mjs';
+import { randomUUID } from 'node:crypto';
+import { ENGINE_COMMAND_PROFILE, RECORDING_CONTROL_PROFILE } from '../../core/recording-engine.mjs';
+import { CodingIntegrations } from '../../coding/integrations.mjs';
+import { startCodingRuntime } from '../../coding/runtime.mjs';
+import { attestHookPeer, executableCodeIdentity } from '../../platform/macos/hook-peer.mjs';
+import { FirefoxIntegration } from '../firefox/integration.mjs';
 
 const defaultSupportDirectory = join(homedir(), 'Library', 'Application Support', 'Private Provenance');
 
@@ -24,6 +30,9 @@ export async function startPackagedChatGPT({
   installation = undefined,
   diagnostics, controllerTimeoutMs, debugSession = null,
   openDashboard, desktopChannel = null,
+  integrationHomes = { codex: join(homedir(), '.codex'), 'claude-code': join(homedir(), '.claude'),
+    firefox: join(homedir(), 'Library', 'Application Support', 'Mozilla', 'NativeMessagingHosts') },
+  hookPeer = attestHookPeer, codeIdentity = executableCodeIdentity,
 } = {}) {
   keyStore ??= new MacOSKeychainStore();
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
@@ -66,7 +75,7 @@ export async function startPackagedChatGPT({
       : DurableVault.create(vaultDirectory, { keyStore });
     ownedVault = true;
   }
-  let bridge, dashboard, desktop, recipient, recipientStarting;
+  let bridge, dashboard, desktop, recipient, recipientStarting, coding;
   try {
     const openLocal = path => new Promise((resolve, reject) => {
       const child = spawn('/usr/bin/open', [path], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
@@ -91,6 +100,39 @@ export async function startPackagedChatGPT({
       ...(controllerTimeoutMs === undefined ? {} : { controllerTimeoutMs }),
     });
     bridge.debugSession = debugSession;
+    const setEnabled = (integrationId, enabled) => {
+      const state = bridge.coreEngine.state();
+      return bridge.coreEngine.command({ profile: ENGINE_COMMAND_PROFILE, controlProfile: RECORDING_CONTROL_PROFILE,
+        runtimeEpoch: state.runtimeEpoch, expectedRevision: state.revision, commandId: randomUUID(),
+        kind: 'SET_INTEGRATION', integrationId, enabled }, { surface: 'desktop' });
+    };
+    const codingIntegrations = await new CodingIntegrations({ directory: supportDirectory,
+      codeIdentity,
+      receiver: join(dirname(process.execPath), 'provenance-hook-receiver'),
+      configRoots: { codex: integrationHomes.codex, 'claude-code': integrationHomes['claude-code'] }, setEnabled }).init();
+    const firefoxIntegration = await new FirefoxIntegration({ supportDirectory, manifestDirectory: integrationHomes.firefox,
+      receiver: join(dirname(process.execPath), 'provenance-firefox-host'), setEnabled }).init();
+    const plans = new Map();
+    bridge.integrationManager = {
+      async status() { return [...await codingIntegrations.status(), await firefoxIntegration.status()]; },
+      async preview(data) {
+        const integration = data.client === 'firefox-chatgpt' ? firefoxIntegration : codingIntegrations;
+        const result = await integration.preview(data);
+        if (result.operationId) { if (plans.size >= 16) plans.delete(plans.keys().next().value); plans.set(result.operationId, integration); }
+        return result;
+      },
+      async apply(data) {
+        const integration = plans.get(data.operationId); plans.delete(data.operationId);
+        if (!integration) throw Error('INTEGRATION_PREVIEW_REQUIRED');
+        return integration.apply(data);
+      },
+      async disable({ client }) {
+        if (!['codex', 'claude-code', 'firefox-chatgpt'].includes(client)) throw Error('UNKNOWN_INTEGRATION');
+        await setEnabled(client, false); return { state: 'DISABLED', evidence: 'RETAINED' };
+      },
+    };
+    coding = await startCodingRuntime({ directory: supportDirectory, engine: bridge.coreEngine, sources: bridge.sources,
+      runtimeEpoch: bridge.runtimeEpoch, integrations: codingIntegrations, attestPeer: hookPeer });
     const updater = installedRelease ? new DesktopUpdater({ config: installedRelease, lifecycle: installation,
       schema: () => vault.schemaInfo(), directory: join(supportDirectory, 'Updates') }) : null;
     let maintenanceTail = Promise.resolve();
@@ -137,6 +179,7 @@ export async function startPackagedChatGPT({
     const close = () => closing ??= (async () => {
       // Revoke authority before draining; closing a browser view never calls this.
       bridge.engine.stop();
+      await coding?.close();
       desktop?.close(); await recipientStarting?.catch(() => {}); await recipient?.close();
       await dashboard?.close(); await bridge.close(); if (ownedVault) vault.close();
     })();
@@ -150,6 +193,7 @@ export async function startPackagedChatGPT({
       close,
     };
   } catch (error) {
+    await coding?.close();
     desktop?.close(); await recipient?.close();
     try { await dashboard?.close(); } catch {}
     try { await bridge?.close(); } catch {}

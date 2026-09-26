@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { copyFile, link, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, copyFile, link, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -224,7 +224,10 @@ test('release placeholders cannot produce a production configuration and invento
   const config = JSON.parse(await readFile(new URL('../spikes/distribution/release-config.example.json', import.meta.url)));
   assert.equal(config.notaryProfile, 'private-provenance-notary'); assert.throws(() => validateBuildConfig(config), /PROVISIONING/);
   const inventory = await dependencyInventory(join(import.meta.dirname, '..'));
-  assert.equal(inventory.modules.length, 9); assert.deepEqual(inventory.javascriptPackages, []);
+  assert.equal(inventory.modules.length, 9);
+  assert.equal(inventory.javascriptPackages.length, 1);
+  assert.equal(inventory.javascriptPackages[0].package, 'smol-toml');
+  assert.equal(inventory.javascriptPackages[0].version, '1.9.0');
   assert.ok(inventory.modules.every(module => module.checksum.startsWith('h1:')));
   assert.ok(Object.hasOwn(inventory.node.components, 'openssl')); assert.ok(Object.hasOwn(inventory.node.components, 'sqlite'));
 });
@@ -260,6 +263,7 @@ async function dependencyFixture(t) {
     await copyFile(join(import.meta.dirname, '..', path), join(root, path));
   }
   const source = join(moduleRoot, 'cmd/verify/main.go');
+  await cp(join(import.meta.dirname, '../spikes/coding/vendor'), join(root, 'spikes/coding/vendor'), { recursive: true });
   await writeFile(source, 'package main\nimport "fmt"\nfunc main() { fmt.Println("synthetic") }\n');
   const goExecutable = await syntheticGoToolchain(goRoot);
   return { directory, root, goRoot, goExecutable, moduleRoot, source,

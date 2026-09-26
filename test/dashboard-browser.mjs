@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -28,19 +28,24 @@ try {
   } });
   await f.recording(true); f.send('<img src="https://never.invalid/tracker">SYNTHETIC_DASHBOARD_CANARY');
   await until(() => f.runtime.session.receipts.list().length === 1); await f.runtime.engine.drain();
-  browser = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
+  const chrome = join(root, 'Google Chrome.app');
+  execFileSync('/bin/cp', ['-cR', '/Applications/Google Chrome.app', chrome]);
+  browser = spawn(join(chrome, 'Contents/MacOS/Google Chrome'), [
     '--headless=new', `--user-data-dir=${join(root, 'profile')}`, '--remote-debugging-port=0', '--no-first-run',
     '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-default-apps',
     '--disable-updater-scheduler', '--use-mock-keychain', '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1', 'about:blank',
-  ], { env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore' });
+  ], { env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let browserErrors = ''; browser.stderr.on('data', bytes => { browserErrors = (browserErrors + bytes.toString()).slice(-4096); });
   let launchError; browser.on('error', error => { launchError = error; });
   let port;
-  for (let i = 0; i < 100; i++) {
+  // First launch of a fresh app clone can include macOS code validation.
+  for (let i = 0; i < 300; i++) {
     if (launchError) throw launchError;
+    if (browser.exitCode !== null) throw Error(`Isolated browser exited: ${browser.exitCode}: ${browserErrors}`);
     try { port = (await readFile(join(root, 'profile/DevToolsActivePort'), 'utf8')).split('\n')[0]; break; }
     catch { await delay(50); }
   }
-  assert.ok(port, 'Isolated browser did not start');
+  assert.ok(port, `Isolated browser did not start: ${browserErrors}`);
   const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
   socket = new WebSocket(targets.find(value => value.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
@@ -86,6 +91,25 @@ try {
   await call('Page.navigate', { url: f.runtime.dashboardURL });
   await wait("document.querySelector('#prompt-count')?.textContent === '1'");
   assert.equal(await evaluate('document.title'), 'Attestamp · Your prompts');
+  await evaluate(`document.getElementById('integration-client').value='firefox-chatgpt';document.getElementById('integration-client').dispatchEvent(new Event('input'));`);
+  await click('integration-preview');
+  await wait("!document.getElementById('integration-preview-box').hidden && document.getElementById('integration-preview').disabled === false");
+  assert.equal(await evaluate("document.getElementById('integration-apply').disabled"), true);
+  const firefoxManifest = join(root, 'mozilla/ai.provenance.consumer.firefox.json');
+  await assert.rejects(readFile(firefoxManifest), { code: 'ENOENT' });
+  await evaluate("document.getElementById('integration-consent').click()");
+  await click('integration-apply');
+  await wait("document.getElementById('other-integrations').textContent.includes('Native connection configured') && !document.getElementById('integration-preview').disabled");
+  assert.equal(JSON.parse(await readFile(firefoxManifest)).allowed_extensions[0], 'attestamp-chatgpt@attestamp.app');
+  await click('integration-disable');
+  await wait("document.getElementById('other-integrations').textContent.includes('Recording disabled.') && !document.getElementById('integration-disable').disabled");
+  await click('integration-remove');
+  await wait("!document.getElementById('integration-preview-box').hidden && !document.getElementById('integration-remove').disabled");
+  assert.equal(await evaluate("document.getElementById('integration-apply').disabled"), true);
+  await evaluate("document.getElementById('integration-consent').click()"); await click('integration-apply');
+  await wait("document.getElementById('other-integrations').textContent.includes('Firefox · ChatGPT: Not configured') && !document.getElementById('integration-preview').disabled");
+  await assert.rejects(readFile(firefoxManifest), { code: 'ENOENT' });
+  assert.equal(f.runtime.session.versionCount, 1);
   assert.doesNotMatch(await evaluate('document.body.innerText'), /SYNTHETIC_DASHBOARD_CANARY/);
   for (const [value, expected] of [
     [{ state: 'ACTIVE', remaining: 7, month: '2026-09' }, '7 anchors remaining. Period: 2026-09.'],

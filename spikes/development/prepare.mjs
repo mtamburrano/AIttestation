@@ -13,7 +13,9 @@ import { assertNoPackagedLeaks } from '../distribution/artifact-files.mjs';
 import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, writeNewJSON } from './environment.mjs';
 import { withSigningAccess } from './signing.mjs';
 import { AGENT_OPT_IN, agentBuildPath, validateAgent } from './agent-environment.mjs';
-import { specializeAgentArtifact } from './agent-artifact.mjs';
+import { specializeAgentArtifact, replaceAgentInput } from './agent-artifact.mjs';
+import { writeBrowserExtension } from '../browser/shared/build-extensions.mjs';
+import { FIREFOX_EXTENSION_ID, FIREFOX_PRIVATE_EXTENSION_ID } from '../browser/shared/profiles.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const run = (command, args, options = {}) => {
@@ -136,6 +138,18 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     run('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(work, 'swift-cache'), '-O',
       '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
       join(root, 'spikes/vault/native/macos-app-host.swift'), '-o', join(contents, 'MacOS/provenance-app-host')]);
+    const firefoxSource = join(work, 'private-firefox-host.swift');
+    await writeFile(firefoxSource, replaceAgentInput(await readFile(join(root, 'spikes/browser/chatgpt/native/macos-browser-host.swift'), 'utf8'),
+      FIREFOX_EXTENSION_ID, FIREFOX_PRIVATE_EXTENSION_ID));
+    run('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(work, 'swift-cache'), '-O', '-D', 'FIREFOX',
+      '-framework', 'Security', firefoxSource, '-o', join(contents, 'MacOS/provenance-firefox-host')]);
+    const profilesPath = join(contents, 'Resources/spikes/browser/shared/profiles.mjs');
+    await writeFile(profilesPath, replaceAgentInput(await readFile(profilesPath, 'utf8'),
+      `FIREFOX_EXTENSION_ID = '${FIREFOX_EXTENSION_ID}'`, `FIREFOX_EXTENSION_ID = '${FIREFOX_PRIVATE_EXTENSION_ID}'`));
+    await rm(join(packageDirectory, 'Firefox Extension'), { recursive: true });
+    await rm(join(packageDirectory, 'attestamp-firefox-unsigned.xpi'));
+    await writeBrowserExtension(join(packageDirectory, 'Firefox Extension'), 'firefox', { privateIdentity: true });
+    run('/usr/bin/ditto', ['-c', '-k', '--norsrc', join(packageDirectory, 'Firefox Extension'), join(packageDirectory, 'attestamp-firefox-private-unsigned.xpi')]);
     const dev = join(contents, 'Resources/spikes/development'); await mkdir(dev);
     for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs', 'startup.mjs', 'integration.mjs', 'debug-session.mjs', 'runtime-state.mjs']) {
       await copyFile(join(root, 'spikes/development', name), join(dev, name));
@@ -171,7 +185,10 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
         assertPortableExecutable(path);
         const ids = { node: bundle === app ? 'ai.provenance.consumer.runtime' : 'ai.provenance.verifier.runtime',
           'provenance-browser-host': 'ai.provenance.consumer.browser-host',
-          'provenance-bridge-peer-validator': 'ai.provenance.consumer.bridge-peer-validator' };
+          'provenance-bridge-peer-validator': 'ai.provenance.consumer.bridge-peer-validator',
+          'provenance-firefox-host': 'ai.provenance.consumer.firefox-host',
+          'provenance-hook-receiver': 'ai.provenance.consumer.hook-receiver',
+          'provenance-hook-peer-validator': 'ai.provenance.consumer.hook-peer-validator' };
         sign(path, ids[name], name === 'node' ? join(work, 'node.plist') : null);
       }
       if (bundle === app) sign(helper, null, join(work, 'keychain.plist'));
@@ -187,7 +204,8 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     if ((await sourceInventory(root)).sha256 !== sources.sha256) throw Error('SOURCE_CHANGED_DURING_PRIVATE_BUILD');
     const inventory = { application: await fileInventory(app),
       verifier: await fileInventory(join(packageDirectory, 'Recipient/Attestamp Verifier.app')),
-      extension: await fileInventory(join(output, 'extension')) };
+      extension: await fileInventory(join(output, 'extension')),
+      firefox: await fileInventory(join(packageDirectory, 'Firefox Extension')) };
     await writeNewJSON(join(output, 'private-inventory.json'), inventory);
     await writeNewJSON(join(output, 'private-build.json'), { profile: DEVELOPMENT_PROFILE,
       releaseClass: 'PRIVATE_DEVELOPMENT', sourceDigest: sources.sha256,

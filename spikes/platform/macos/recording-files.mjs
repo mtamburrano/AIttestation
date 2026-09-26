@@ -7,6 +7,7 @@ const filename = name => {
   return name;
 };
 
+// macOS/POSIX durability; composed explicitly by the Mac runtime.
 export class RecordingFiles {
   constructor(directory) { this.directory = directory; }
   read(name) { return readFile(join(this.directory, filename(name)), 'utf8'); }

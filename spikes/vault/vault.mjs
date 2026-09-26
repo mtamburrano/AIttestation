@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { randomBytes, createHmac } from 'node:crypto';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { LIMITS, canonical, parseCanonical, keys, b64, unb64, hash, objectDigest, encrypt, decrypt, aad, fail } from './format.mjs';
+import { promptObservation, observationMessageKey } from '../recipient/observation-codecs.mjs';
 import { signedObservation, linksCancellation } from '../recipient/portable.mjs';
 import { identity, makeRecord, verifyRecord, disclosureObject, publicProofDigest } from './records.mjs';
 import { Vault as LegacyVault, inspectRecovery, readVaultHeader, vaultKeyId } from './legacy-vault.mjs';
@@ -14,7 +15,6 @@ const wire = value => Buffer.from(canonical(value));
 const id = () => b64(randomBytes(16));
 const MAX_WRAPS = Number.MAX_SAFE_INTEGER;
 const WRAPS_PER_KEY = 65536n;
-const promptKinds = new Set(['frozen-text-version', 'normal-send-intent', 'normal-request-observed']);
 const words = text => [...new Set(text.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])];
 function goodRecord(record, bytes) {
   const result = verifyRecord(record, bytes);
@@ -215,9 +215,9 @@ export class Vault {
     const value = signedObservation(record, bytes, { structure: 'VALID', integrity: 'VALID', keyAttribution: 'SIGNATURE_VALID' });
     if (!value) return;
     const token = (domain, v) => typeof v === 'string' ? this.#token(domain, v, header) : null;
-    const prompt = promptKinds.has(value.kind);
-    this.#db.prepare('UPDATE records SET kind=?,subject=?,message=?,related=? WHERE seq=?').run(prompt ? 'prompt' : value.kind === 'request-deduplicated' ? 'alias' : 'observation',
-      token('subject', value.eventId ?? value.version), prompt ? token('message', value.request?.messageId) : null,
+    const prompt = promptObservation(value);
+    this.#db.prepare('UPDATE records SET kind=?,subject=?,message=?,related=? WHERE seq=?').run(prompt ? 'prompt' : ['request-deduplicated', 'hook-deduplicated'].includes(value.kind) ? 'alias' : 'observation',
+      token('subject', value.eventId ?? value.version), prompt ? token('message', observationMessageKey(value)) : null,
       token('digest', value.recordDigest), seq);
     if (value.kind === 'release-cancelled') {
       const parentRow = value.recordDigest ? this.#db.prepare('SELECT seq,envelope FROM records WHERE digest=?').get(token('digest', value.recordDigest)) : null;
@@ -321,7 +321,7 @@ export class Vault {
       const record = this.#decodeRecord(row), bytes = this.read(record.manifest.evidence[0].objectDigest);
       const observation = signedObservation(record, bytes, verifyRecord(record, bytes));
       const actual = field === 'subject' ? observation?.eventId ?? observation?.version
-        : field === 'message' ? observation?.request?.messageId : observation?.recordDigest;
+        : field === 'message' ? observationMessageKey(observation) : observation?.recordDigest;
       if (actual !== value) fail('INVALID', 'Observation locator mismatch'); return record;
     });
   }

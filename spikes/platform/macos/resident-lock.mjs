@@ -2,7 +2,7 @@ import { closeSync, lstatSync, openSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-// An OS-released SQLite lock precedes all engine state loading. A second process
+// A macOS/POSIX owner check and OS-released SQLite lock precede state loading. A second process
 // cannot create a second recorder; a crash needs no PID reaping.
 export function lockResidentEngine(directory) {
   const path = join(directory, 'resident-lock.sqlite');
@@ -16,4 +16,3 @@ export function lockResidentEngine(directory) {
   catch { db.close(); throw Error('RESIDENT_ENGINE_ALREADY_RUNNING'); }
   return () => db.close();
 }
-

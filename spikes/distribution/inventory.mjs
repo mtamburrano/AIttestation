@@ -102,7 +102,12 @@ export async function dependencyInventory(root, { goExecutable = null, command =
   // Git ignores are not a compilation boundary. Even ignored/new files can
   // introduce imports or embedded inputs, so conservatively bind the whole tree.
   goBuild.inputs = await inputTreeInventory(join(root, goBuild.directory));
-  return { profile: 'pap-dependency-inventory/2', javascriptPackages: [],
+  const vendorDirectory = join(root, 'spikes/coding/vendor/smol-toml');
+  const vendor = JSON.parse(await readFile(join(vendorDirectory, 'provenance.json'), 'utf8'));
+  if (vendor.package !== 'smol-toml' || vendor.version !== '1.9.0' || vendor.license !== 'BSD-3-Clause'
+      || Object.keys(vendor.files).sort().join(',') !== 'LICENSE,index.cjs') throw Error('Invalid bundled TOML dependency');
+  for (const [name, digest] of Object.entries(vendor.files)) if (sha256(await readFile(join(vendorDirectory, name))) !== digest) throw Error('Bundled TOML dependency changed');
+  return { profile: 'pap-dependency-inventory/2', javascriptPackages: [vendor],
     node: { version: process.version, sha256: sha256(await readFile(process.execPath)), components: { ...process.versions },
       licenseSha256: sha256(await readFile(resolve(process.execPath, '../../LICENSE'))) },
     goToolchain, goBuild,

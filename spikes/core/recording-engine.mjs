@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { canonical, keys } from '../vault/format.mjs';
 import { emit, emitCaptureFailure } from '../diagnostics/local.mjs';
 import { migrateRecordingState } from './recording-state.mjs';
 
-export const ENGINE_COMMAND_PROFILE = 'pap-resident-command/2';
-export const ENGINE_EVENT_PROFILE = 'pap-resident-event/2';
+export const ENGINE_COMMAND_PROFILE = 'pap-resident-command/3';
+export const ENGINE_EVENT_PROFILE = 'pap-resident-event/3';
+export const RECORDING_CONTROL_PROFILE = 'pap-recording-control/1';
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const reject = code => { throw Object.assign(Error(code), { code }); };
 
@@ -19,6 +20,8 @@ export class RecordingEngine {
   #anchorCursor = 0; #anchorBoundary = 0;
   #anchorScheduled = false;
   #capacityExhausted = false;
+  #serialPending = 0; #admissions = new Map(); #admissionBytes = 0; #admissionScheduled = false;
+  #admissionEpoch = randomUUID(); #admissionAuthorities = new WeakSet();
 
   constructor({ session, sources, runtimeEpoch, stateStore, diagnostics = null }) {
     this.#session = session; this.#sources = sources; this.#epoch = runtimeEpoch; this.#diagnostics = diagnostics;
@@ -41,11 +44,11 @@ export class RecordingEngine {
   state() {
     this.#refreshCapacity();
     const scopes = this.#sources.scopes(this.#state.recording, this.#closed || this.#failed || this.#capacityExhausted);
-    return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, adapterProfile: this.#sources.controlProfile,
+    return structuredClone({ profile: ENGINE_EVENT_PROFILE, runtimeEpoch: this.#epoch, controlProfile: RECORDING_CONTROL_PROFILE,
       revision: this.#state.revision, available: !this.#closed && !this.#failed,
       recording: this.#state.recording, migration: this.#state.migration,
       captureUnavailableReason: this.#capacityExhausted ? 'VAULT_CAPACITY_EXHAUSTED' : null,
-      capabilities: this.#sources.capabilities, scopes, integrations: this.#sources.integrationStatus(),
+      capabilities: { recording: true, independentSources: true }, scopes, integrations: this.#sources.integrationStatus(),
       operations: this.#session.status({ limit: 5 }).versions.map(version => ({ id: version.id, scope: version.scope,
         observation: true, state: 'PROMPT_SAVED', result: version })) });
   }
@@ -95,7 +98,73 @@ export class RecordingEngine {
     finally { this.#publish(); }
   }
   #serial(operation) {
-    const next = this.#control.then(operation); this.#control = next.catch(() => {}); return next;
+    this.#serialPending++;
+    const next = this.#control.then(operation).finally(() => { this.#serialPending--; });
+    this.#control = next.catch(() => {}); return next;
+  }
+  beginAdmission() {
+    if (this.#closed || this.#failed || !this.#state.recording || this.#serialPending || this.#capacityExhausted) return null;
+    const authority = Object.freeze({ epoch: this.#admissionEpoch, generations: Object.freeze(this.#sources.integrationGenerations()) });
+    this.#admissionAuthorities.add(authority); return authority;
+  }
+  admit(input, peer, { deadline, authority } = {}) {
+    // This path deliberately never reads the vault, publishes History, or waits
+    // for the durable queue. JavaScript execution orders it with consent changes.
+    const now = performance.now();
+    if (!Number.isFinite(deadline) || deadline <= now || deadline - now > 250) reject('ADMISSION_EXPIRED');
+    if (!authority || !this.#admissionAuthorities.has(authority) || authority.epoch !== this.#admissionEpoch) reject('CAPTURE_NOT_ENABLED');
+    this.#admissionAuthorities.delete(authority);
+    if (this.#closed || this.#failed || !this.#state.recording) reject('CAPTURE_NOT_ENABLED');
+    if (this.#capacityExhausted || this.#serialPending || this.#admissions.size >= 32) reject('ADMISSION_BUSY');
+    const prepared = this.#sources.prepare(input, {}, peer);
+    if (prepared.generation !== authority.generations[peer.integrationId]) reject('CAPTURE_NOT_ENABLED');
+    if (!prepared.boundary.synchronousAdmission) reject('UNSUPPORTED_ADMISSION_SOURCE');
+    this.#sources.accept(prepared);
+    const observation = prepared.observation;
+    const bytes = Buffer.byteLength(observation.text, 'utf8');
+    const sameIntegration = [...this.#admissions.values()].filter(item => item.peer.integrationId === peer.integrationId);
+    if (sameIntegration.length >= 8 || this.#admissionBytes + bytes > 4 * 1024 * 1024
+        || sameIntegration.filter(item => item.observation.source.sessionId === observation.source.sessionId).length >= 4) reject('ADMISSION_BUSY');
+    const eventId = randomUUID();
+    const item = { ...prepared, observation: Object.freeze({ ...observation, eventId,
+      source: Object.freeze({ ...observation.source }) }), bytes, released: false };
+    this.#admissions.set(eventId, item); this.#admissionBytes += bytes;
+    return Object.freeze({ state: 'ADMITTED', eventId });
+  }
+  releaseAdmission(eventId, peer) {
+    const item = this.#admissions.get(eventId);
+    if (!item || item.peer !== peer || item.released) return false;
+    item.released = true; this.#pumpAdmissions(); return true;
+  }
+  cancelAdmission(eventId, peer) {
+    const item = this.#admissions.get(eventId);
+    if (item?.peer !== peer || item.released) return;
+    this.#admissions.delete(eventId); this.#admissionBytes -= item.bytes;
+  }
+  #pumpAdmissions() {
+    if (this.#admissionScheduled || ![...this.#admissions.values()].some(item => item.released)) return;
+    this.#admissionScheduled = true;
+    const work = new Promise(resolve => setImmediate(() => {
+      this.#admissionScheduled = false;
+      const entry = [...this.#admissions].find(([, item]) => item.released);
+      if (!entry) { resolve(); return; }
+      const [eventId, item] = entry;
+      this.#admissions.delete(eventId); this.#admissionBytes -= item.bytes;
+      // A pre-OFF admission is already consent-bound and may finish afterward.
+      // Disconnect cannot turn that item into a new admission or provider Send.
+      this.#serial(async () => {
+        try {
+          item.boundary.save(item.observation, this.#session);
+          await this.#commit({ operationId: eventId });
+          this.#anchorBoundary = this.#session.anchorCheckpoint; this.#pumpAnchors();
+        } catch (error) {
+          emitCaptureFailure(this.#diagnostics, error, { operationId: eventId });
+          emit(this.#diagnostics, 'CAPTURE_GAP', { operationId: eventId });
+          this.#refreshCapacity();
+        }
+      }).finally(() => { this.#publish(); this.#pumpAdmissions(); resolve(); });
+    }));
+    this.#work.add(work); work.then(() => this.#work.delete(work));
   }
   capturePolicy(peer = undefined) {
     this.#refreshCapacity();
@@ -206,15 +275,19 @@ export class RecordingEngine {
       capturePolicy: () => this.capturePolicy(peer),
       captureStates: () => this.captureStates(peer),
       captureReceipt: input => this.captureReceipt(input, peer),
+      admit: (input, options) => this.admit(input, peer, options),
+      releaseAdmission: id => this.releaseAdmission(id, peer),
+      cancelAdmission: id => this.cancelAdmission(id, peer),
     });
   }
   command(input, { surface } = {}) {
     let command;
     try {
       if (!['development', 'desktop', 'extension_panel'].includes(surface)) reject('UNTRUSTED_COMMAND_ORIGIN');
-      if (input?.kind !== 'SET_RECORDING') reject('INVALID_ENGINE_COMMAND');
-      keys(input, ['profile', 'runtimeEpoch', 'adapterProfile', 'commandId', 'expectedRevision', 'kind', 'enabled']);
-      if (input.profile !== ENGINE_COMMAND_PROFILE || input.adapterProfile !== this.#sources.controlProfile
+      if (!['SET_RECORDING', 'SET_INTEGRATION'].includes(input?.kind)) reject('INVALID_ENGINE_COMMAND');
+      keys(input, ['profile', 'runtimeEpoch', 'controlProfile', 'commandId', 'expectedRevision', 'kind', 'enabled',
+        ...(input.kind === 'SET_INTEGRATION' ? ['integrationId'] : [])]);
+      if (input.profile !== ENGINE_COMMAND_PROFILE || input.controlProfile !== RECORDING_CONTROL_PROFILE
           || !uuid(input.commandId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0
           || typeof input.enabled !== 'boolean') reject('ENGINE_CONTRACT_MISMATCH');
       if (input.runtimeEpoch !== this.#epoch) reject('STALE_RUNTIME_EPOCH');
@@ -230,9 +303,19 @@ export class RecordingEngine {
       }
       if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
       if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
+      if (command.kind === 'SET_INTEGRATION') {
+        this.#sources.setIntegrationEnabled(command.integrationId, command.enabled);
+        if (!command.enabled) for (const [id, item] of this.#admissions) if (item.peer.integrationId === command.integrationId) {
+          this.#admissions.delete(id); this.#admissionBytes -= item.bytes;
+        }
+        await this.#commit();
+        const ack = { profile: ENGINE_EVENT_PROFILE, commandId: command.commandId, runtimeEpoch: this.#epoch,
+          revision: this.#state.revision, integrationId: command.integrationId, enabled: command.enabled };
+        this.#commands.set(command.commandId, { fingerprint, ack }); return structuredClone(ack);
+      }
       if (this.#refreshCapacity() && command.enabled) reject('VAULT_CAPACITY_EXHAUSTED');
       const previousRecording = this.#state.recording;
-      if (this.#state.recording !== command.enabled) { this.#sources.revoke(); }
+      if (this.#state.recording !== command.enabled) { this.#sources.revoke(); this.#admissionEpoch = randomUUID(); }
       this.#state.recording = command.enabled;
       // Publish revocation immediately; acknowledge the setting only after fsync.
       this.#publish();
@@ -249,6 +332,9 @@ export class RecordingEngine {
   async drain() { await this.#control; while (this.#work.size) await Promise.all(this.#work); }
   stop() {
     this.#closed = true; this.#sources.revoke(); this.#anchorQueue = [];
+    for (const [id, item] of this.#admissions) if (!item.released) {
+      this.#admissions.delete(id); this.#admissionBytes -= item.bytes;
+    }
     for (const timer of this.#anchorRetries.values()) clearTimeout(timer);
     this.#anchorRetries.clear(); this.#unsubscribe?.(); this.#publish();
   }

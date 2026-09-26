@@ -122,6 +122,7 @@ try {
     };
   `);
   runtime = await startPackagedChatGPT({ supportDirectory: join(root, 'engine'), keyStore: new MemoryKeyStore(),
+    integrationHomes: { codex: join(root, 'codex'), 'claude-code': join(root, 'claude'), firefox: join(root, 'mozilla') },
     managed: null, installation: null, fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' }, openBrowser: false,
     collectFast: async () => { throw Error('EXTERNAL_ANCHOR_FORBIDDEN'); },
     attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },

@@ -104,7 +104,10 @@ async function signBundle(app, config, work, helper = null) {
     const name = item.path.split('/').at(-1);
     const ids = { node: app.endsWith('Verifier.app') ? 'ai.provenance.verifier.runtime' : 'ai.provenance.consumer.runtime',
       'provenance-browser-host': 'ai.provenance.consumer.browser-host',
-      'provenance-bridge-peer-validator': 'ai.provenance.consumer.bridge-peer-validator' };
+      'provenance-bridge-peer-validator': 'ai.provenance.consumer.bridge-peer-validator',
+          'provenance-firefox-host': 'ai.provenance.consumer.firefox-host',
+          'provenance-hook-receiver': 'ai.provenance.consumer.hook-receiver',
+          'provenance-hook-peer-validator': 'ai.provenance.consumer.hook-peer-validator' };
     signPath(path, ids[name], name === 'node' ? nodeEntitlements : null);
   }
   if (helper) signPath(helper.app, null, helper.entitlements);

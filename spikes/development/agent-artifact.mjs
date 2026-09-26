@@ -102,7 +102,16 @@ export async function specializeAgentArtifact(root, contents, work, agent, paths
       '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
       source, '-o', join(contents, target)]);
   }
-  const keyStore = join(contents, 'Resources/spikes/vault/key-lifecycle.mjs');
+  const keyStore = join(contents, 'Resources/spikes/platform/macos/key-store.mjs');
   await writeFile(keyStore, replaceAgentInput(await readFile(keyStore, 'utf8'),
     "const DEFAULT_SERVICE = 'ai.provenance.evidence-vault';", `const DEFAULT_SERVICE = ${JSON.stringify(paths.keychainService)};`));
+  const receiver = join(work, 'agent-hook-receiver.swift');
+  await writeFile(receiver, replaceAgentInput(await readFile(join(root, 'spikes/coding/native/macos-hook-receiver.swift'), 'utf8'),
+    'String(cString: home) + "/Library/Application Support/Private Provenance"', swiftString(paths.support)));
+  run('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(work, 'swift-cache'), '-O', '-framework', 'Security',
+    join(root, 'spikes/coding/native/macos-hook-security.swift'), receiver, '-o', join(contents, 'MacOS/provenance-hook-receiver')]);
+  const firefox = join(contents, 'Resources/spikes/browser/firefox/native-host.mjs');
+  await writeFile(firefox, replaceAgentInput(await readFile(firefox, 'utf8'),
+    "join(homedir(), 'Library', 'Application Support', 'Private Provenance', 'firefox-bridge.json')",
+    JSON.stringify(join(paths.support, 'firefox-bridge.json'))));
 }

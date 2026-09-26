@@ -14,6 +14,7 @@ const APPLICATION = 'Attestamp.app', VERIFIER = 'Recipient/Attestamp Verifier.ap
 const RESOURCES = `${APPLICATION}/Contents/Resources`, DISTRIBUTION = `${RESOURCES}/spikes/distribution`;
 const HELPER = `${APPLICATION}/Contents/Helpers/Private Provenance Keychain.app`;
 const EXTENSION = `${RESOURCES}/spikes/browser/chatgpt/extension`;
+const FIREFOX_EXTENSION = `${RESOURCES}/spikes/browser/firefox/extension`;
 const STORE_ID = 'medilhopfckldjgdnchfkpmfmfnkadca';
 const checks = ['EXPECTED_POLICY', 'OUTPUT_FILES', 'CHANNEL_CONTRACT', 'INVENTORY_LINKAGE',
   'BUNDLE_IDENTITIES', 'STORE_PACKAGE', 'PRODUCTION_SIGNATURE', 'INPUT_STABILITY'];
@@ -55,7 +56,16 @@ function treeInventory(tree) {
 function validateDependencies(inventory, sourceFiles, signed) {
   keys(inventory, ['profile', 'javascriptPackages', 'node', 'goToolchain', 'goBuild', 'noticesDigest',
     'goModDigest', 'goSumDigest', 'modules', 'reviewScope']);
-  require(inventory.profile === 'pap-dependency-inventory/2'); same(inventory.javascriptPackages, []);
+  require(inventory.profile === 'pap-dependency-inventory/2');
+  require(Array.isArray(inventory.javascriptPackages) && inventory.javascriptPackages.length === 1);
+  const vendor = inventory.javascriptPackages[0];
+  keys(vendor, ['package', 'version', 'license', 'registryTarball', 'integrity', 'files']);
+  require(vendor.package === 'smol-toml' && vendor.version === '1.9.0' && vendor.license === 'BSD-3-Clause'
+    && vendor.registryTarball === 'https://registry.npmjs.org/smol-toml/-/smol-toml-1.9.0.tgz'
+    && vendor.integrity === 'sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==');
+  keys(vendor.files, ['index.cjs', 'LICENSE']);
+  for (const [path, hash] of Object.entries(vendor.files)) require(digest(hash)
+    && sourceFiles.get(`spikes/coding/vendor/smol-toml/${path}`)?.sha256 === hash);
   keys(inventory.node, ['version', 'sha256', 'components', 'licenseSha256']);
   require(/^v\d+\.\d+\.\d+$/.test(inventory.node.version) && digest(inventory.node.sha256) && digest(inventory.node.licenseSha256)
     && inventory.node.components?.node === inventory.node.version.slice(1));
@@ -107,6 +117,7 @@ function validateProvenance(provenance, inventory, snapshot, policy, signed) {
     inventoryEntries(provenance.bundles[name]); same(provenance.bundles[name], bundleFiles(snapshot, path));
   }
   validateDependencies(inventory, source, signed);
+  same(inventory.javascriptPackages, [artifactJSON(snapshot.files.get(`${RESOURCES}/spikes/coding/vendor/smol-toml/provenance.json`)?.content)]);
   if (signed) require(provenance.node === inventory.node.version && provenance.go === inventory.goToolchain.version
     && typeof provenance.swift === 'string' && provenance.swift.length > 0 && provenance.swift.length < 2048);
   for (const bundle of [APPLICATION, VERIFIER]) {
@@ -140,6 +151,9 @@ function validateProvenance(provenance, inventory, snapshot, policy, signed) {
 function validateLayout(snapshot, signed, candidate, artifactName) {
   const topFiles = new Set(['dependency-inventory.json', 'build-provenance.json', 'build-measurement.json',
     'Chrome-Web-Store-upload.zip', 'Install and remove.md', 'Start Here.md', 'Recipient/Verify locally.md',
+    'Mac Connections.md', 'VALIDATION.md', 'attestamp-firefox-unsigned.xpi',
+    ...[...snapshot.files.keys()].filter(path => path.startsWith(`${FIREFOX_EXTENSION}/`))
+      .map(path => `Firefox Extension/${path.slice(FIREFOX_EXTENSION.length + 1)}`),
     'NativeMessagingHosts/ai.provenance.consumer.json', ...(signed ? ['notarization.json', artifactName,
       candidate ? 'release-candidate.json' : 'stable.json'] : [])]);
   for (const path of topFiles) require(snapshot.files.has(path));
@@ -183,7 +197,7 @@ function validateBundleIdentities(snapshot, bytes, metadata, signed, candidate) 
     }
   }
   const executables = new Set([`${APPLICATION}/Contents/MacOS/provenance-app-host`,
-    ...['node', 'provenance-browser-host', 'provenance-bridge-peer-validator'].map(name => `${APPLICATION}/Contents/MacOS/${name}`),
+    ...['node', 'provenance-browser-host', 'provenance-bridge-peer-validator', 'provenance-firefox-host', 'provenance-hook-receiver', 'provenance-hook-peer-validator'].map(name => `${APPLICATION}/Contents/MacOS/${name}`),
     `${signed ? HELPER : APPLICATION}/Contents/MacOS/provenance-keychain-helper`,
     ...['node', 'provenance-verifier-host'].map(name => `${VERIFIER}/Contents/MacOS/${name}`),
     ...['verify', 'fast-verify', 'fast-observe'].map(name => `${RESOURCES}/spikes/anchor/algorand/bin/${name}`),
@@ -227,6 +241,26 @@ function validateStore(snapshot, bytes) {
   for (const size of ['16', '32', '48', '128']) {
     const path = manifest.icons?.[size]; require(safeRelative(path) && archive.get(path)?.length > 0);
   }
+  const firefox = artifactJSON(bytes(`${FIREFOX_EXTENSION}/manifest.json`));
+  require(firefox.manifest_version === 3 && firefox.incognito === 'not_allowed'
+    && !firefox.key && !firefox.optional_permissions && !firefox.optional_host_permissions
+    && !firefox.externally_connectable && !firefox.web_accessible_resources && !firefox.update_url);
+  same(firefox.permissions, ['nativeMessaging', 'scripting']); same(firefox.host_permissions, ['https://chatgpt.com/*']);
+  same(firefox.background, { scripts: ['service-worker.js'] });
+  same(firefox.sidebar_action, { default_panel: 'sidepanel.html', default_title: 'Attestamp' });
+  same(firefox.browser_specific_settings, { gecko: { id: 'attestamp-chatgpt@attestamp.app', strict_min_version: '153.0',
+    data_collection_permissions: { required: ['websiteContent', 'personalCommunications', 'websiteActivity', 'browsingActivity'] } } });
+  same(firefox.content_security_policy, manifest.content_security_policy);
+  const xpi = storeArchive(bytes('attestamp-firefox-unsigned.xpi'));
+  const firefoxFiles = [...snapshot.files.keys()].filter(path => path.startsWith(`${FIREFOX_EXTENSION}/`))
+    .map(path => path.slice(FIREFOX_EXTENSION.length + 1));
+  same([...xpi.keys()].sort(), firefoxFiles.sort());
+  for (const path of firefoxFiles) {
+    require(bytes(`Firefox Extension/${path}`).equals(bytes(`${FIREFOX_EXTENSION}/${path}`))
+      && xpi.get(path).equals(bytes(`${FIREFOX_EXTENSION}/${path}`)));
+  }
+  require(bytes('Mac Connections.md').equals(bytes(`${RESOURCES}/spikes/coding/SETUP.md`)));
+  require(bytes('VALIDATION.md').equals(bytes(`${RESOURCES}/spikes/coding/VALIDATION.md`)));
 }
 
 export async function verifyDistribution(directory, policy, { now = Date.now() } = {}) {

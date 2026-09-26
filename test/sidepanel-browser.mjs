@@ -211,6 +211,7 @@ try {
   // path, avoiding the owner's other running Chrome processes.
   execFileSync('/bin/cp', ['-cR', '/Applications/Google Chrome.app', application]);
   runtime = await startPackagedChatGPT({ supportDirectory: join(root, 'runtime'), installation: null,
+    integrationHomes: { codex: join(root, 'codex'), 'claude-code': join(root, 'claude'), firefox: join(root, 'mozilla') },
     keyStore: new MemoryKeyStore(), managed: null, fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' }, openBrowser: false, diagnostics,
     collectFast: async () => { throw Error('EXTERNAL_ANCHOR_FORBIDDEN'); },
     attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
@@ -318,7 +319,9 @@ try {
     await call('Target.closeTarget', { targetId: ordinary.targetId });
     const tabRejection = await readState(testPage.session); assert.equal(tabRejection.error, 'UNTRUSTED_PANEL');
     await evaluate(workerSession, `chrome.action.setPopup({popup:'sidepanel.html'})`);
-    await evaluate(workerSession, 'chrome.action.openPopup()');
+    execFileSync('/usr/bin/open', ['-a', application], { env: { PATH: '/usr/bin:/bin' }, timeout: 5000 });
+    await evaluate(workerSession, `chrome.windows.update(${secondWindow.id},{focused:true})`);
+    await evaluate(workerSession, `chrome.action.openPopup({windowId:${secondWindow.id}})`);
     const popup = await wait(async () => (await panelTargets()).find(t => ![panelTarget.targetId, secondPanelTarget.targetId].includes(t.targetId) && /\?view=/.test(t.url)), 'action popup');
     const popupSession = await attach(popup);
     assert.equal((await readState(popupSession)).error, 'UNTRUSTED_PANEL');

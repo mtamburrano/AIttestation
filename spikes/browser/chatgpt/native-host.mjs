@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { b64, canonical, keys, parseCanonical, unb64 } from '../../vault/format.mjs';
 
 export const NATIVE_BRIDGE_PROFILE = 'pap-chrome-native-bridge/3';
+export const FIREFOX_NATIVE_BRIDGE_PROFILE = 'pap-firefox-native-bridge/1';
 const MAX_MESSAGE_BYTES = 512 * 1024;
 const defaultRendezvous = join(homedir(), 'Library', 'Application Support', 'Private Provenance', 'browser-bridge.json');
 
@@ -52,7 +53,7 @@ export class NativeFrameDecoder {
   }
 }
 
-async function rendezvous(path, extensionOrigin, now) {
+async function rendezvous(path, extensionOrigin, now, profile) {
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0
       || (typeof process.getuid === 'function' && info.uid !== process.getuid()) || await realpath(path) !== path) {
@@ -60,7 +61,7 @@ async function rendezvous(path, extensionOrigin, now) {
   }
   const value = parseCanonical(await readFile(path), 16 * 1024);
   keys(value, ['profile', 'extensionOrigin', 'socketPath', 'token', 'runtimeEpoch', 'expiresAt']);
-  if (value.profile !== NATIVE_BRIDGE_PROFILE || value.extensionOrigin !== extensionOrigin || !isAbsolute(value.socketPath)
+  if (value.profile !== profile || value.extensionOrigin !== extensionOrigin || !isAbsolute(value.socketPath)
       || resolve(value.socketPath) !== value.socketPath
       || !value.socketPath.startsWith(`${dirname(path)}${sep}`)
       || typeof value.runtimeEpoch !== 'string' || unb64(value.token, 32).length !== 32) throw Error('Invalid browser bridge rendezvous');
@@ -74,15 +75,16 @@ async function rendezvous(path, extensionOrigin, now) {
 }
 
 export async function runNativeHost({
-  extensionOrigin, rendezvousPath = defaultRendezvous, input = process.stdin, output = process.stdout,
+  extensionOrigin, profile = NATIVE_BRIDGE_PROFILE, rendezvousPath = defaultRendezvous, input = process.stdin, output = process.stdout,
   connect = path => createConnection(path), now = Date.now, handshakeTimeoutMs = 8_000,
   onClose = () => {},
 } = {}) {
-  if (!/^chrome-extension:\/\/[a-p]{32}\/$/.test(extensionOrigin ?? '')) throw Error('Untrusted Chrome extension origin');
+  if (!(profile === NATIVE_BRIDGE_PROFILE && /^chrome-extension:\/\/[a-p]{32}\/$/.test(extensionOrigin ?? '')
+      || profile === FIREFOX_NATIVE_BRIDGE_PROFILE && /^firefox-extension:attestamp-chatgpt(?:-private)?@attestamp\.app$/.test(extensionOrigin ?? ''))) throw Error('Untrusted Chrome extension origin');
   if (!Number.isSafeInteger(handshakeTimeoutMs) || handshakeTimeoutMs < 1 || handshakeTimeoutMs > 10_000) {
     throw Error('Invalid native handshake timeout');
   }
-  const entry = await rendezvous(rendezvousPath, extensionOrigin, now), socket = connect(entry.socketPath);
+  const entry = await rendezvous(rendezvousPath, extensionOrigin, now, profile), socket = connect(entry.socketPath);
   return new Promise((resolveReady, rejectReady) => {
     const decoder = new NativeFrameDecoder(); let buffered = Buffer.alloc(0), ready = false, closed = false;
     const finish = reason => {
@@ -111,7 +113,7 @@ export async function runNativeHost({
     socket.once('close', () => finish('NATIVE_BACKEND_CLOSED'));
     socket.once('connect', () => {
       if (closed) return;
-      socket.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile: NATIVE_BRIDGE_PROFILE, extensionOrigin,
+      socket.write(`${canonical({ kind: 'PAP_BRIDGE_AUTH', profile, extensionOrigin,
         runtimeEpoch: entry.runtimeEpoch, token: entry.token })}\n`);
     });
     socket.on('data', chunk => {
@@ -125,7 +127,7 @@ export async function runNativeHost({
           const message = parseBridgeBytes(line);
           if (!ready) {
             keys(message, ['kind', 'profile', 'runtimeEpoch']);
-            if (message.kind !== 'PAP_BRIDGE_READY' || message.profile !== NATIVE_BRIDGE_PROFILE
+            if (message.kind !== 'PAP_BRIDGE_READY' || message.profile !== profile
                 || message.runtimeEpoch !== entry.runtimeEpoch) return finish('NATIVE_HANDSHAKE_REJECTED');
             ready = true; clearTimeout(timer); input.on('data', fromChrome); resolveReady(socket);
           } else output.write(encodeNativeFrame(message));
@@ -143,8 +145,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
 }
 
-export function rendezvousRecord({ extensionOrigin, socketPath, runtimeEpoch, expiresAt, token }) {
+export function rendezvousRecord({ profile = NATIVE_BRIDGE_PROFILE, extensionOrigin, socketPath, runtimeEpoch, expiresAt, token }) {
   if (!Buffer.isBuffer(token) || token.length !== 32) throw Error('A fresh 32-byte bridge token is required');
-  return canonical({ profile: NATIVE_BRIDGE_PROFILE, extensionOrigin, socketPath, runtimeEpoch, expiresAt,
+  return canonical({ profile, extensionOrigin, socketPath, runtimeEpoch, expiresAt,
     token: b64(token) });
 }

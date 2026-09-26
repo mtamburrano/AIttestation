@@ -1,0 +1,11 @@
+{
+  "package": "smol-toml",
+  "version": "1.9.0",
+  "license": "BSD-3-Clause",
+  "registryTarball": "https://registry.npmjs.org/smol-toml/-/smol-toml-1.9.0.tgz",
+  "integrity": "sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ==",
+  "files": {
+    "index.cjs": "09ce310a8bcc1bb5c7dc2813c88b4bfbbeb685e4c186a9631ff54da7e85c880f",
+    "LICENSE": "fa5659948374d4f555594f47f6da073b40dc503e921aeeece30df4362b3051a5"
+  }
+}

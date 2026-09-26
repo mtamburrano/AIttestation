@@ -18,21 +18,24 @@ for (const code of ['AGENT_WAIT_TIMED_OUT', 'AGENT_ASSERTION_FAILED', 'AGENT_RUN
   'AGENT_API_TIMED_OUT', 'AGENT_API_LIMIT', 'AGENT_API_INVALID', 'AGENT_API_REJECTED', 'AGENT_API_UNAVAILABLE']) failureCodes.add(code);
 
 export async function scenarioHistory(control) {
-  const rows = [], ids = new Set(); let total;
-  for (let offset = 0; offset < 10000; offset += 200) {
-    const history = await control('history', [String(offset)]);
+  const rows = [], ids = new Set(); let total, before = 0;
+  for (let page = 0; page <= 2000; page++) {
+    const history = await control('history', [String(before)]);
     total ??= history?.counts?.prompts;
     if (!Number.isSafeInteger(total) || total < 0 || total > 10000) throw Error('AGENT_SCENARIO_HISTORY_LIMIT');
-    if (history.counts.prompts !== total || history.page?.total !== total || history.page.offset !== offset
-        || !Array.isArray(history.prompts)) throw Error('AGENT_SCENARIO_HISTORY_MISMATCH');
+    if (history.counts.prompts !== total || history.page?.total !== total
+        || history.page.before !== (before || Number.MAX_SAFE_INTEGER)
+        || !Array.isArray(history.prompts) || history.prompts.length > 5) throw Error('AGENT_SCENARIO_HISTORY_MISMATCH');
     for (const row of history.prompts) {
       if (typeof row.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(row.id) || ids.has(row.id)) {
         throw Error('AGENT_SCENARIO_HISTORY_MISMATCH');
       }
       rows.push(row); ids.add(row.id);
     }
-    if (rows.length === total) return rows;
-    if (rows.length > total || history.prompts.length !== 200) throw Error('AGENT_SCENARIO_HISTORY_MISMATCH');
+    if (rows.length === total && history.page.next === null) return rows;
+    if (rows.length >= total || history.prompts.length !== 5 || !Number.isSafeInteger(history.page.next)
+        || history.page.next <= 0 || history.page.next >= (before || Number.MAX_SAFE_INTEGER)) throw Error('AGENT_SCENARIO_HISTORY_MISMATCH');
+    before = history.page.next;
   }
   throw Error('AGENT_SCENARIO_HISTORY_LIMIT');
 }

@@ -120,8 +120,8 @@ for (const failure of ['sqlite-busy', 'storage-full', 'descriptor', 'post-commit
       managed: { status: () => ({ state: 'NOT_CONFIGURED' }), submit: async () => { throw unavailable(); } } });
     await f.runtime.engine.drain(); await f.recording(true);
     const capture = vault.capture.bind(vault), lookup = vault.lookupRecords.bind(vault);
-    const observe = f.runtime.session.observeNormal.bind(f.runtime.session);
-    f.runtime.session.observeNormal = input => { try { return observe(input); } catch (error) { thrown = error; throw error; } };
+    const observe = f.runtime.session.observe.bind(f.runtime.session);
+    f.runtime.session.observe = input => { try { return observe(input); } catch (error) { thrown = error; throw error; } };
     if (failure === 'sqlite-busy') {
       locker = new DatabaseSync(join(root, 'vault', 'vault.sqlite')); locker.exec('BEGIN IMMEDIATE');
     } else if (failure === 'storage-full') {

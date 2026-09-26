@@ -26,10 +26,10 @@ async function queuedFixture(t, options = {}) {
   const started = new Promise(resolve => { entered = resolve; });
   // Release before fixture cleanup, including on assertion failure.
   t.after(() => { EngineStateStore.prototype.save = save; release(); });
-  const f = await fixture(t, options), engine = f.runtime.engine, admissions = [];
+  const f = await fixture(t, options), engine = f.runtime.coreEngine, admissions = [];
   const observe = engine.observe.bind(engine);
-  engine.observe = (input, options) => {
-    const result = observe(input, options);
+  engine.observe = (input, options, peer) => {
+    const result = observe(input, options, peer);
     admissions.push({ observation: structuredClone(input), options: { ...options } });
     return result;
   };
