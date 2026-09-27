@@ -4,9 +4,11 @@ import { keys, parseCanonical } from '../../vault/format.mjs';
 
 export function attestHookPeer(socket, enrollment, { validatorPath = join(dirname(process.execPath), 'provenance-hook-peer-validator') } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(validatorPath, [enrollment.client, enrollment.executable.path,
-      enrollment.executable.script ? enrollment.executable.sha256 : enrollment.executable.codeHash ?? '-',
-      enrollment.executable.interpreter?.path ?? '-', enrollment.executable.interpreter?.codeHash ?? '-'],
+    const executables = enrollment.executables ?? [enrollment.executable];
+    if (!Array.isArray(executables) || !executables.length || executables.length > (enrollment.client === 'codex' ? 4 : 1)
+        || executables.some(value => !value)) return reject(Error('UNAUTHORIZED_HOOK_PEER'));
+    const child = spawn(validatorPath, [enrollment.client, ...executables.flatMap(value => [value.path,
+      value.script ? value.sha256 : value.codeHash ?? '-', value.interpreter?.path ?? '-', value.interpreter?.codeHash ?? '-'])],
       { env: {}, stdio: ['ignore', 'pipe', 'ignore', socket] });
     let bytes = Buffer.alloc(0), settled = false;
     const finish = (error, result) => {

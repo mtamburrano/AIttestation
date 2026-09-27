@@ -173,6 +173,8 @@ function render(value) {
       HOOK_CANCELLED: 'Last hook ended before admission completed' }[value.state] ?? 'Connection status unavailable';
     const row = node('p', `${{ codex: 'Codex', 'claude-code': 'Claude Code', 'firefox-chatgpt': 'Firefox · ChatGPT' }[value.id]}: ${label}. `
       + (value.enabled ? value.recording ? 'Included in ON recording.' : 'Enabled; global recording is OFF.' : 'Recording disabled.'));
+    if (value.executables?.length) row.append(node('span', ` Enrolled executables (${value.executables.length}/${value.executableLimit}): `
+      + value.executables.map(selected => selected.path + (selected.interpreter ? ` (interpreter: ${selected.interpreter})` : '')).join('; ')));
     return row;
   }));
 
@@ -313,14 +315,23 @@ async function previewIntegration(action) {
   const client = $('integration-client').value;
   const data = { client, action };
   if (client !== 'firefox-chatgpt' && action === 'install') {
-    if ($('integration-executable').value.trim()) data.clientExecutable = $('integration-executable').value.trim();
-    if ($('integration-interpreter').value.trim()) data.clientInterpreter = $('integration-interpreter').value.trim();
+    const paths = $('integration-executable').value.split('\n').map(value => value.trim()).filter(Boolean);
+    const interpreter = $('integration-interpreter').value.trim();
+    if (paths.length) data.clientExecutables = paths.map(path => ({ path, ...(interpreter ? { interpreter } : {}) }));
+    else if (interpreter) { notify('Select the executable paths to use with this interpreter.'); return; }
     if ($('integration-root').value.trim()) data.configRoot = $('integration-root').value.trim();
   }
   const plan = await api('/integrations/preview', data);
   if (!plan.operationId) { notify('This connection is not configured.'); return; }
   integrationPlan = plan; $('integration-preview-box').hidden = false;
   $('integration-consent-text').textContent = plan.consent;
+  $('integration-selection').replaceChildren();
+  if (plan.executables) {
+    const selection = $('integration-selection');
+    selection.append(node('p', plan.executables.length ? 'After applying, only these executables can record together:' : 'No coding executables will remain enrolled.'));
+    for (const value of plan.executables) selection.append(node('p', value.path + (value.interpreter ? ` (interpreter: ${value.interpreter})` : '')));
+    for (const value of plan.removedExecutables) selection.append(node('p', `Will stop recording: ${value.path}`));
+  }
   $('integration-changes').textContent = JSON.stringify(plan.changes, null, 2);
 }
 action('integration-preview', () => previewIntegration('install'));

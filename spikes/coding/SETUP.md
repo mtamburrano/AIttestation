@@ -26,6 +26,22 @@ be selected explicitly. Script installations also require the actual interpreter
 path. An executable or interpreter update requires a new preview and enrollment.
 Project files and existing unrelated hooks are preserved.
 
+Codex supports up to four explicitly enrolled executable paths under one user
+hook registration. To use desktop and IDE runtimes together, enter both paths in
+Client executables, one per line. The preview shows the complete resulting
+selection and which paths will stop recording. Entering a new list replaces the
+selection; a blank list keeps the enrolled paths, or discovers one executable on
+first setup. Discovery never adds other installations automatically. All selected
+surfaces must use the same user hook configuration. Claude Code retains one
+executable selection. Connections shows the enrolled paths; enrollment itself
+does not establish that any installed surface emits the hook.
+
+To remove one Codex executable, review and apply a list containing only the paths
+to retain. To update a selected build, review the same paths again. Every selection
+change requires fresh consent and revokes in-flight attempts from the previous
+enrollment. A stale preview is rejected even when the hook file is unchanged.
+Existing single-executable enrollments remain single-executable on upgrade.
+
 Enrollment verifies the selected native executable's signature and pins its
 CodeDirectory identity. Each submission validates the running process against
 that identity. Script entrypoints are limited to 4 MiB and also require a pinned
@@ -49,7 +65,9 @@ Hook diagnostics contain bounded stage counters, without prompt text, paths,
 client identifiers or raw error messages.
 
 Removing or replacing an enrollment immediately retires its resident peer and
-unreleased attempts. Other integrations keep running. Interrupted Firefox native
+unreleased attempts. Already released, consent-bound copies can finish local
+persistence exactly once after disable, removal or replacement. Other integrations
+keep running. Interrupted Firefox native
 registration updates recover ownership from their before/after journal without
 restoring an old configuration over unrelated edits or re-enabling recording.
 
@@ -84,7 +102,9 @@ vault. The optional anchoring service receives blinded commitments, not prompts.
 3. With recording ON, submit distinct synthetic text and equal text twice. Check
    exact bytes and distinct sends in History. Hook evidence describes only the
    documented prompt field, without attachments, hidden context or provider receipt.
-4. Exercise Chrome and Firefox together, then coding clients together. Toggle OFF,
+4. Exercise Chrome and Firefox together, then coding clients together. Keep the
+   selected Codex desktop and IDE paths enrolled together throughout this check;
+   sequential replacement of one enrollment does not prove coexistence. Toggle OFF,
    disconnect one source and disable one connection; other sources remain isolated.
 5. Export a selected mixed-source receipt and verify it in the standalone verifier.
    Back up into a new recovery file and restore into a new empty destination. Check

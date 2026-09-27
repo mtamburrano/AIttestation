@@ -309,10 +309,12 @@ export class RecordingEngine {
       if (command.expectedRevision !== this.#state.revision) reject('STALE_ENGINE_REVISION');
       if (this.#commands.size >= 4096) reject('COMMAND_LIMIT');
       if (command.kind === 'SET_INTEGRATION') {
-        this.#sources.setIntegrationEnabled(command.integrationId, command.enabled);
-        if (!command.enabled) for (const [id, item] of this.#admissions) if (item.peer.integrationId === command.integrationId) {
+        // Released copies already belong to the consent generation that admitted
+        // them. Cancel other attempts even if persisting the revocation fails.
+        if (!command.enabled) for (const [id, item] of this.#admissions) if (item.peer.integrationId === command.integrationId && !item.released) {
           this.#admissions.delete(id); this.#admissionBytes -= item.bytes;
         }
+        this.#sources.setIntegrationEnabled(command.integrationId, command.enabled);
         await this.#commit();
         const ack = { profile: ENGINE_EVENT_PROFILE, commandId: command.commandId, runtimeEpoch: this.#epoch,
           revision: this.#state.revision, integrationId: command.integrationId, enabled: command.enabled };

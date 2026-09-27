@@ -31,6 +31,24 @@ async function fixture(t, options = {}) {
   return { root, f, installation, api };
 }
 
+test('Connections previews the full Codex executable selection and removals before applying consent', async t => {
+  const { root, api } = await fixture(t, { codeIdentity: async () => 'a'.repeat(40) });
+  const paths = [join(root, 'desktop-client'), join(root, 'ide-client')];
+  for (const path of paths) await writeFile(path, 'synthetic native image', { mode: 0o700 });
+  const plan = await api('/integrations/preview', { client: 'codex', clientExecutables: paths.map(path => ({ path })) });
+  assert.deepEqual(plan.executables, paths.map(path => ({ path })));
+  assert.deepEqual(plan.removedExecutables, []);
+  await assert.rejects(readFile(join(root, 'codex/hooks.json')), { code: 'ENOENT' });
+  await api('/integrations/apply', { operationId: plan.operationId, consent: true });
+  const enrolled = (await api('/dashboard/state')).integrations.find(value => value.id === 'codex');
+  assert.equal(enrolled.enabled, true); assert.deepEqual(enrolled.executables, plan.executables);
+  const narrowed = await api('/integrations/preview', { client: 'codex', clientExecutables: [{ path: paths[1] }] });
+  assert.deepEqual(narrowed.removedExecutables, [{ path: paths[0] }]);
+  assert.deepEqual((await api('/dashboard/state')).integrations.find(value => value.id === 'codex').executables, plan.executables);
+  await api('/integrations/apply', { operationId: narrowed.operationId, consent: true });
+  assert.deepEqual((await api('/dashboard/state')).integrations.find(value => value.id === 'codex').executables, [{ path: paths[1] }]);
+});
+
 test('dashboard close/reopen, pause and account loss retain prompt counts, selective export and recovery', async t => {
   let connected = true;
   const { f, api } = await fixture(t, { managed: {

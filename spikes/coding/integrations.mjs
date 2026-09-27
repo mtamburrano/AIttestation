@@ -10,6 +10,17 @@ import { HookHealth } from './health.mjs';
 
 const LIMIT = 1024 * 1024;
 const conflict = () => { throw Error('INTEGRATION_CONFIGURATION_CONFLICT'); };
+const executableLimit = client => client === 'codex' ? 4 : 1;
+const executableSelection = identities => identities.map(({ path, interpreter }) => ({ path, ...(interpreter ? { interpreter: interpreter.path } : {}) }));
+function validateExecutables(client, identities) {
+  const native = value => value && typeof value.path === 'string' && isAbsolute(value.path) && resolve(value.path) === value.path
+    && /^[a-f0-9]{64}$/.test(value.sha256) && value.script === false && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.codeHash);
+  if (!Array.isArray(identities) || !identities.length || identities.length > executableLimit(client)
+      || new Set(identities.map(value => value?.path)).size !== identities.length
+      || identities.some(value => !(native(value) && !value.interpreter) && !(value?.script === true
+        && typeof value.path === 'string' && isAbsolute(value.path) && resolve(value.path) === value.path
+        && /^[a-f0-9]{64}$/.test(value.sha256) && native(value.interpreter) && !value.interpreter.interpreter))) conflict();
+}
 async function executableIdentity(path, codeIdentity) {
   if (!isAbsolute(path)) conflict();
   const selected = await realpath(path), file = await open(selected, 'r');
@@ -52,19 +63,24 @@ export class CodingIntegrations {
     const bytes = await readOwned(this.#journal, 64 * 1024);
     if (bytes) {
       const value = parseCanonical(bytes, 64 * 1024);
-      if (value.profile !== 'pap-coding-integrations/1' || !value.entries || Object.keys(value.entries).some(key => !['codex', 'claude-code'].includes(key))) conflict();
-      for (const [client, entry] of Object.entries(value.entries)) {
+      if (!['pap-coding-integrations/1', 'pap-coding-integrations/2'].includes(value.profile) || !value.entries
+          || Object.keys(value.entries).some(key => !['codex', 'claude-code'].includes(key))) conflict();
+      const validate = (client, entry, previous = false) => {
         if (!entry || entry.client !== client || !isAbsolute(entry.configPath) || !isAbsolute(entry.configRoot)
             || dirname(entry.configPath) !== entry.configRoot || !['settings.json', 'hooks.json', 'config.toml'].includes(entry.configPath.split('/').at(-1))
             || !/^[a-f0-9-]{36}$/.test(entry.installationId ?? '') || !Array.isArray(entry.hook?.hooks)
             || !['configured', 'pending', 'removed'].includes(entry.state)) conflict();
-      }
+        if (value.profile === 'pap-coding-integrations/1') { entry.executables = [entry.executable]; delete entry.executable; }
+        validateExecutables(client, entry.executables);
+        if (entry.previousEntry) { if (previous) conflict(); validate(client, entry.previousEntry, true); }
+      };
+      for (const [client, entry] of Object.entries(value.entries)) validate(client, entry);
       this.#entries = value.entries;
       for (const client of Object.keys(this.#entries)) await this.#recover(client);
     }
     return this;
   }
-  #save() { return atomicWrite(this.#journal, canonical({ profile: 'pap-coding-integrations/1', entries: this.#entries })); }
+  #save() { return atomicWrite(this.#journal, canonical({ profile: 'pap-coding-integrations/2', entries: this.#entries })); }
   async #recover(client) {
     const entry = this.#entries[client];
     if (entry?.state !== 'pending') return;
@@ -100,10 +116,11 @@ export class CodingIntegrations {
         : entry.state === 'pending' ? 'REPAIR_REQUIRED' : hookHealth.lastObserved === 'NEVER_OBSERVED'
           ? client === 'codex' ? 'TRUST_REQUIRED' : 'CONFIGURED' : `HOOK_${hookHealth.lastObserved}`,
         configPath: entry.configPath, installationId: entry.installationId, origin: 'ENROLLED_LOCAL_EXECUTABLE',
+        executables: executableSelection(entry.executables), executableLimit: executableLimit(client),
         restartRequired: true, connected: false, hookHealth };
     }));
   }
-  async preview({ client, action = 'install', configRoot, clientExecutable, clientInterpreter }) {
+  async preview({ client, action = 'install', configRoot, clientExecutable, clientInterpreter, clientExecutables }) {
     if (!['codex', 'claude-code'].includes(client) || !['install', 'remove'].includes(action)) conflict();
     await this.#recover(client);
     const old = this.#entries[client], active = old && old.state !== 'removed';
@@ -121,20 +138,35 @@ export class CodingIntegrations {
     const before = exists ? await readOwned(configPath, LIMIT) : null;
     const text = before ? new TextDecoder('utf8', { fatal: true }).decode(before) : format === 'json' ? '{}\n' : '';
     const installationId = active ? old.installationId : randomUUID();
-    const identity = action === 'install' ? await executableIdentity(clientExecutable ?? old?.executable?.path ?? await discoverExecutable(client), this.#codeIdentity) : old?.executable;
-    if (action === 'install' && identity.script) {
-      const interpreter = clientInterpreter ?? old?.executable?.interpreter?.path;
-      if (!interpreter) throw Error('SELECT_CLIENT_INTERPRETER');
-      identity.interpreter = await executableIdentity(interpreter, this.#codeIdentity);
-      if (identity.interpreter.script) conflict();
+    if (action === 'remove' && !active) return { state: 'NOT_CONFIGURED', client, changes: [] };
+    let identities = old?.executables;
+    if (action === 'install') {
+      if (clientExecutables !== undefined && (clientExecutable !== undefined || clientInterpreter !== undefined)) conflict();
+      const selections = clientExecutables !== undefined ? clientExecutables : (clientExecutable !== undefined || clientInterpreter !== undefined
+        ? [{ path: clientExecutable ?? old?.executables[0].path ?? await discoverExecutable(client), interpreter: clientInterpreter }]
+        : active ? executableSelection(old.executables) : [{ path: await discoverExecutable(client) }]);
+      if (!Array.isArray(selections) || !selections.length || selections.length > executableLimit(client)
+          || selections.some(value => !value || typeof value.path !== 'string' || Object.keys(value).some(key => !['path', 'interpreter'].includes(key))
+            || value.interpreter !== undefined && typeof value.interpreter !== 'string')) conflict();
+      identities = [];
+      for (const selected of selections) {
+        const identity = await executableIdentity(selected.path, this.#codeIdentity);
+        if (identity.script) {
+          const interpreter = selected.interpreter ?? old?.executables.find(value => value.path === identity.path)?.interpreter?.path;
+          if (!interpreter) throw Error('SELECT_CLIENT_INTERPRETER');
+          identity.interpreter = await executableIdentity(interpreter, this.#codeIdentity);
+        }
+        identities.push(identity);
+      }
+      validateExecutables(client, identities);
     }
     const hook = ownedHook(client, this.#receiver, installationId);
     const previous = active ? old.hook : null;
-    if (action === 'remove' && !active) return { state: 'NOT_CONFIGURED', client, changes: [] };
     const edited = editSettings({ text, format, client, installationId, previous,
       next: action === 'install' ? hook : null, fragment: old?.fragment });
     const operationId = randomUUID(), plan = { operationId, client, action, configRoot: root, configPath, format,
-      installationId, hook, executable: identity, fragment: edited.fragment, beforeRevision: revision(before),
+      installationId, hook, executables: identities, enrollmentRevision: old?.operationId ?? null,
+      fragment: edited.fragment, beforeRevision: revision(before),
       existed: before !== null, created: active ? old.created : before === null, content: Buffer.from(edited.text),
       configRevision: config ? revision(config) : null };
     if (this.#plans.size >= 8) this.#plans.delete(this.#plans.keys().next().value);
@@ -142,6 +174,8 @@ export class CodingIntegrations {
     return { operationId, client, action, configPath, beforeRevision: plan.beforeRevision,
       changes: [{ file: configPath, operation: action === 'install' ? active ? 'UPDATE_OWNED_HOOK' : 'ADD_USER_HOOK' : 'REMOVE_OWNED_HOOK',
         hook: action === 'install' ? hook : previous }],
+      executables: action === 'install' ? executableSelection(identities) : [],
+      removedExecutables: executableSelection((active ? old.executables : []).filter(value => action === 'remove' || !identities.some(next => next.path === value.path))),
       consent: 'This integration joins recording when enabled and the global recording preference is ON.',
       trustRequired: client === 'codex', restartRequired: true, evidence: 'RETAINED', keys: 'RETAINED' };
   }
@@ -155,6 +189,7 @@ export class CodingIntegrations {
     this.#plans.delete(operationId);
     // Revocation precedes registration removal/repair, including failed writes.
     await this.#setEnabled(plan.client, false);
+    if ((this.#entries[plan.client]?.operationId ?? null) !== plan.enrollmentRevision || this.#entries[plan.client]?.state === 'pending') conflict();
     await ownedDirectory(plan.configRoot);
     const current = await readOwned(plan.configPath, LIMIT);
     if (revision(current) !== plan.beforeRevision || (current !== null) !== plan.existed) conflict();
@@ -163,10 +198,10 @@ export class CodingIntegrations {
       if ((config ? revision(config) : null) !== plan.configRevision) conflict();
     }
     if (plan.action === 'install') {
-      const currentIdentity = await executableIdentity(plan.executable.path, this.#codeIdentity);
-      const { interpreter, ...selectedIdentity } = plan.executable;
-      if (!isDeepStrictEqual(currentIdentity, selectedIdentity)) conflict();
-      if (interpreter && !isDeepStrictEqual(await executableIdentity(interpreter.path, this.#codeIdentity), interpreter)) conflict();
+      for (const { interpreter, ...selectedIdentity } of plan.executables) {
+        if (!isDeepStrictEqual(await executableIdentity(selectedIdentity.path, this.#codeIdentity), selectedIdentity)) conflict();
+        if (interpreter && !isDeepStrictEqual(await executableIdentity(interpreter.path, this.#codeIdentity), interpreter)) conflict();
+      }
     }
     const { content, existed: _existed, configRevision: _configRevision, ...record } = plan;
     this.#entries[plan.client] = { ...record, state: 'pending', afterRevision: revision(content), previousEntry: this.#entries[plan.client] ?? null };

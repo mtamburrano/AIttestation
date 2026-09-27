@@ -12,13 +12,14 @@ import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp('/private/tmp/attestamp-hook-lifecycle-test-');
-  let authorized = true, f, validationGate;
+  let authorized = true, f, validationGate, peerPaths = [];
   t.after(async () => { try { await f?.close(); } finally { await rm(root, { recursive: true, force: true }); } });
   const diagnostics = new LocalDiagnostics();
   f = await recordingFixture(root, { recording: true, managed: null, diagnostics,
     codeIdentity: async () => 'a'.repeat(40), hookPeer: async (_socket, enrollment) => {
+      const peerPath = peerPaths.shift();
       if (validationGate) { validationGate.enter(); await validationGate.wait; }
-      if (!authorized) throw Error('PRIVATE_ERROR_WITH_PROMPT_AND_PATH');
+      if (!authorized || peerPath && !enrollment.executables.some(value => value.path === peerPath)) throw Error('PRIVATE_ERROR_WITH_PROMPT_AND_PATH');
       return { client: enrollment.client, origin: 'enrolled-local-executable' };
     } });
   const executable = join(root, 'synthetic-client'); await writeFile(executable, 'synthetic native client', { mode: 0o700 });
@@ -37,8 +38,30 @@ async function fixture(t) {
     const entered = new Promise(resolve => { enter = resolve; }), wait = new Promise(resolve => { release = resolve; });
     validationGate = { enter, wait }; return { entered, release };
   };
-  return { ...f, manager, invoke, change, diagnostics, pauseIdentity, rejectIdentity: () => { authorized = false; } };
+  return { ...f, root, executable, manager, invoke, change, diagnostics, pauseIdentity,
+    selectPeerPaths: paths => { peerPaths = [...paths]; }, rejectIdentity: () => { authorized = false; } };
 }
+
+test('two enrolled Codex origins admit concurrently; removing one revokes its in-flight authentication without losing the other', async t => {
+  const f = await fixture(t), second = join(f.root, 'second-synthetic-client'); await writeFile(second, 'second synthetic image', { mode: 0o700 });
+  const select = async paths => {
+    const plan = await f.manager.preview({ client: 'codex', clientExecutables: paths.map(path => ({ path })) });
+    await f.manager.apply({ operationId: plan.operationId, consent: true });
+    return (await f.manager.status()).find(value => value.id === 'codex');
+  };
+  const entry = await select([f.executable, second]); f.selectPeerPaths([f.executable, second]);
+  const results = await Promise.all([f.invoke('codex', entry.installationId), f.invoke('codex', entry.installationId)]);
+  assert.deepEqual(results.map(value => value.state), ['ADMITTED', 'ADMITTED']);
+  await f.runtime.coreEngine.drain(); assert.equal(f.runtime.session.versionCount, 2);
+  assert.equal(new Set(f.runtime.session.status({ limit: 5 }).versions.map(value => value.id)).size, 2);
+  f.selectPeerPaths([second]); const gate = f.pauseIdentity(), stale = f.invoke('codex', entry.installationId);
+  await gate.entered; await select([f.executable]); assert.equal((await stale).state, 'UNAVAILABLE'); gate.release();
+  f.selectPeerPaths([second]); assert.equal((await f.invoke('codex', entry.installationId)).state, 'UNAVAILABLE');
+  f.selectPeerPaths([f.executable]); assert.equal((await f.invoke('codex', entry.installationId)).state, 'ADMITTED');
+  await f.runtime.coreEngine.drain(); assert.equal(f.runtime.session.versionCount, 3);
+  await f.send('Synthetic Chrome after narrowing Codex enrollment');
+  await until(() => f.runtime.session.versionCount === 4);
+});
 
 test('both coding clients survive six remove/install cycles alongside Chrome without restarting the resident', async t => {
   const f = await fixture(t);

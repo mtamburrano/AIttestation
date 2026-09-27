@@ -1,8 +1,66 @@
 # Mac integration validation
 
-Recorded September 25–27, 2026, on Apple-silicon macOS. These results distinguish
+Recorded September 25–28, 2026, on Apple-silicon macOS. These results distinguish
 local synthetic validation from installed vendor-client and release acceptance.
 They do not establish public release readiness or universal IDE/desktop support.
+
+## Released admissions and multiple Codex executables
+
+The September 28 correction retains already released admissions across immediate
+integration disable, removal, update and re-enrollment. Unreleased attempts and
+stale generation authorities remain rejected; released text persists exactly once.
+All four regression cases fail against the September 27 source baseline by losing
+the released copy. Revocation-write failure also cancels unreleased attempts.
+
+Codex now accepts an explicitly consented set of one to four executable identities
+under one owned user hook. Each invocation still authenticates the bundled receiver,
+kernel-derived process ancestry, exact selected executable path and pinned native
+code identity (plus script digest and interpreter identity where applicable).
+There is no vendor-wide allowlist. Existing singleton journals migrate without
+adding identities or enabling capture. Preview/status expose the selection and
+removals, and stale identity-only previews fail even if the hook bytes are unchanged.
+
+The consolidated isolated regression set passed **439/439 tests**, with no skips.
+The final focused coding/Connections set passed **33/33 tests** (overlapping the
+consolidated set), including an in-memory DOM check of the shipped selection UI.
+The checks cover Chrome regression, shared source/consent boundaries, coding and
+Firefox lifecycle, mixed evidence and recovery, bounded vault behavior, and
+synthetic artifact/package policies.
+
+The runtime fixture exercises two simultaneous Codex admissions, removal during
+authentication, rejection of the removed identity, continued capture from the
+remaining selection, and Chrome coexistence. The native harness separately keeps
+four identities enrolled together and alternates distinct signed synthetic native
+clients without re-enrollment. It also exercises a pinned script/interpreter.
+These fixtures establish local implementation behavior only; installed desktop/IDE
+hook emission, trust and latency remain unverified.
+
+The fresh native run used Node 22.23.1, Apple M1 Pro / Darwin 24.6.0 and a
+213,500,936-byte primary fixture executable. All **390 invocations** exited 0 with
+empty stdout/stderr and stayed below 250 ms. Raw samples and exact source hashes
+are retained in [`multi-native.json`](../../test/evidence/mac-hook-admission/multi-native.json).
+
+| Path | Samples | p50 ms | p95 ms | p99 / max ms | Saved |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| OFF | 60 | 29.43 | 35.82 | 41.39 | 0 |
+| ON, primary identity | 60 | 58.23 | 66.85 | 79.49 | 60 |
+| ON, alternating other selected identities | 60 | 57.59 | 71.70 | 96.70 | 60 |
+| Busy | 60 | 56.40 | 62.50 | 66.03 | 0 |
+| Re-signed client | 60 | 55.43 | 66.98 | 69.47 | 0 |
+| Resident unavailable | 60 | 21.48 | 27.09 | 82.90 | 0 |
+
+Thirty additional attempts cover the script path, an unselected path with an
+otherwise enrolled signature, noninteractive arguments, changed script and
+interpreter, removed and remaining identities, stalled input, malformed JSON and
+oversized input. Only the selected script and remaining native identity saved
+evidence (three each). All other cases saved nothing. Native identity failures
+were rejected before admission. The maximum stalled-input duration was 217.67 ms.
+
+This correction used fresh temporary directories, memory keys, explicit synthetic
+configuration roots and generated ad-hoc native fixtures. It performed no
+installed-client, live Send, Mozilla signing, retained-kit or operational-config
+checks. The historical measurements below have not been reclassified as new
+installed acceptance.
 
 ## Executed checks
 
@@ -141,11 +199,13 @@ Current verified CodeDirectory identities (these pin builds, not hook coverage):
 | Codex VS Code `bin/macos-aarch64/codex` | `7de864b4e3332438092c6ef5f8ac7926dcd04187` | `2DC432GLL2` |
 | Claude VS Code `resources/native-binary/claude` | `3250f2eaeece15c055bbce96c9ca345b5d404465` | `Q6L2SF6YDW` |
 
-One executable/interpreter is enrolled per coding client. Switching between the
-different Codex desktop/IDE binaries requires a new preview/enrollment and any
-renewed vendor trust. Their simultaneous interchangeability is not supported by
-these measurements. The primary desktop runtime lives in ChatGPT.app, which is
-checked before the older Codex.app during bounded default discovery.
+The inventory above was recorded before multiple Codex enrollment was implemented;
+it does not validate simultaneous installed desktop/IDE behavior. Those distinct
+Codex binaries can now be selected together, subject to explicit preview/consent,
+one shared user configuration and each client's own trust requirements. Installed
+coexistence still needs its own authorized evidence. Default discovery selects
+only one path, checking ChatGPT.app before the older Codex.app. Claude Code still
+enrolls one executable/interpreter.
 
 All other checks used fresh temporary resources, memory keys or uniquely signed
 synthetic native fixtures. No provider Sends, chain transactions, retained owner

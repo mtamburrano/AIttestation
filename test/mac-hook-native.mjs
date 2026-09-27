@@ -54,7 +54,16 @@ try {
   }
   run('/usr/bin/xcrun', ['clang', join(root, 'client.c'), ...clientLinker, '-o', client]);
   const codeHash = spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', client], { encoding: 'utf8' }).stderr.match(/^CDHash=([a-f0-9]+)$/m)[1];
-  const digest = createHash('sha256').update(await readFile(client)).digest('hex');
+  const identity = async path => ({ path, script: false, sha256: createHash('sha256').update(await readFile(path)).digest('hex'),
+    codeHash: spawnSync('/usr/bin/codesign', ['-d', '--verbose=4', path], { encoding: 'utf8' }).stderr.match(/^CDHash=([a-f0-9]+)$/m)[1] });
+  const second = join(root, 'second-native-client'), last = join(root, 'fourth-native-client'), interpreter = join(root, 'script-interpreter');
+  for (const [path, id] of [[second, 'second'], [last, 'fourth'], [interpreter, 'interpreter']]) {
+    await cp(client, path); run('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', namespace + '.' + id, path]);
+  }
+  const unenrolled = join(root, 'unenrolled-copy'); await cp(second, unenrolled);
+  const script = join(root, 'script-client'); await writeFile(script, '#!synthetic-fixture\n', { mode: 0o700 });
+  const executables = [await identity(client), await identity(second), { path: script, script: true,
+    sha256: createHash('sha256').update(await readFile(script)).digest('hex'), interpreter: await identity(interpreter) }, await identity(last)];
   const main = join(resources, 'native-test-runtime.mjs');
   await writeFile(main, `
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -72,7 +81,7 @@ const directory=${JSON.stringify(support)}, epoch=randomUUID(), key=randomBytes(
 const vault=new Vault(join(directory,'vault'),key,undefined,{create:true});
 const core=await startRecordingCore({directory,sources,runtimeEpoch:epoch,vault,managed:null,fastTrust:{profile:'pap-algorand-fast-confirmation/1'},
  integrations:[{id:'codex',supported:true,previouslyEnabled:true}],platform:{lock:lockResidentEngine,stateStore:(p,v)=>new EngineStateStore(p,v)}});
-const enrollment={client:'codex',installationId:${JSON.stringify(installationId)},operationId:'native-fixture',executable:{path:${JSON.stringify(client)},sha256:${JSON.stringify(digest)},codeHash:${JSON.stringify(codeHash)}}};
+const enrollment={client:'codex',installationId:${JSON.stringify(installationId)},operationId:'native-fixture',executables:${JSON.stringify(executables)}};
 const counters={peer:0,authorized:0,admitted:0,rejected:0,released:0,save:0}, timings={peer:[],admission:[]};
 const admit=core.engine.admit.bind(core.engine);core.engine.admit=(...args)=>{const start=performance.now();try{const result=admit(...args);counters.admitted++;return result;}catch(error){counters.rejected++;throw error;}finally{timings.admission.push(performance.now()-start);}};
 const release=core.engine.releaseAdmission.bind(core.engine);core.engine.releaseAdmission=(...args)=>{const result=release(...args);if(result)counters.released++;return result;};
@@ -90,6 +99,7 @@ for await (const line of createInterface({input:process.stdin})) {
   if(kind==='busy') for(let n=0;n<8;n++) core.engine.admit({text:'Synthetic queue pressure',sessionId:'busy-'+Math.floor(n/4),promptId:null,turnId:'t',invocationId:randomUUID(),scope:randomUUID()},extra,{deadline:performance.now()+100,authority:core.engine.beginAdmission()});
  }
  if(kind==='unavailable') await server.close();
+ if(kind==='remove-second') enrollment.executables=enrollment.executables.filter(value=>value.path!==${JSON.stringify(second)});
  await core.engine.drain();console.log(JSON.stringify({count:core.session.versionCount,counters,timings:{peer:timings.peer.splice(0),admission:timings.admission.splice(0)}}));
 }
 `);
@@ -118,14 +128,24 @@ for await (const line of createInterface({input:process.stdin})) {
     os: release(), cpu: cpus()[0]?.model, loadBefore: loadavg(),
     clientSize: (await readFile(client)).length,
     identity: 'REAL_KERNEL_PEERS_AND_AD_HOC_TEST_SIGNATURES', vendorClient: 'SYNTHETIC_ENROLLED_NATIVE_FIXTURE', samples: 60, paths: {} };
-  for (const mode of ['off', 'on', 'input-timeout', 'malformed', 'oversized', 'busy', 'changed-client', 'unavailable']) {
+  for (const mode of ['off', 'on', 'coexisting-native', 'script', 'unenrolled-path', 'noninteractive', 'changed-script', 'changed-interpreter',
+    'remove-second', 'remaining-native', 'input-timeout', 'malformed', 'oversized', 'busy', 'changed-client', 'unavailable']) {
     if (mode === 'changed-client') run('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', namespace + '.changed', client]);
+    if (mode === 'changed-script') await writeFile(script, '#!synthetic-fixture\nchanged\n');
+    if (mode === 'changed-interpreter') {
+      await writeFile(script, '#!synthetic-fixture\n');
+      run('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', namespace + '.changed-interpreter', interpreter]);
+    }
     const beforeState = await command(mode), before = beforeState.count, times = [], totalTimes = [], stages = {};
     const add = (stage, value) => (stages[stage] ??= []).push(value);
-    const samples = ['input-timeout', 'malformed', 'oversized'].includes(mode) ? 3 : report.samples;
+    const samples = ['off', 'on', 'busy', 'changed-client', 'unavailable', 'coexisting-native'].includes(mode) ? report.samples : 3;
     for (let i = 0; i < samples; i++) {
       const start = performance.now();
-      const child = spawn(client, [], { env: {}, stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'pipe', 'pipe'] }); let stdout = '', stderr = '', measurement = '', stageOutput = '';
+      const scriptMode = ['script', 'changed-script', 'changed-interpreter'].includes(mode);
+      const selected = scriptMode ? interpreter : mode === 'unenrolled-path' ? unenrolled : mode === 'remove-second' ? second
+        : mode === 'remaining-native' ? last : mode === 'coexisting-native' ? (i % 2 ? second : last) : client;
+      const child = spawn(selected, scriptMode ? [script] : mode === 'noninteractive' ? ['exec'] : [],
+        { env: {}, stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'pipe', 'pipe'] }); let stdout = '', stderr = '', measurement = '', stageOutput = '';
       child.stdio[4].on('data', b => { measurement += b.toString(); });
       child.stdio[5].on('data', b => { stageOutput += b.toString(); });
       child.stdout.on('data', b => { stdout += b.toString(); }); child.stderr.on('data', b => { stderr += b.toString(); });
@@ -156,13 +176,19 @@ for await (const line of createInterface({input:process.stdin})) {
       return [name, { samples: values.length, p50Ms: p(.5), p95Ms: p(.95), p99Ms: p(.99), maximumMs: p(1) }];
     }));
     report.paths[mode].samplesMs = times;
-    if (mode === 'changed-client') assert.equal(state.counters.authorized, beforeState.counters.authorized, 'A re-signed client must require new enrollment');
+    if (['changed-client', 'changed-interpreter', 'changed-script', 'unenrolled-path', 'noninteractive', 'remove-second'].includes(mode)) {
+      assert.equal(state.counters.authorized, beforeState.counters.authorized, 'Unenrolled, changed or noninteractive origins must fail native authentication');
+    }
     assert.ok(times.every(ms => ms <= 250), JSON.stringify({ mode, times }));
-    assert.equal(after-before, mode === 'on' ? report.samples : 0, JSON.stringify(report));
+    assert.equal(after-before, ['on', 'coexisting-native', 'script', 'remaining-native'].includes(mode) ? samples : 0, JSON.stringify(report));
   }
   host.stdin.end('{"kind":"stop"}\n');
   await Promise.race([hostFinished, new Promise((_, reject) => setTimeout(() => reject(Error('NATIVE_RUNTIME_STOP_TIMEOUT')), 3000))]);
   report.loadAfter = loadavg();
+  report.sources = await Promise.all(['spikes/core/recording-engine.mjs', 'spikes/coding/integrations.mjs',
+    'spikes/platform/macos/hook-peer.mjs', 'spikes/coding/native/macos-hook-peer.swift', 'spikes/coding/native/macos-hook-security.swift',
+    'spikes/coding/native/macos-hook-receiver.swift', 'spikes/coding/runtime.mjs', 'test/mac-hook-native.mjs'].map(async path => ({ path,
+    sha256: createHash('sha256').update(await readFile(join(repo, path))).digest('hex') })));
   await writeFile(reportPath, JSON.stringify(report, null, 2), { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify(report));
 } finally {
