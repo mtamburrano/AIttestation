@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
+import { cpus, loadavg, release } from 'node:os';
 
 if (process.platform !== 'darwin' || ![3,4].includes(process.argv.length)
     || process.argv[3] && process.argv[3] !== '--large-client') throw Error('Usage: node test/mac-hook-native.mjs NEW_REPORT_FILE [--large-client]');
@@ -27,13 +28,25 @@ try {
   const native = join(repo, 'spikes/coding/native'), shared = join(root, 'security.swift');
   await writeFile(shared, (await readFile(join(native, 'macos-hook-security.swift'), 'utf8')).replaceAll('ai.provenance.consumer', namespace));
   const receiver = join(root, 'receiver.swift');
-  await writeFile(receiver, (await readFile(join(native, 'macos-hook-receiver.swift'), 'utf8'))
-    .replace('String(cString: home) + "/Library/Application Support/Private Provenance"', JSON.stringify(support)));
+  // Timing is compiled into this disposable fixture only. No production flag,
+  // environment switch, extra output or diagnostic disk write is introduced.
+  let receiverSource = (await readFile(join(native, 'macos-hook-receiver.swift'), 'utf8'))
+    .replace('String(cString: home) + "/Library/Application Support/Private Provenance"', JSON.stringify(support));
+  const timing = `\nprivate func measure(_ stage: String) { var now = timespec(); clock_gettime(CLOCK_MONOTONIC, &now); let line = "\\(stage) \\(Double(now.tv_sec) * 1000 + Double(now.tv_nsec) / 1000000)\\n"; line.withCString { _ = write(5, $0, strlen($0)) } }\n`;
+  receiverSource = receiverSource.replace('import Foundation', 'import Foundation' + timing)
+    .replace('static func main() {', 'static func main() {\n    measure("main")')
+    .replace('try hookValidateBundle()', 'try hookValidateBundle(); measure("bundle")')
+    .replace('let resident = try hookPeer(connection)', 'measure("connected"); let resident = try hookPeer(connection)')
+    .replace('var input = Data()', 'measure("resident"); var input = Data()')
+    .replace('let admitted = try response', 'measure("sent"); let admitted = try response')
+    .replace('try send(connection, ["profile": profile, "kind": "RELEASE"', 'measure("admitted"); try send(connection, ["profile": profile, "kind": "RELEASE"')
+    .replace('== admitted else { throw HookFailure.rejected }', '== admitted else { throw HookFailure.rejected }; measure("released")');
+  await writeFile(receiver, receiverSource);
   for (const [source, target] of [[receiver, 'provenance-hook-receiver'], [join(native, 'macos-hook-peer.swift'), 'provenance-hook-peer-validator']]) {
     run('/usr/bin/xcrun', ['swiftc', '-O', '-module-cache-path', join(root, 'swift-cache'), '-framework', 'Security', shared, source, '-o', join(bin, target)]);
   }
   const client = join(root, 'enrolled-fixture-client'), launcher = join(bin, 'provenance-hook-receiver');
-  await writeFile(join(root, 'client.c'), `#include <unistd.h>\n#include <sys/wait.h>\n#include <time.h>\n#include <stdio.h>\nint main(void){struct timespec start,end;clock_gettime(CLOCK_MONOTONIC,&start);pid_t p=fork();if(p==0){char *a[]={${JSON.stringify(launcher)},"codex",${JSON.stringify(installationId)},0};execv(a[0],a);_exit(1);}int s;waitpid(p,&s,0);clock_gettime(CLOCK_MONOTONIC,&end);dprintf(4,"%f",(end.tv_sec-start.tv_sec)*1000.0+(end.tv_nsec-start.tv_nsec)/1000000.0);return WIFEXITED(s)?WEXITSTATUS(s):1;}\n`);
+  await writeFile(join(root, 'client.c'), `#include <unistd.h>\n#include <sys/wait.h>\n#include <time.h>\n#include <stdio.h>\nint main(void){struct timespec start,end;clock_gettime(CLOCK_MONOTONIC,&start);dprintf(5,"start %.6f\\n",start.tv_sec*1000.0+start.tv_nsec/1000000.0);pid_t p=fork();if(p==0){char *a[]={${JSON.stringify(launcher)},"codex",${JSON.stringify(installationId)},0};execv(a[0],a);_exit(1);}int s;waitpid(p,&s,0);clock_gettime(CLOCK_MONOTONIC,&end);dprintf(4,"%f",(end.tv_sec-start.tv_sec)*1000.0+(end.tv_nsec-start.tv_nsec)/1000000.0);return WIFEXITED(s)?WEXITSTATUS(s):1;}\n`);
   const clientLinker = [];
   if (process.argv[3]) {
     const padding = join(root, 'synthetic-padding'); await writeFile(padding, ''); await truncate(padding, 202 * 1024 * 1024);
@@ -60,12 +73,12 @@ const vault=new Vault(join(directory,'vault'),key,undefined,{create:true});
 const core=await startRecordingCore({directory,sources,runtimeEpoch:epoch,vault,managed:null,fastTrust:{profile:'pap-algorand-fast-confirmation/1'},
  integrations:[{id:'codex',supported:true,previouslyEnabled:true}],platform:{lock:lockResidentEngine,stateStore:(p,v)=>new EngineStateStore(p,v)}});
 const enrollment={client:'codex',installationId:${JSON.stringify(installationId)},operationId:'native-fixture',executable:{path:${JSON.stringify(client)},sha256:${JSON.stringify(digest)},codeHash:${JSON.stringify(codeHash)}}};
-const counters={peer:0,authorized:0,admitted:0,rejected:0,released:0,save:0};
-const admit=core.engine.admit.bind(core.engine);core.engine.admit=(...args)=>{try{const result=admit(...args);counters.admitted++;return result;}catch(error){counters.rejected++;throw error;}};
+const counters={peer:0,authorized:0,admitted:0,rejected:0,released:0,save:0}, timings={peer:[],admission:[]};
+const admit=core.engine.admit.bind(core.engine);core.engine.admit=(...args)=>{const start=performance.now();try{const result=admit(...args);counters.admitted++;return result;}catch(error){counters.rejected++;throw error;}finally{timings.admission.push(performance.now()-start);}};
 const release=core.engine.releaseAdmission.bind(core.engine);core.engine.releaseAdmission=(...args)=>{const result=release(...args);if(result)counters.released++;return result;};
 const save=core.session.observe.bind(core.session);core.session.observe=(...args)=>{try{const result=save(...args);counters.save++;return result;}catch(error){counters.saveError=error.message;throw error;}};
 const server=await startCodingRuntime({directory,engine:core.engine,sources,runtimeEpoch:epoch,
- integrations:{enrollment:(client,id)=>client==='codex'&&id===enrollment.installationId?enrollment:null},attestPeer:async(...args)=>{counters.peer++;const result=await attestHookPeer(...args);counters.authorized++;return result;}});
+ integrations:{enrollment:(client,id)=>client==='codex'&&id===enrollment.installationId?enrollment:null},attestPeer:async(...args)=>{counters.peer++;const start=performance.now();try{const result=await attestHookPeer(...args);counters.authorized++;return result;}finally{timings.peer.push(performance.now()-start);}}});
 const extra=sources.attach({integrationId:'codex',installationId:randomUUID(),boundary:new CodingAdmission({integrationId:'codex',installationId:randomUUID(),runtimeEpoch:epoch,origin:'enrolled-local-executable'})});
 console.log(JSON.stringify({ready:true}));
 for await (const line of createInterface({input:process.stdin})) {
@@ -77,7 +90,7 @@ for await (const line of createInterface({input:process.stdin})) {
   if(kind==='busy') for(let n=0;n<8;n++) core.engine.admit({text:'Synthetic queue pressure',sessionId:'busy-'+Math.floor(n/4),promptId:null,turnId:'t',invocationId:randomUUID(),scope:randomUUID()},extra,{deadline:performance.now()+100,authority:core.engine.beginAdmission()});
  }
  if(kind==='unavailable') await server.close();
- await core.engine.drain();console.log(JSON.stringify({count:core.session.versionCount,counters}));
+ await core.engine.drain();console.log(JSON.stringify({count:core.session.versionCount,counters,timings:{peer:timings.peer.splice(0),admission:timings.admission.splice(0)}}));
 }
 `);
   const fastProfile = (await import('../spikes/anchor/algorand/fast-confirm.mjs')).FAST_CONFIRM_PROFILE;
@@ -102,32 +115,54 @@ for await (const line of createInterface({input:process.stdin})) {
   assert.equal((await next()).ready, true);
   const command = async kind => { host.stdin.write(JSON.stringify({ kind }) + '\n'); return next(); };
   const report = { platform: process.platform, arch: process.arch, node: process.version,
+    os: release(), cpu: cpus()[0]?.model, loadBefore: loadavg(),
     clientSize: (await readFile(client)).length,
     identity: 'REAL_KERNEL_PEERS_AND_AD_HOC_TEST_SIGNATURES', vendorClient: 'SYNTHETIC_ENROLLED_NATIVE_FIXTURE', samples: 60, paths: {} };
-  for (const mode of ['off', 'on', 'busy', 'changed-client', 'unavailable']) {
+  for (const mode of ['off', 'on', 'input-timeout', 'malformed', 'oversized', 'busy', 'changed-client', 'unavailable']) {
     if (mode === 'changed-client') run('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', namespace + '.changed', client]);
-    const beforeState = await command(mode), before = beforeState.count, times = [], totalTimes = [];
-    for (let i = 0; i < report.samples; i++) {
+    const beforeState = await command(mode), before = beforeState.count, times = [], totalTimes = [], stages = {};
+    const add = (stage, value) => (stages[stage] ??= []).push(value);
+    const samples = ['input-timeout', 'malformed', 'oversized'].includes(mode) ? 3 : report.samples;
+    for (let i = 0; i < samples; i++) {
       const start = performance.now();
-      const child = spawn(client, [], { env: {}, stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'pipe'] }); let stdout = '', stderr = '', measurement = '';
+      const child = spawn(client, [], { env: {}, stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'pipe', 'pipe'] }); let stdout = '', stderr = '', measurement = '', stageOutput = '';
       child.stdio[4].on('data', b => { measurement += b.toString(); });
+      child.stdio[5].on('data', b => { stageOutput += b.toString(); });
       child.stdout.on('data', b => { stdout += b.toString(); }); child.stderr.on('data', b => { stderr += b.toString(); });
       const done = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, signal) => resolve({ code, signal })); });
       child.stdin.on('error', () => {});
-      child.stdin.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'native-fixture', turn_id: 'turn', prompt: '\ufeffSynthetic native exact e\u0301\r\n\0' }));
+      const payload = JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'native-fixture', turn_id: 'turn', prompt: '\ufeffSynthetic native exact e\u0301\r\n\0' });
+      if (mode === 'input-timeout') child.stdin.write(payload);
+      else child.stdin.end(mode === 'malformed' ? '{"prompt":"first","prompt":"second"}'
+        : mode === 'oversized' ? Buffer.alloc(1024 * 1024 + 1, 65) : payload);
       const result = await done; totalTimes.push(performance.now() - start);
       assert.ok(Number.isFinite(Number(measurement)) && Number(measurement) > 0); times.push(Number(measurement));
       assert.deepEqual(result, { code: 0, signal: null }); assert.equal(stdout, ''); assert.equal(stderr, '');
       await new Promise(resolve => setTimeout(resolve, 20));
-      await command('drain');
+      const marks = Object.fromEntries(stageOutput.trim().split('\n').map(line => { const [stage, time] = line.split(' '); return [stage, Number(time)]; }));
+      add('mainToExit', Number(measurement) - (marks.main - marks.start));
+      for (const [name, start, end] of [['launch', 'start', 'main'], ['bundleSignature', 'main', 'bundle'],
+        ['rendezvousConnect', 'bundle', 'connected'], ['residentSignatures', 'connected', 'resident'],
+        ['inputAndSend', 'resident', 'sent'], ['admissionRoundTrip', 'sent', 'admitted'], ['releaseRoundTrip', 'admitted', 'released']]) {
+        if (Number.isFinite(marks[start]) && Number.isFinite(marks[end])) add(name, marks[end] - marks[start]);
+      }
+      const drained = await command('drain');
+      for (const [name, values] of Object.entries(drained.timings)) for (const value of values) add(name, value);
     }
     const state = await command('drain'), after = state.count, ordered = [...times].sort((a,b) => a-b), p = n => ordered[Math.ceil(n*ordered.length)-1];
-    report.paths[mode] = { p50Ms: p(.5), p95Ms: p(.95), p99Ms: p(.99), maximumMs: p(1), saved: after-before, clientLaunchMaximumMs: Math.max(...totalTimes), counters: state.counters, over250Ms: times.filter(ms=>ms>250).length };
+    report.paths[mode] = { samples, p50Ms: p(.5), p95Ms: p(.95), p99Ms: p(.99), maximumMs: p(1), saved: after-before, clientLaunchMaximumMs: Math.max(...totalTimes), counters: state.counters, over250Ms: times.filter(ms=>ms>250).length };
+    report.paths[mode].stages = Object.fromEntries(Object.entries(stages).map(([name, values]) => {
+      const ordered = values.sort((a,b) => a-b), p = n => ordered[Math.ceil(n * ordered.length)-1];
+      return [name, { samples: values.length, p50Ms: p(.5), p95Ms: p(.95), p99Ms: p(.99), maximumMs: p(1) }];
+    }));
+    report.paths[mode].samplesMs = times;
     if (mode === 'changed-client') assert.equal(state.counters.authorized, beforeState.counters.authorized, 'A re-signed client must require new enrollment');
+    assert.ok(times.every(ms => ms <= 250), JSON.stringify({ mode, times }));
     assert.equal(after-before, mode === 'on' ? report.samples : 0, JSON.stringify(report));
   }
   host.stdin.end('{"kind":"stop"}\n');
   await Promise.race([hostFinished, new Promise((_, reject) => setTimeout(() => reject(Error('NATIVE_RUNTIME_STOP_TIMEOUT')), 3000))]);
+  report.loadAfter = loadavg();
   await writeFile(reportPath, JSON.stringify(report, null, 2), { flag: 'wx', mode: 0o600 });
   console.log(JSON.stringify(report));
 } finally {

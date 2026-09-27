@@ -161,7 +161,16 @@ function render(value) {
   $('other-integrations').replaceChildren(...(state.integrations ?? []).map(value => {
     const label = { NOT_CONFIGURED: 'Not configured', CONFIGURATION_CONFLICT: 'Settings changed; review setup again',
       REPAIR_REQUIRED: 'Setup was interrupted; review setup again', TRUST_REQUIRED: 'Review the hook in Codex, then restart the client',
-      CONFIGURED: 'Configured; restart the client after changes', EXTENSION_INSTALL_REQUIRED: 'Native connection configured; install the Firefox extension separately' }[value.state] ?? 'Connection status unavailable';
+      CONFIGURED: 'Configured; no hook observed yet', EXTENSION_INSTALL_REQUIRED: 'Native connection configured; install the Firefox extension separately',
+      HOOK_RECEIVED: 'Checking a hook attempt', HOOK_AUTHENTICATED: 'Hook identity checked',
+      HOOK_ADMITTED: 'Submission admitted; check History for saved evidence', HOOK_RELEASED: 'Hook observed; check History for saved evidence',
+      HOOK_AUTH_REJECTED: 'Last hook failed identity checks; review the selected executable and reconnect',
+      HOOK_UNKNOWN_INSTALLATION: 'Last hook used an unrecognized registration; review setup',
+      HOOK_ENROLLMENT_CHANGED: 'Connection changed during the last hook attempt',
+      HOOK_BUSY: 'Last hook skipped because recording was busy', HOOK_PEER_LIMIT: 'Last hook skipped because connection capacity was reached',
+      HOOK_DISABLED: 'Last hook skipped because recording was disabled', HOOK_UNAVAILABLE: 'Last hook could not reach recording',
+      HOOK_UNSUPPORTED: 'Last hook payload was unsupported', HOOK_EXPIRED: 'Last hook exceeded its local admission deadline',
+      HOOK_CANCELLED: 'Last hook ended before admission completed' }[value.state] ?? 'Connection status unavailable';
     const row = node('p', `${{ codex: 'Codex', 'claude-code': 'Claude Code', 'firefox-chatgpt': 'Firefox · ChatGPT' }[value.id]}: ${label}. `
       + (value.enabled ? value.recording ? 'Included in ON recording.' : 'Enabled; global recording is OFF.' : 'Recording disabled.'));
     return row;

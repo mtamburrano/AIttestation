@@ -2,8 +2,9 @@ import { parseUniqueJSON } from '../distribution/unique-json.mjs';
 import { decodeCodex } from './codex.mjs';
 import { decodeClaudeCode } from './claude-code.mjs';
 
-export const HOOK_IPC_PROFILE = 'pap-hook-admission/1';
+export const HOOK_IPC_PROFILE = 'pap-hook-admission/2';
 export const HOOK_INPUT_LIMIT = 1024 * 1024;
+export const HOOK_WIRE_LIMIT = Math.ceil(HOOK_INPUT_LIMIT / 3) * 4 + 4096;
 export const HOOK_DEADLINE_MS = 250;
 export const HOOK_RECEIVER_MS = 180;
 

@@ -13,11 +13,9 @@ import Foundation
       }
       guard args.count == 6, ["codex", "claude-code"].contains(args[1]), args[2].hasPrefix("/"),
             args[3].range(of: "\\A[a-f0-9]{40}([a-f0-9]{24})?\\z", options: .regularExpression) != nil else { throw HookFailure.rejected }
-      // LOCAL_PEERPID follows the process using the inherited connection. The
-      // fixed Node receiver must be a child of our signed native deadline guard.
-      let receiver = try hookPeer(3)
-      try hookValidateBundledProcess(receiver, identifier: hookRuntimeIdentifier, filename: "node")
-      let launcher = try hookParent(receiver)
+      // The fixed native deadline guard owns the socket directly. Never accept
+      // a caller-supplied PID or an arbitrary bundled interpreter as the hook.
+      let launcher = try hookPeer(3)
       try hookValidateBundledProcess(launcher, identifier: hookLauncherIdentifier, filename: "provenance-hook-receiver")
       var candidate = try hookParent(launcher)
       // Codex's documented shell form may add one system shell. Exec-form

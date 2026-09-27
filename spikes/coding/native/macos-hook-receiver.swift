@@ -1,16 +1,16 @@
 import Darwin
 import Foundation
 
-private var receiverChild: pid_t = 0
 private func deadlineHandler(_ signal: Int32) {
-  if receiverChild > 1 { kill(receiverChild, SIGKILL) }
   _exit(0)
 }
 
 @main struct HookReceiver {
   static func main() {
     signal(SIGALRM, deadlineHandler); signal(SIGPIPE, SIG_IGN)
-    var deadline = itimerval(it_interval: timeval(tv_sec: 0, tv_usec: 0), it_value: timeval(tv_sec: 0, tv_usec: 250000))
+    // Reserve part of the 250 ms fail-open ceiling for native startup and timer
+    // scheduling. Ordinary admission finishes well before this watchdog.
+    var deadline = itimerval(it_interval: timeval(tv_sec: 0, tv_usec: 0), it_value: timeval(tv_sec: 0, tv_usec: 200000))
     setitimer(ITIMER_REAL, &deadline, nil)
     do { try run() } catch {}
     _exit(0)
@@ -39,23 +39,56 @@ private func deadlineHandler(_ signal: Int32) {
     let resident = try hookPeer(connection)
     try hookValidateBundledProcess(resident, identifier: hookRuntimeIdentifier, filename: "node")
     try hookValidateBundledProcess(hookParent(resident), identifier: hookApplicationIdentifier, filename: "provenance-app-host")
-    let contents = Bundle.main.bundleURL.appendingPathComponent("Contents")
-    let node = contents.appendingPathComponent("MacOS/node").path
-    let module = contents.appendingPathComponent("Resources/spikes/coding/hook-receiver.mjs").path
-    var actions: posix_spawn_file_actions_t?
-    posix_spawn_file_actions_init(&actions); defer { posix_spawn_file_actions_destroy(&actions) }
-    posix_spawn_file_actions_adddup2(&actions, connection, 3)
-    posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0)
-    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
-    let arguments: [String] = [node, module, args[1], args[2]]
-    let values: [UnsafeMutablePointer<CChar>?] = arguments.map { $0.withCString { strdup($0) } } + [nil]
-    defer { for value in values { free(value) } }
-    var emptyEnvironment: [UnsafeMutablePointer<CChar>?] = [nil]
-    let spawned = values.withUnsafeBufferPointer { pointers in
-      posix_spawn(&receiverChild, node, &actions, nil, UnsafeMutablePointer(mutating: pointers.baseAddress!), &emptyEnvironment)
+    // Forward opaque bounded stdin to the authenticated resident. Vendor JSON
+    // decoding stays in the shared modules; no runtime is spawned per prompt.
+    var input = Data(), buffer = [UInt8](repeating: 0, count: 16384)
+    while true {
+      let count = read(STDIN_FILENO, &buffer, buffer.count)
+      if count < 0 && errno == EINTR { continue }
+      guard count >= 0, input.count + count <= 1024 * 1024 else { throw HookFailure.rejected }
+      if count == 0 { break }
+      input.append(contentsOf: buffer.prefix(count))
     }
-    guard spawned == 0 else { throw HookFailure.rejected }
-    var status: Int32 = 0
-    while waitpid(receiverChild, &status, 0) < 0 && errno == EINTR {}
+    var chunks: [String] = []
+    for offset in stride(from: 0, to: input.count, by: 128 * 1024) {
+      chunks.append(input.subdata(in: offset..<min(offset + 128 * 1024, input.count)).base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: ""))
+    }
+    let profile = "pap-hook-admission/2"
+    try send(connection, ["profile": profile, "kind": "ADMIT", "client": args[1],
+      "installationId": args[2], "invocationId": UUID().uuidString.lowercased(), "input": chunks])
+    let admitted = try response(connection, profile: profile, state: "ADMITTED")
+    try send(connection, ["profile": profile, "kind": "RELEASE", "eventId": admitted])
+    guard try response(connection, profile: profile, state: "RELEASED") == admitted else { throw HookFailure.rejected }
+  }
+  static func send(_ descriptor: Int32, _ message: [String: Any]) throws {
+    var bytes = try JSONSerialization.data(withJSONObject: message, options: [.sortedKeys, .withoutEscapingSlashes])
+    bytes.append(10)
+    try bytes.withUnsafeBytes { raw in
+      var offset = 0
+      while offset < raw.count {
+        let count = write(descriptor, raw.baseAddress!.advanced(by: offset), raw.count - offset)
+        if count < 0 && errno == EINTR { continue }
+        guard count > 0 else { throw HookFailure.rejected }
+        offset += count
+      }
+    }
+  }
+  static func response(_ descriptor: Int32, profile: String, state: String) throws -> String {
+    var bytes = Data(), buffer = [UInt8](repeating: 0, count: 1024)
+    while true {
+      let count = read(descriptor, &buffer, buffer.count)
+      if count < 0 && errno == EINTR { continue }
+      guard count > 0, bytes.count + count <= 1024 else { throw HookFailure.rejected }
+      bytes.append(contentsOf: buffer.prefix(count))
+      if bytes.contains(10) { break }
+    }
+    guard bytes.last == 10, bytes.dropLast().contains(10) == false,
+          let message = try JSONSerialization.jsonObject(with: bytes.dropLast()) as? [String: String],
+          Set(message.keys) == Set(["profile", "state", "eventId"]), message["profile"] == profile,
+          message["state"] == state, let eventId = message["eventId"], UUID(uuidString: eventId) != nil,
+          try JSONSerialization.data(withJSONObject: message, options: [.sortedKeys, .withoutEscapingSlashes]) == bytes.dropLast()
+      else { throw HookFailure.rejected }
+    return eventId
   }
 }

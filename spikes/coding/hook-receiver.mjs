@@ -1,12 +1,12 @@
 import { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { canonical, keys, parseCanonical } from '../vault/format.mjs';
+import { canonical, keys, pack, parseCanonical } from '../vault/format.mjs';
 import { isUUID } from '../recipient/normal-observation.mjs';
-import { HOOK_INPUT_LIMIT, HOOK_IPC_PROFILE, HOOK_RECEIVER_MS, decodeHook } from './protocol.mjs';
+import { HOOK_INPUT_LIMIT, HOOK_IPC_PROFILE, HOOK_RECEIVER_MS } from './protocol.mjs';
 
-// The signed launcher owns the 250 ms deadline, authenticated connected socket,
-// scrubbed environment and empty output. No user Node or project code is loaded.
+// Portable protocol driver for isolated fixtures. The packaged native receiver
+// speaks the same bounded protocol directly, without a per-invocation runtime.
 export function receiveHook({ client, installationId, socket, input, timeoutMs = HOOK_RECEIVER_MS }) {
   return new Promise(resolve => {
     let finished = false, bytes = 0, response = Buffer.alloc(0), stage = 'input', eventId;
@@ -30,9 +30,9 @@ export function receiveHook({ client, installationId, socket, input, timeoutMs =
       if (finished) return;
       try {
         if (!isUUID(installationId)) throw Error('INVALID_INSTALLATION');
-        const payload = decodeHook(client, Buffer.concat(chunks)); chunks.length = 0;
+        const input = pack(Buffer.concat(chunks)); chunks.length = 0;
         stage = 'admission';
-        socket.write(`${canonical({ profile: HOOK_IPC_PROFILE, kind: 'ADMIT', client, installationId, invocationId, payload })}\n`);
+        socket.write(`${canonical({ profile: HOOK_IPC_PROFILE, kind: 'ADMIT', client, installationId, invocationId, input })}\n`);
       } catch { finish('UNSUPPORTED'); }
     });
     socket.on('data', chunk => {

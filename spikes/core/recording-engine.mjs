@@ -102,8 +102,13 @@ export class RecordingEngine {
     const next = this.#control.then(operation).finally(() => { this.#serialPending--; });
     this.#control = next.catch(() => {}); return next;
   }
+  admissionAvailability() {
+    if (this.#closed || this.#failed) return 'UNAVAILABLE';
+    if (!this.#state.recording) return 'DISABLED';
+    return this.#serialPending || this.#capacityExhausted ? 'BUSY' : 'AVAILABLE';
+  }
   beginAdmission() {
-    if (this.#closed || this.#failed || !this.#state.recording || this.#serialPending || this.#capacityExhausted) return null;
+    if (this.admissionAvailability() !== 'AVAILABLE') return null;
     const authority = Object.freeze({ epoch: this.#admissionEpoch, generations: Object.freeze(this.#sources.integrationGenerations()) });
     this.#admissionAuthorities.add(authority); return authority;
   }

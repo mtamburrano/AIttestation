@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { canonical, parseCanonical } from '../vault/format.mjs';
 import { ownedDirectory, readOwned, atomicWrite, syncDirectory } from '../distribution/files.mjs';
 import { editSettings, ownedHook, parseSettings, revision } from './settings.mjs';
+import { HookHealth } from './health.mjs';
 
 const LIMIT = 1024 * 1024;
 const conflict = () => { throw Error('INTEGRATION_CONFIGURATION_CONFLICT'); };
@@ -26,7 +27,7 @@ async function executableIdentity(path, codeIdentity) {
 }
 
 async function discoverExecutable(client) {
-  const candidates = client === 'codex' ? ['/Applications/Codex.app/Contents/Resources/codex', '/opt/homebrew/bin/codex', '/usr/local/bin/codex']
+  const candidates = client === 'codex' ? ['/Applications/ChatGPT.app/Contents/Resources/codex', '/Applications/Codex.app/Contents/Resources/codex', '/opt/homebrew/bin/codex', '/usr/local/bin/codex']
     : [join(homedir(), '.local/bin/claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
   for (const path of candidates) try { await lstat(path); return path; } catch (error) { if (error.code !== 'ENOENT') throw error; }
   throw Error('SELECT_CLIENT_EXECUTABLE');
@@ -34,12 +35,17 @@ async function discoverExecutable(client) {
 
 export class CodingIntegrations {
   #directory; #receiver; #roots; #entries = {}; #plans = new Map(); #tail = Promise.resolve(); #setEnabled; #codeIdentity;
-  constructor({ directory, receiver, configRoots, setEnabled, codeIdentity }) {
+  #listeners = new Set(); #health;
+  constructor({ directory, receiver, configRoots, setEnabled, codeIdentity, diagnostics = null, health = new HookHealth({ diagnostics }) }) {
     if (![directory, receiver, ...Object.values(configRoots)].every(value => isAbsolute(value) && resolve(value) === value)
         || typeof setEnabled !== 'function' || typeof codeIdentity !== 'function') throw Error('INVALID_INTEGRATION_CONFIGURATION');
     this.#directory = directory; this.#receiver = receiver; this.#roots = { ...configRoots }; this.#setEnabled = setEnabled;
     this.#codeIdentity = codeIdentity;
+    this.#health = health;
   }
+  get health() { return this.#health; }
+  onChange(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
+  #changed(client) { this.#health.reset(client); for (const listener of this.#listeners) listener(); }
   get #journal() { return join(this.#directory, 'coding-integrations.json'); }
   async init() {
     await ownedDirectory(this.#directory);
@@ -70,6 +76,7 @@ export class CodingIntegrations {
       if (entry.previousEntry) this.#entries[client] = entry.previousEntry;
       else delete this.#entries[client];
     } else return;
+    this.#changed(client);
     await this.#save(); // Recovery never enables capture or restores a whole configuration.
   }
   enrollment(client, installationId) {
@@ -79,7 +86,8 @@ export class CodingIntegrations {
   async status() {
     return Promise.all(['codex', 'claude-code'].map(async client => {
       const entry = this.#entries[client];
-      if (!entry || entry.state === 'removed') return { id: client, configured: false, state: 'NOT_CONFIGURED' };
+      const hookHealth = this.#health.status(client);
+      if (!entry || entry.state === 'removed') return { id: client, configured: false, state: 'NOT_CONFIGURED', hookHealth, connected: false };
       let intact = false;
       try {
         if (await ownedDirectory(entry.configRoot, { create: false })) {
@@ -89,9 +97,10 @@ export class CodingIntegrations {
         }
       } catch {}
       return { id: client, configured: intact && entry.state === 'configured', state: !intact ? 'CONFIGURATION_CONFLICT'
-        : entry.state === 'pending' ? 'REPAIR_REQUIRED' : client === 'codex' ? 'TRUST_REQUIRED' : 'CONFIGURED',
+        : entry.state === 'pending' ? 'REPAIR_REQUIRED' : hookHealth.lastObserved === 'NEVER_OBSERVED'
+          ? client === 'codex' ? 'TRUST_REQUIRED' : 'CONFIGURED' : `HOOK_${hookHealth.lastObserved}`,
         configPath: entry.configPath, installationId: entry.installationId, origin: 'ENROLLED_LOCAL_EXECUTABLE',
-        restartRequired: true, connected: false };
+        restartRequired: true, connected: false, hookHealth };
     }));
   }
   async preview({ client, action = 'install', configRoot, clientExecutable, clientInterpreter }) {
@@ -160,7 +169,8 @@ export class CodingIntegrations {
       if (interpreter && !isDeepStrictEqual(await executableIdentity(interpreter.path, this.#codeIdentity), interpreter)) conflict();
     }
     const { content, existed: _existed, configRevision: _configRevision, ...record } = plan;
-    this.#entries[plan.client] = { ...record, state: 'pending', afterRevision: revision(content), previousEntry: this.#entries[plan.client] ?? null }; await this.#save();
+    this.#entries[plan.client] = { ...record, state: 'pending', afterRevision: revision(content), previousEntry: this.#entries[plan.client] ?? null };
+    this.#changed(plan.client); await this.#save();
     const temporary = `${plan.configPath}.attestamp-${operationId}.tmp`;
     try {
       const file = await open(temporary, 'wx', 0o600);
@@ -178,7 +188,8 @@ export class CodingIntegrations {
       }
     }
     delete this.#entries[plan.client].previousEntry; delete this.#entries[plan.client].afterRevision;
-    this.#entries[plan.client].state = plan.action === 'install' ? 'configured' : 'removed'; await this.#save();
+    this.#entries[plan.client].state = plan.action === 'install' ? 'configured' : 'removed';
+    this.#changed(plan.client); await this.#save();
     if (plan.action === 'install') await this.#setEnabled(plan.client, true);
     return { client: plan.client, state: plan.action === 'remove' ? 'REMOVED' : plan.client === 'codex' ? 'TRUST_REQUIRED' : 'CONFIGURED',
       evidence: 'RETAINED', keys: 'RETAINED', restartRequired: true };

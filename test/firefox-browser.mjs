@@ -64,12 +64,12 @@ try {
     'network.connectivity-service.enabled': false };
   await writeFile(join(profile, 'user.js'), Object.entries(preferences).map(([key, value]) => `user_pref(${JSON.stringify(key)},${JSON.stringify(value)});`).join('\n'));
   // Application updates are installation-scoped and can run before prefs load.
-  // Clone the app and enforce writes to this test root plus loopback-only egress.
-  const policy = `(version 1)(allow default)(deny file-write*)(allow file-write* (subpath ${JSON.stringify(root)}) (literal "/dev/null"))
-    (deny network-outbound)(allow network-outbound (remote ip "localhost:*"))`;
-  browser = spawn('/usr/bin/sandbox-exec', ['-p', policy, join(application, 'Contents/MacOS/firefox'),
-    '--headless', '--no-remote', '--profile', profile, '--marionette', 'about:blank'],
-    { env: { PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, MOZ_MARIONETTE: '1', MOZ_CRASHREPORTER_DISABLE: '1' },
+  // Keep Firefox's sandbox. An outer Seatbelt profile prevents its child sandbox
+  // from starting. Mozilla's automation guard disallows nonlocal connections.
+  browser = spawn(join(application, 'Contents/MacOS/firefox'),
+    ['--headless', '--no-remote', '--profile', profile, '--marionette', '-remote-allow-system-access', 'about:blank'],
+    { env: { PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, MOZ_MARIONETTE: '1', MOZ_CRASHREPORTER_DISABLE: '1',
+      MOZ_DISABLE_NONLOCAL_CONNECTIONS: '1' },
       stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   for (const stream of [browser.stdout, browser.stderr]) stream.on('data', bytes => { browserOutput = (browserOutput + bytes.toString()).slice(-8192); });
   await wait(async () => {
@@ -103,8 +103,12 @@ try {
   await command('WebDriver:ElementClick', { id: (element.value ?? element)['element-6066-11e4-a52e-4f735466cecf'] });
   await wait(() => report.views === 1);
   await command('WebDriver:Navigate', { url: report.sidebar });
-  const state = await command('WebDriver:ExecuteAsyncScript', { script: 'const done=arguments[arguments.length-1];import("./sidepanel-channel.js").then(m=>m.requestPanel({profile:"pap-chatgpt-panel/2",kind:"PAP_PANEL_REQUEST",action:"STATE"})).then(done,e=>done({error:String(e)}));', args: [], sandbox: 'default' });
-  assert.equal((state.value ?? state).error, 'UNTRUSTED_PANEL');
+  let state;
+  await wait(async () => {
+    const result = await command('WebDriver:ExecuteScript', { script: 'return document.body.innerText;', args: [], sandbox: 'default' });
+    state = result.value ?? result;
+    return state.includes('Recording control could not be verified. Close and reopen this sidebar.');
+  });
   console.log(JSON.stringify({ evidence: 'REAL_FIREFOX_TEMPORARY_EXTENSION_WITH_ISOLATED_NATIVE_NAME',
     version: report.browser.version, buildID: report.browser.buildID, sidebarOpened: true,
     ordinaryTabReply: state, sessionVersion: session.capabilities?.browserVersion ?? session.value?.capabilities?.browserVersion }));

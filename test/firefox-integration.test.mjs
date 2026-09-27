@@ -59,6 +59,57 @@ test('Firefox registration preserves Chrome and detects edits before removing on
   await assert.rejects(readFile(path), { code: 'ENOENT' }); assert.equal(await readFile(other, 'utf8'), 'unrelated synthetic Chrome registration');
 });
 
+for (const action of ['install', 'remove']) for (const point of ['journal-written', 'manifest-staged', 'manifest-replaced']) {
+  test(`Firefox recovers owned ${action} after interruption at ${point}`, async t => {
+    const root = await mkdtemp('/private/tmp/attestamp-firefox-recovery-test-');
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const supportDirectory = join(root, 'support'), manifestDirectory = join(root, 'mozilla');
+    await mkdir(supportDirectory); await mkdir(manifestDirectory);
+    const other = join(manifestDirectory, 'unrelated.json'); await writeFile(other, 'unchanged unrelated manifest');
+    const enabled = [], options = { supportDirectory, manifestDirectory, receiver: join(root, 'Receiver-A'),
+      setEnabled: async (...args) => enabled.push(args) };
+    const first = await new FirefoxIntegration(options).init(), install = await first.preview();
+    await first.apply({ operationId: install.operationId, consent: true });
+    const changed = { ...options, receiver: join(root, 'Receiver-B') };
+    const updating = await new FirefoxIntegration({ ...changed, failpoint: async stage => {
+      if (stage === point) throw Error('SYNTHETIC_INTERRUPTION');
+    } }).init();
+    const preview = await updating.preview({ action });
+    await assert.rejects(updating.apply({ operationId: preview.operationId, consent: true }), /SYNTHETIC_INTERRUPTION/);
+    assert.deepEqual(enabled.at(-1), ['firefox-chatgpt', false]);
+    const before = enabled.length, recovered = await new FirefoxIntegration(changed).init();
+    assert.equal(enabled.length, before, 'Recovery must never re-enable capture');
+    const current = await readFile(install.configPath, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+    if (point === 'manifest-replaced' && action === 'remove') assert.equal(current, null);
+    else assert.equal(JSON.parse(current).path, point === 'manifest-replaced' ? changed.receiver : options.receiver);
+    // Both repair/update and removal remain available after restart.
+    const repair = await recovered.preview(), remove = await recovered.preview({ action: 'remove' });
+    assert.ok(repair.operationId); await recovered.apply({ operationId: remove.operationId, consent: true });
+    await assert.rejects(readFile(install.configPath), { code: 'ENOENT' });
+    assert.equal(await readFile(other, 'utf8'), 'unchanged unrelated manifest');
+  });
+}
+
+test('Firefox interruption preserves a concurrent third-party edit and reports the unresolved conflict', async t => {
+  const root = await mkdtemp('/private/tmp/attestamp-firefox-conflict-test-');
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const options = { supportDirectory: join(root, 'support'), manifestDirectory: join(root, 'mozilla'),
+    receiver: join(root, 'Receiver-A'), setEnabled: async () => {} };
+  await mkdir(options.supportDirectory); await mkdir(options.manifestDirectory);
+  const manager = await new FirefoxIntegration(options).init(), first = await manager.preview();
+  await manager.apply({ operationId: first.operationId, consent: true });
+  const external = JSON.stringify({ unrelated: 'PRIVATE_UNRELATED_CONFIGURATION' });
+  const updating = await new FirefoxIntegration({ ...options, receiver: join(root, 'Receiver-B'), failpoint: async stage => {
+    if (stage === 'manifest-staged') await writeFile(first.configPath, external);
+  } }).init();
+  const update = await updating.preview();
+  await assert.rejects(updating.apply({ operationId: update.operationId, consent: true }), /CONFLICT/);
+  const reopened = await new FirefoxIntegration(options).init();
+  assert.equal((await reopened.status()).state, 'REPAIR_REQUIRED');
+  await assert.rejects(reopened.preview(), /CONFLICT/); await assert.rejects(reopened.preview({ action: 'remove' }), /CONFLICT/);
+  assert.equal(await readFile(first.configPath, 'utf8'), external);
+});
+
 test('independent Chrome and Firefox native channels share one vault and reject cross-source and stale authority', async t => {
   const root = await mkdtemp('/private/tmp/attestamp-browser-coexist-test-');
   t.after(() => rm(root, { recursive: true, force: true }));

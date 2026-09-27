@@ -39,6 +39,20 @@ storage, signing, anchoring, network work or provider acknowledgement. Unavailab
 busy, disabled or unsupported paths skip capture. They do not resend a prompt.
 The client timeout is one second as a secondary fail-open ceiling.
 
+The receiver uses native local transport; the resident runs the shared Codex and
+Claude decoders. No additional Node process is started for each submission.
+Connections reports the last observed attempt, including identity rejection,
+unsupported input, timeout and backpressure. A never-observed hook remains distinct
+from an observed failure. These short-lived hooks are not persistent connections,
+and admission does not mean the prompt has been saved; check History for that.
+Hook diagnostics contain bounded stage counters, without prompt text, paths,
+client identifiers or raw error messages.
+
+Removing or replacing an enrollment immediately retires its resident peer and
+unreleased attempts. Other integrations keep running. Interrupted Firefox native
+registration updates recover ownership from their before/after journal without
+restoring an old configuration over unrelated edits or re-enabling recording.
+
 ## Firefox
 
 The Firefox adapter targets Firefox 153 stable on Apple-silicon macOS with a

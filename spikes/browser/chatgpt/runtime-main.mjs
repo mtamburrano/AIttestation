@@ -106,7 +106,7 @@ export async function startPackagedChatGPT({
         runtimeEpoch: state.runtimeEpoch, expectedRevision: state.revision, commandId: randomUUID(),
         kind: 'SET_INTEGRATION', integrationId, enabled }, { surface: 'desktop' });
     };
-    const codingIntegrations = await new CodingIntegrations({ directory: supportDirectory,
+    const codingIntegrations = await new CodingIntegrations({ directory: supportDirectory, diagnostics,
       codeIdentity,
       receiver: join(dirname(process.execPath), 'provenance-hook-receiver'),
       configRoots: { codex: integrationHomes.codex, 'claude-code': integrationHomes['claude-code'] }, setEnabled }).init();
