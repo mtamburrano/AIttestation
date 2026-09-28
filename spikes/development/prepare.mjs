@@ -14,6 +14,7 @@ import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, validatePrivateNamespac
 import { withSigningAccess } from './signing.mjs';
 import { AGENT_OPT_IN, agentBuildPath, validateAgent } from './agent-environment.mjs';
 import { specializeAgentArtifact, replaceAgentInput } from './agent-artifact.mjs';
+import { specializePrivateAcceptanceArtifact } from './namespace-artifact.mjs';
 import { writeBrowserExtension } from '../browser/shared/build-extensions.mjs';
 import { FIREFOX_EXTENSION_ID, FIREFOX_PRIVATE_EXTENSION_ID } from '../browser/shared/profiles.mjs';
 
@@ -47,7 +48,13 @@ export function validateDevelopmentConfig(config) {
       || ('signingKeychain' in config && (typeof config.signingKeychain !== 'string' || !config.signingKeychain.startsWith('/')))) {
     throw Error('INVALID_PRIVATE_DEVELOPMENT_CONFIG');
   }
-  if ('namespace' in config) validatePrivateNamespace(config.namespace);
+  if (Object.hasOwn(config, 'namespace')) {
+    if (config.namespace === null || config.namespace === undefined) throw Error('UNRECOGNIZED_PRIVATE_ACCEPTANCE_NAMESPACE');
+    validatePrivateNamespace(config.namespace);
+  }
+  if (Object.hasOwn(config, 'namespace') && Object.hasOwn(config, 'agent')) {
+    throw Error('PRIVATE_NAMESPACE_AGENT_COMBINATION_UNSUPPORTED');
+  }
   if ('agent' in config && (!config.agent || config.sponsor !== null)) throw Error('AGENT_SPONSOR_DISABLED');
   if (config.sponsor !== null) {
     if (Object.keys(config.sponsor).sort().join(',') !== 'certificateFile,origin'
@@ -136,9 +143,13 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     await writeFile(join(work, 'keychain.plist'), plist({ 'com.apple.application-identifier': appId,
       'com.apple.developer.team-identifier': config.teamId, 'keychain-access-groups': [group] }));
     await writeFile(join(work, 'node.plist'), plist({ 'com.apple.security.cs.allow-jit': true }));
-    run('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(work, 'swift-cache'), '-O',
-      '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
-      join(root, 'spikes/vault/native/macos-app-host.swift'), '-o', join(contents, 'MacOS/provenance-app-host')]);
+    if (config.namespace) {
+      await specializePrivateAcceptanceArtifact(root, contents, work, config.namespace, run);
+    } else {
+      run('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(work, 'swift-cache'), '-O',
+        '-D', 'PRODUCT_CHATGPT', '-D', 'PRODUCT_RELEASE', '-D', 'PRIVATE_DEVELOPMENT', '-framework', 'Security',
+        join(root, 'spikes/vault/native/macos-app-host.swift'), '-o', join(contents, 'MacOS/provenance-app-host')]);
+    }
     const firefoxSource = join(work, 'private-firefox-host.swift');
     await writeFile(firefoxSource, replaceAgentInput(await readFile(join(root, 'spikes/browser/chatgpt/native/macos-browser-host.swift'), 'utf8'),
       FIREFOX_EXTENSION_ID, FIREFOX_PRIVATE_EXTENSION_ID));

@@ -81,7 +81,11 @@ test('private development rejects ordinary accounts, unsupported Chrome and prod
     helperProvisioningProfile: '/private/test/profile', sponsor: null };
   assert.doesNotThrow(() => validateDevelopmentConfig(config));
   assert.doesNotThrow(() => validateDevelopmentConfig({ ...config, namespace: '6d1110ab' }));
+  assert.throws(() => validateDevelopmentConfig({ ...config, namespace: null }), /UNRECOGNIZED_PRIVATE/);
+  assert.throws(() => validateDevelopmentConfig({ ...config, namespace: undefined }), /UNRECOGNIZED_PRIVATE/);
   assert.throws(() => validateDevelopmentConfig({ ...config, namespace: '/Users/attestamp-test/custom-support' }), /UNRECOGNIZED_PRIVATE/);
+  assert.doesNotThrow(() => validateDevelopmentConfig({ ...config, agent: {} }));
+  assert.throws(() => validateDevelopmentConfig({ ...config, namespace: '6d1110ab', agent: {} }), /PRIVATE_NAMESPACE_AGENT_COMBINATION/);
   assert.throws(() => validateDevelopmentConfig({ ...config, allowFakeConfirmation: true }), /INVALID_PRIVATE/);
   assert.throws(() => validateDevelopmentConfig({ ...config, sponsor: {
     origin: 'http://127.0.0.1:37461', certificateFile: '/private/test/cert' } }), /TLS_SPONSOR/);
