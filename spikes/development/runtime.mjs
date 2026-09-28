@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path';
 import { MacOSKeychainStore } from '../vault/key-lifecycle.mjs';
 import { ManagedAnchoringClient } from '../managed/client.mjs';
 import { startPackagedChatGPT } from '../browser/chatgpt/runtime-main.mjs';
-import { DEVELOPMENT_PROFILE, validateAccount, privateJSON, writeNewJSON, exists } from './environment.mjs';
+import { testAccount, validateAccount, privateManifestNamespace, validatePrivateLaunchRequest, privateJSON,
+  writeNewJSON, exists } from './environment.mjs';
 import { atomicWrite } from '../distribution/files.mjs';
 import { privateInstallation } from './integration.mjs';
 import { checkPlatform, launchDevelopmentChrome } from './chrome.mjs';
@@ -15,19 +16,14 @@ import { publishRuntimeState } from './runtime-state.mjs';
 
 let runtime, statePath, debugSession;
 try {
-  const paths = await validateAccount();
+  const config = JSON.parse(await readFile(new URL('private-development.json', import.meta.url)));
+  const namespace = privateManifestNamespace(config);
+  const paths = await validateAccount(testAccount(undefined, namespace));
   const launchPath = join(paths.control, 'launch.json'), desktopPath = join(paths.control, 'desktop.json');
   const explicitLaunch = await exists(launchPath);
   const request = await privateJSON(explicitLaunch ? launchPath : desktopPath);
   if (!explicitLaunch && request.mode !== 'live-chatgpt-testnet') throw Error('EXPLICIT_PRIVATE_OPERATION_REQUIRED');
-  const fields = { 'live-chatgpt-testnet': 'chromeApplication,mode,profile', backup: 'mode,outputDirectory,profile',
-    restore: 'mode,outputDirectory,packageFile,profile,secretFile' };
-  if (request.profile !== DEVELOPMENT_PROFILE || !Object.hasOwn(fields, request.mode)
-      || Object.keys(request).sort().join(',') !== fields[request.mode]) throw Error('EXPLICIT_PRIVATE_OPERATION_REQUIRED');
-  const config = JSON.parse(await readFile(new URL('private-development.json', import.meta.url)));
-  if (Object.keys(config).sort().join(',') !== 'assurance,browserPolicy,profile,sponsorOrigin,updaterEnabled'
-      || config.profile !== DEVELOPMENT_PROFILE || config.assurance !== 'PRIVATE_TESTNET_ONLY'
-      || config.browserPolicy !== 'EXPLICIT_TEST_USER_COPY' || config.updaterEnabled !== false) throw Error('INVALID_PRIVATE_BUILD');
+  validatePrivateLaunchRequest(request, namespace);
   // Revalidate the explicit copy inside the signed runtime before opening the
   // vault; launcher state is not a substitute for browser identity validation.
   const chrome = request.mode === 'live-chatgpt-testnet' ? await checkPlatform(request.chromeApplication, paths) : null;

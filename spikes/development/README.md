@@ -165,6 +165,21 @@ production configuration.
 npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build
 ```
 
+For the isolated 6d1110ab acceptance checkpoint, use a separate private config
+with the single additional field `"namespace": "6d1110ab"` and a new output path:
+
+```sh
+npm run dev -- prepare /absolute/private/dev-config-6d1110ab.json /absolute/new/private-build-6d1110ab
+```
+
+The namespace is embedded in the signed app. It fixes control, support/vault and
+Chrome user-data paths under
+`/Users/attestamp-test/.attestamp-private-acceptance-6d1110ab/{control,support,chrome}`.
+The CLI requires the same explicit namespace at initialization, start and stop;
+it derives those paths itself and accepts no environment or caller-supplied
+support-path override. A build without this field keeps the historical default
+private-development paths. Never copy, reset or migrate data between them.
+
 For optional same-account unattended sessions, see the separate
 [isolated agent setup](AGENT-TESTING.md). It uses a fresh namespace and explicit
 opt-ins; the retained owner-checkpoint setup below is unchanged.
@@ -270,7 +285,33 @@ The copied app must still have Google's `com.google.Chrome` identity, team
 to authenticate the actual running Chrome parent and ancestry with the same
 requirements; moving the signed app needs no native trust exception.
 
-In the test user's fresh checkout, before opening Chrome or Attestamp:
+For the isolated acceptance checkpoint, copy the entire new output to
+`/Users/attestamp-test/AttestampPrivateBuild-6d1110ab` and give that copy to the
+test user. Create a new, separate Chrome application copy from the supported
+installation (the `mkdir` command must succeed before `ditto` runs):
+
+```sh
+/bin/mkdir -m 700 /Users/attestamp-test/AttestampPrivateBrowser-6d1110ab &&
+  /usr/bin/ditto '/Applications/Google Chrome.app' '/Users/attestamp-test/AttestampPrivateBrowser-6d1110ab/Google Chrome.app'
+```
+
+Do not reuse another private browser copy. Then, from the test user's checkout,
+run only these bounded commands:
+
+```sh
+npm run dev -- init --namespace 6d1110ab
+npm run dev -- doctor --namespace 6d1110ab --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser-6d1110ab/Google Chrome.app'
+npm run dev -- start /Users/attestamp-test/AttestampPrivateBuild-6d1110ab --namespace 6d1110ab --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser-6d1110ab/Google Chrome.app' --live-chatgpt-testnet
+npm run dev -- stop --namespace 6d1110ab
+```
+
+The fresh namespace initializer fails if its root or any selected directory
+already exists. The start command opens the private app and isolated Chrome; it
+does not submit a prompt by itself. This checkpoint does not include provider
+Send, chain activity, Mozilla upload or publication.
+
+For the historical default private-development setup instead, in the test user's
+fresh checkout, before opening Chrome or Attestamp:
 
 ```sh
 npm run dev -- init

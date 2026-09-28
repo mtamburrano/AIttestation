@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile, symlink, copyFile, chmod, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile, symlink, copyFile, chmod, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { createHash, randomBytes, X509Certificate } from 'node:crypto';
-import { assertPlatform, initializeAccount, testAccount, validateAccount, newDirectory } from '../spikes/development/environment.mjs';
+import { assertPlatform, initializeAccount, testAccount, validateAccount, validatePrivateNamespace,
+  privateManifestNamespace, validatePrivateLaunchRequest, newDirectory } from '../spikes/development/environment.mjs';
 import { validateDevelopmentConfig, validateDevelopmentSigner } from '../spikes/development/prepare.mjs';
 import { registerNativeHost, removeNativeHost, command } from '../spikes/development/cli.mjs';
 import { chromeApplicationFiles, checkPlatform } from '../spikes/development/chrome.mjs';
@@ -79,13 +80,80 @@ test('private development rejects ordinary accounts, unsupported Chrome and prod
   const config = { profile: 'pap-private-development/1', teamId: 'TESTTEAM01', signingIdentity: 'A'.repeat(40),
     helperProvisioningProfile: '/private/test/profile', sponsor: null };
   assert.doesNotThrow(() => validateDevelopmentConfig(config));
+  assert.doesNotThrow(() => validateDevelopmentConfig({ ...config, namespace: '6d1110ab' }));
+  assert.throws(() => validateDevelopmentConfig({ ...config, namespace: '/Users/attestamp-test/custom-support' }), /UNRECOGNIZED_PRIVATE/);
   assert.throws(() => validateDevelopmentConfig({ ...config, allowFakeConfirmation: true }), /INVALID_PRIVATE/);
   assert.throws(() => validateDevelopmentConfig({ ...config, sponsor: {
     origin: 'http://127.0.0.1:37461', certificateFile: '/private/test/cert' } }), /TLS_SPONSOR/);
   await assert.rejects(command(['start', '/unused', '--chrome-app', '/unused.app', '--offline']), /LIVE_TEST_OPT_IN/);
   await assert.rejects(command(['start', '/unused', '--live-chatgpt-testnet']), /USAGE/);
+  await assert.rejects(command(['init', '--namespace', 'arbitrary']), /UNRECOGNIZED_PRIVATE/);
+  await assert.rejects(command(['stop', '--namespace', 'arbitrary']), /UNRECOGNIZED_PRIVATE/);
   await assert.rejects(command(['doctor']), /USAGE/);
   await assert.rejects(serveSponsor('/unused', '--fixture'), /LIVE_TESTNET_OPT_IN/);
+});
+
+test('signed acceptance namespace is fresh and leaves the legacy private-development state untouched', async t => {
+  const info = { username: 'attestamp-test', uid: 501, homedir: '/Users/attestamp-test' };
+  const legacy = testAccount(info), acceptance = testAccount(info, '6d1110ab');
+  assert.equal(acceptance.namespace, '6d1110ab');
+  assert.equal(acceptance.root, '/Users/attestamp-test/.attestamp-private-acceptance-6d1110ab');
+  assert.notEqual(acceptance.control, legacy.control);
+  assert.notEqual(acceptance.support, legacy.support);
+  assert.notEqual(acceptance.chrome, legacy.chrome);
+  assert.throws(() => validatePrivateNamespace('custom-support-path'), /UNRECOGNIZED_PRIVATE/);
+  assert.throws(() => testAccount({ ...info, homedir: '/Users/other' }, '6d1110ab'), /TEST_USER/);
+  const manifest = { profile: 'pap-private-development/1', sponsorOrigin: null, assurance: 'PRIVATE_TESTNET_ONLY',
+    updaterEnabled: false, browserPolicy: 'EXPLICIT_TEST_USER_COPY', namespace: '6d1110ab' };
+  assert.equal(privateManifestNamespace(manifest), '6d1110ab');
+  assert.throws(() => privateManifestNamespace({ ...manifest, supportDirectory: '/private/redirect' }), /INVALID_PRIVATE_BUILD/);
+  const legacyManifest = { ...manifest }; delete legacyManifest.namespace;
+  assert.equal(privateManifestNamespace(legacyManifest), null);
+  const launch = { profile: 'pap-private-development/1', mode: 'live-chatgpt-testnet',
+    chromeApplication: '/Users/attestamp-test/PrivateBrowser/Google Chrome.app', namespace: '6d1110ab' };
+  assert.equal(validatePrivateLaunchRequest(launch, '6d1110ab'), launch);
+  assert.throws(() => validatePrivateLaunchRequest({ ...launch, namespace: undefined }, '6d1110ab'), /EXPLICIT_PRIVATE_OPERATION/);
+  assert.throws(() => validatePrivateLaunchRequest({ ...launch, supportDirectory: '/private/redirect' }, '6d1110ab'), /EXPLICIT_PRIVATE_OPERATION/);
+  const legacyLaunch = { profile: 'pap-private-development/1', mode: 'live-chatgpt-testnet',
+    chromeApplication: '/Users/attestamp-test/PrivateBrowser/Google Chrome.app' };
+  assert.equal(validatePrivateLaunchRequest(legacyLaunch, null), legacyLaunch);
+
+  const home = await isolated(t);
+  const retained = { home, control: join(home, 'legacy-control'), support: join(home, 'legacy-support'),
+    chrome: join(home, 'legacy-chrome') };
+  await initializeAccount(retained);
+  await writeFile(join(retained.control, 'checkpoint.json'), 'retained-control');
+  await writeFile(join(retained.support, 'vault.marker'), 'retained-vault');
+  await writeFile(join(retained.chrome, 'Preferences'), 'retained-chrome-profile');
+  const names = [
+    [retained.control, 'checkpoint.json'], [retained.support, 'vault.marker'], [retained.chrome, 'Preferences'],
+  ];
+  const before = await Promise.all(names.map(async ([directory, name]) => [name, await readFile(join(directory, name), 'utf8')]));
+
+  const root = join(home, '.attestamp-private-acceptance-6d1110ab');
+  const selected = { home, namespace: '6d1110ab', root, control: join(root, 'control'),
+    support: join(root, 'support'), chrome: join(root, 'chrome') };
+  await initializeAccount(selected);
+  await validateAccount(retained);
+  await validateAccount(selected);
+  const after = await Promise.all(names.map(async ([directory, name]) => [name, await readFile(join(directory, name), 'utf8')]));
+  assert.deepEqual(after, before);
+  for (const directory of [selected.root, selected.control, selected.support, selected.chrome]) {
+    const info = await stat(directory);
+    assert.equal(info.uid, process.getuid());
+    assert.equal(info.mode & 0o777, 0o700);
+    assert.equal(await realpath(directory), directory);
+  }
+  const marker = JSON.parse(await readFile(join(selected.control, 'account.json'), 'utf8'));
+  assert.deepEqual(marker, { profile: 'pap-private-development/1', uid: process.getuid(), namespace: '6d1110ab' });
+  await assert.rejects(initializeAccount(selected), /ALREADY_HAS_STATE/);
+
+  const linkedRoot = join(home, 'linked-acceptance-root');
+  await symlink(retained.control, linkedRoot);
+  await assert.rejects(initializeAccount({ ...selected, root: linkedRoot,
+    control: join(linkedRoot, 'control'), support: join(linkedRoot, 'support'), chrome: join(linkedRoot, 'chrome') }),
+  /ALREADY_HAS_STATE/);
+  await validateAccount(selected);
 });
 
 test('private Chrome selection requires an explicit separate owned copy and rejects aliases and shared files', async t => {

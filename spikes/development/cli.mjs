@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { userInfo } from 'node:os';
 import { checkPlatform } from './chrome.mjs';
 import { developmentCommandFailure, readStartupFailure } from './startup.mjs';
-import { DEVELOPMENT_PROFILE, exists, initializeAccount, ownerDirectory,
-  privateJSON, validateAccount, writeNewJSON } from './environment.mjs';
+import { DEVELOPMENT_PROFILE, exists, initializeAccount, ownerDirectory, privateJSON, testAccount,
+  validateAccount, validatePrivateNamespace, writeNewJSON } from './environment.mjs';
 
 const run = (command, args) => execFileSync(command, args, {
   env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', stdio: 'pipe', timeout: 15000,
@@ -89,17 +90,21 @@ async function privateApplication(output) {
   const manifest = JSON.parse(await readFile(join(app, 'Contents/Resources/spikes/development/private-development.json')));
   if (manifest.profile !== DEVELOPMENT_PROFILE) throw Error('PRIVATE_ENTRYPOINT_REQUIRED');
   if (manifest.browserPolicy !== 'EXPLICIT_TEST_USER_COPY') throw Error('PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT');
-  return app;
+  const namespace = validatePrivateNamespace(manifest.namespace);
+  if (validatePrivateNamespace(metadata.namespace) !== namespace) throw Error('PRIVATE_NAMESPACE_BUILD_MISMATCH');
+  return { app, namespace };
 }
 
-export async function startDevelopment(output, mode, chromeApplication) {
+export async function startDevelopment(output, mode, chromeApplication, requestedNamespace) {
   if (mode !== '--live-chatgpt-testnet') throw Error('EXPLICIT_LIVE_TEST_OPT_IN_REQUIRED');
-  const paths = await validateAccount(); await checkPlatform(chromeApplication, paths);
-  const app = await privateApplication(output);
+  const { app, namespace } = await privateApplication(output);
+  if (validatePrivateNamespace(requestedNamespace) !== namespace) throw Error('PRIVATE_NAMESPACE_SELECTION_MISMATCH');
+  const paths = await validateAccount(testAccount(userInfo(), namespace)); await checkPlatform(chromeApplication, paths);
   if (await exists(join(paths.control, 'runtime.json'))) throw Error('STOP_PREVIOUS_PRIVATE_RUNTIME_FIRST');
   await registerNativeHost(paths, join(app, 'Contents/MacOS/provenance-browser-host'));
   try {
-    await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: 'live-chatgpt-testnet', chromeApplication });
+    await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: 'live-chatgpt-testnet',
+      chromeApplication, ...(namespace ? { namespace } : {}) });
     const child = spawn(join(app, 'Contents/MacOS/provenance-app-host'), [], {
       env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'ignore', 'pipe'], detached: true,
     });
@@ -122,11 +127,13 @@ export async function startDevelopment(output, mode, chromeApplication) {
 }
 
 async function maintenance(output, operation) {
-  const paths = await validateAccount(), app = await privateApplication(output);
+  const { app, namespace } = await privateApplication(output);
+  const paths = await validateAccount(testAccount(userInfo(), namespace));
   if (await exists(join(paths.control, 'runtime.json'))) throw Error('STOP_PRIVATE_RUNTIME_BEFORE_RECOVERY');
   const reportPath = join(paths.control, 'operation.json');
   if (await exists(reportPath)) throw Error('PREVIOUS_RECOVERY_REPORT_REQUIRES_INSPECTION');
-  await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, ...operation });
+  await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, ...operation,
+    ...(namespace ? { namespace } : {}) });
   const status = await new Promise((resolve, reject) => {
     const child = spawn(join(app, 'Contents/MacOS/provenance-app-host'), [], {
       env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore',
@@ -145,7 +152,15 @@ export async function command(args) {
   if (action === 'doctor' && rest.length === 2 && rest[0] === '--chrome-app') {
     await checkPlatform(rest[1]); return { ready: true, liveCheck: 'NOT_RUN' };
   }
+  if (action === 'doctor' && rest.length === 4 && rest[0] === '--namespace' && rest[2] === '--chrome-app') {
+    const namespace = validatePrivateNamespace(rest[1]);
+    await checkPlatform(rest[3], testAccount(userInfo(), namespace)); return { ready: true, liveCheck: 'NOT_RUN' };
+  }
   if (action === 'init' && rest.length === 0) { await initializeAccount(); return { initialized: true }; }
+  if (action === 'init' && rest.length === 2 && rest[0] === '--namespace') {
+    const namespace = validatePrivateNamespace(rest[1]);
+    await initializeAccount(testAccount(userInfo(), namespace)); return { initialized: true, namespace };
+  }
   if (action === 'signing-preflight' && rest.length === 1) {
     const { developmentSigningInputs } = await import('./prepare.mjs');
     const { preflightSigning, ownerAction } = await import('./signing.mjs');
@@ -156,11 +171,18 @@ export async function command(args) {
     const { prepareDevelopment } = await import('./prepare.mjs'); return prepareDevelopment(...rest);
   }
   if (action === 'start' && rest.length === 4 && rest[1] === '--chrome-app') return startDevelopment(rest[0], rest[3], rest[2]);
+  if (action === 'start' && rest.length === 6 && rest[1] === '--namespace' && rest[3] === '--chrome-app') {
+    return startDevelopment(rest[0], rest[5], rest[4], rest[2]);
+  }
   if (action === 'stop' && rest.length === 0) return stopDevelopment();
+  if (action === 'stop' && rest.length === 2 && rest[0] === '--namespace') {
+    const namespace = validatePrivateNamespace(rest[1]);
+    return stopDevelopment(testAccount(userInfo(), namespace));
+  }
   if (action === 'backup' && rest.length === 2) return maintenance(rest[0], { mode: 'backup', outputDirectory: rest[1] });
   if (action === 'restore' && rest.length === 4) return maintenance(rest[0], { mode: 'restore',
     outputDirectory: rest[1], packageFile: rest[2], secretFile: rest[3] });
-  throw Error('USAGE: dev doctor --chrome-app APP|init|signing-preflight CONFIG|prepare CONFIG NEW_BUILD|start BUILD --chrome-app APP --live-chatgpt-testnet|stop|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
+  throw Error('USAGE: dev doctor [--namespace 6d1110ab] --chrome-app APP|init [--namespace 6d1110ab]|signing-preflight CONFIG|prepare CONFIG NEW_BUILD|start BUILD [--namespace 6d1110ab] --chrome-app APP --live-chatgpt-testnet|stop [--namespace 6d1110ab]|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -10,7 +10,7 @@ import { helperProfileFromPlist, readReleaseFile, validateHelperProfile } from '
 import { codeSignatureCheckArguments } from '../distribution/local.mjs';
 import { assertPortableExecutable } from '../recipient/build-macos.mjs';
 import { assertNoPackagedLeaks } from '../distribution/artifact-files.mjs';
-import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, writeNewJSON } from './environment.mjs';
+import { DEVELOPMENT_PROFILE, newDirectory, privateJSON, validatePrivateNamespace, writeNewJSON } from './environment.mjs';
 import { withSigningAccess } from './signing.mjs';
 import { AGENT_OPT_IN, agentBuildPath, validateAgent } from './agent-environment.mjs';
 import { specializeAgentArtifact, replaceAgentInput } from './agent-artifact.mjs';
@@ -40,13 +40,14 @@ const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1
   .join('')}</dict></plist>`;
 
 export function validateDevelopmentConfig(config) {
-  if (!config || Object.keys(config).filter(key => !['signingKeychain', 'agent'].includes(key)).sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
+  if (!config || Object.keys(config).filter(key => !['signingKeychain', 'agent', 'namespace'].includes(key)).sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
       || config.profile !== DEVELOPMENT_PROFILE || !/^[A-Z0-9]{10}$/.test(config.teamId)
       || typeof config.signingIdentity !== 'string' || !/^[A-F0-9]{40}$/.test(config.signingIdentity)
       || typeof config.helperProvisioningProfile !== 'string' || !config.helperProvisioningProfile.startsWith('/')
       || ('signingKeychain' in config && (typeof config.signingKeychain !== 'string' || !config.signingKeychain.startsWith('/')))) {
     throw Error('INVALID_PRIVATE_DEVELOPMENT_CONFIG');
   }
+  if ('namespace' in config) validatePrivateNamespace(config.namespace);
   if ('agent' in config && (!config.agent || config.sponsor !== null)) throw Error('AGENT_SPONSOR_DISABLED');
   if (config.sponsor !== null) {
     if (Object.keys(config.sponsor).sort().join(',') !== 'certificateFile,origin'
@@ -163,7 +164,8 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     }
     await writeNewJSON(join(dev, 'private-development.json'), { profile: DEVELOPMENT_PROFILE,
       sponsorOrigin: config.sponsor?.origin ?? null, assurance: 'PRIVATE_TESTNET_ONLY', updaterEnabled: false,
-      browserPolicy: 'EXPLICIT_TEST_USER_COPY', ...(agentPaths ? { agent: config.agent, build: output.split('/').at(-1) } : {}) });
+      browserPolicy: 'EXPLICIT_TEST_USER_COPY', ...(config.namespace ? { namespace: config.namespace } : {}),
+      ...(agentPaths ? { agent: config.agent, build: output.split('/').at(-1) } : {}) });
     if (certificate) await writeFile(join(dev, 'sponsor-certificate.pem'), certificate);
     run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName Attestamp Private Test', join(contents, 'Info.plist')]);
     const html = join(contents, 'Resources/spikes/browser/chatgpt/dashboard.html');
@@ -211,6 +213,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
       releaseClass: 'PRIVATE_DEVELOPMENT', sourceDigest: sources.sha256,
       signature: 'DEVELOPER_ID_WITHOUT_NOTARIZATION', notarized: false, storeDistributed: false,
       updaterEnabled: false, installedAcceptance: 'NOT_RUN',
+      ...(config.namespace ? { namespace: config.namespace } : {}),
       ...(agentPaths ? { agent: config.agent } : {}),
       bundleInventoryDigest: sha256(canonical(inventory)) });
     return { profile: DEVELOPMENT_PROFILE, prepared: true, installedAcceptance: 'NOT_RUN' };

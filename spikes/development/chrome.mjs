@@ -14,7 +14,7 @@ export async function chromeApplicationFiles(application, paths = testAccount())
       || !application.endsWith('.app') || !application.startsWith(`${paths.home}${sep}`)) {
     throw Error('EXPLICIT_TEST_USER_CHROME_COPY_REQUIRED');
   }
-  for (const reserved of [paths.control, paths.support, paths.chrome]) {
+  for (const reserved of [paths.root, paths.control, paths.support, paths.chrome].filter(Boolean)) {
     if (application === reserved || application.startsWith(`${reserved}${sep}`)) throw Error('CHROME_COPY_MUST_BE_SEPARATE');
   }
   const executable = join(application, 'Contents/MacOS/Google Chrome');

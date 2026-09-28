@@ -6,10 +6,50 @@ import { readReleaseFile } from '../distribution/release-inputs.mjs';
 
 export const DEVELOPMENT_PROFILE = 'pap-private-development/1';
 export const TEST_USER = 'attestamp-test';
+export const PRIVATE_ACCEPTANCE_NAMESPACE = '6d1110ab';
 
-export function testAccount(info = userInfo()) {
+export function validatePrivateNamespace(namespace) {
+  if (namespace === undefined || namespace === null) return null;
+  if (namespace !== PRIVATE_ACCEPTANCE_NAMESPACE) throw Error('UNRECOGNIZED_PRIVATE_ACCEPTANCE_NAMESPACE');
+  return namespace;
+}
+
+export function privateManifestNamespace(manifest) {
+  const namespace = validatePrivateNamespace(manifest?.namespace);
+  const fields = ['assurance', 'browserPolicy', 'profile', 'sponsorOrigin', 'updaterEnabled',
+    ...(Object.hasOwn(manifest ?? {}, 'namespace') ? ['namespace'] : [])].sort().join(',');
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+      || Object.keys(manifest).sort().join(',') !== fields || manifest.profile !== DEVELOPMENT_PROFILE
+      || manifest.assurance !== 'PRIVATE_TESTNET_ONLY' || manifest.browserPolicy !== 'EXPLICIT_TEST_USER_COPY'
+      || manifest.updaterEnabled !== false || Object.hasOwn(manifest, 'namespace') && !namespace) {
+    throw Error('INVALID_PRIVATE_BUILD');
+  }
+  return namespace;
+}
+
+export function validatePrivateLaunchRequest(request, namespace) {
+  const modeFields = { 'live-chatgpt-testnet': 'chromeApplication,mode,profile',
+    backup: 'mode,outputDirectory,profile', restore: 'mode,outputDirectory,packageFile,profile,secretFile' };
+  const selectedNamespace = validatePrivateNamespace(namespace);
+  const requestNamespace = Object.hasOwn(request ?? {}, 'namespace')
+    ? validatePrivateNamespace(request.namespace) : null;
+  const expected = modeFields[request?.mode];
+  if (!expected || request.profile !== DEVELOPMENT_PROFILE || requestNamespace !== selectedNamespace
+      || Object.keys(request).sort().join(',') !== (selectedNamespace ? `${expected},namespace` : expected).split(',').sort().join(',')) {
+    throw Error('EXPLICIT_PRIVATE_OPERATION_REQUIRED');
+  }
+  return request;
+}
+
+export function testAccount(info = userInfo(), selectedNamespace = null) {
   if (info.username !== TEST_USER || info.uid < 501 || info.homedir !== `/Users/${TEST_USER}`) {
     throw Error('DEDICATED_MACOS_TEST_USER_REQUIRED');
+  }
+  const namespace = validatePrivateNamespace(selectedNamespace);
+  if (namespace) {
+    const root = join(info.homedir, `.attestamp-private-acceptance-${namespace}`);
+    return { home: info.homedir, namespace, root, control: join(root, 'control'),
+      support: join(root, 'support'), chrome: join(root, 'chrome') };
   }
   return {
     home: info.homedir,
@@ -62,22 +102,35 @@ export async function writeNewJSON(path, value) {
 
 export async function initializeAccount(paths = testAccount()) {
   // Refuse to adopt any pre-existing browser, vault or control directory.
-  for (const path of [paths.control, paths.chrome, paths.support]) {
+  if (paths.namespace) validatePrivateNamespace(paths.namespace);
+  const selected = paths.root ? [paths.root, paths.control, paths.chrome, paths.support]
+    : [paths.control, paths.chrome, paths.support];
+  for (const path of selected) {
     if (await exists(path)) throw Error('TEST_ACCOUNT_ALREADY_HAS_STATE');
     let parent = dirname(path);
     while (!await exists(parent)) parent = dirname(parent);
     if (await realpath(parent) !== parent) throw Error('UNSAFE_TEST_ACCOUNT_ANCESTOR');
   }
-  await mkdir(paths.control, { mode: 0o700 });
-  await mkdir(paths.chrome, { recursive: true, mode: 0o700 });
-  await mkdir(paths.support, { recursive: true, mode: 0o700 });
-  await writeNewJSON(join(paths.control, 'account.json'), { profile: DEVELOPMENT_PROFILE, uid: process.getuid() });
+  if (paths.root) {
+    await newDirectory(paths.root);
+    for (const path of [paths.control, paths.chrome, paths.support]) await mkdir(path, { mode: 0o700 });
+    for (const path of [paths.root, paths.control, paths.chrome, paths.support]) await ownerDirectory(path);
+  } else {
+    await mkdir(paths.control, { mode: 0o700 });
+    await mkdir(paths.chrome, { recursive: true, mode: 0o700 });
+    await mkdir(paths.support, { recursive: true, mode: 0o700 });
+  }
+  await writeNewJSON(join(paths.control, 'account.json'), { profile: DEVELOPMENT_PROFILE, uid: process.getuid(),
+    ...(paths.namespace ? { namespace: validatePrivateNamespace(paths.namespace) } : {}) });
 }
 
 export async function validateAccount(paths = testAccount()) {
+  if (paths.root) await ownerDirectory(paths.root);
   for (const path of [paths.control, paths.chrome, paths.support]) await ownerDirectory(path);
   const marker = await privateJSON(join(paths.control, 'account.json'));
-  if (Object.keys(marker).sort().join(',') !== 'profile,uid' || marker.profile !== DEVELOPMENT_PROFILE
+  const fields = paths.namespace ? 'namespace,profile,uid' : 'profile,uid';
+  if (Object.keys(marker).sort().join(',') !== fields || marker.profile !== DEVELOPMENT_PROFILE
+      || marker.namespace !== (paths.namespace ?? undefined)
       || marker.uid !== process.getuid()) throw Error('UNRECOGNIZED_TEST_ACCOUNT');
   return paths;
 }
