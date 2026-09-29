@@ -101,8 +101,8 @@ as owner acceptance.
 ## Prepare once
 
 Use Apple-silicon macOS 15.7+, self-contained Node 22.13+, Xcode command-line tools,
-and **Google Chrome Stable major 153**. The adapter accepts that exact major;
-Chrome 152, newer unvalidated majors and Chrome for Testing fail closed. Do not
+and **Google Chrome Stable major 154**. The adapter accepts that exact major;
+Chrome 153, newer unvalidated majors and Chrome for Testing fail closed. Do not
 change the manifest or spoof browser identity to get past this check.
 
 In System Settings, create a fresh standard local user with short name

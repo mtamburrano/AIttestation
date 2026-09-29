@@ -115,7 +115,8 @@ test('independent Chrome and Firefox native channels share one vault and reject 
   t.after(() => rm(root, { recursive: true, force: true }));
   let peers = 0;
   const f = await recordingFixture(root, { recording: true, managed: null, attestPeer: async () => ({
-    browser: { product: peers++ === 0 ? 'Google Chrome' : 'Firefox', major: 153, channel: 'stable' },
+    browser: peers++ === 0 ? { product: 'Google Chrome', major: 154, channel: 'stable' }
+      : { product: 'Firefox', major: 153, channel: 'stable' },
     platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' },
   }) });
   t.after(() => f.close());

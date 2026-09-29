@@ -214,7 +214,7 @@ try {
     integrationHomes: { codex: join(root, 'codex'), 'claude-code': join(root, 'claude'), firefox: join(root, 'mozilla') },
     keyStore: new MemoryKeyStore(), managed: null, fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' }, openBrowser: false, diagnostics,
     collectFast: async () => { throw Error('EXTERNAL_ANCHOR_FORBIDDEN'); },
-    attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+    attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } }),
     openDashboard: async url => { dashboards.push(url); } });
   output.on('data', bytes => incoming.push(...decoder.push(bytes)));
@@ -237,7 +237,7 @@ try {
     value.error ? operation.reject(Error(`CDP rejected operation: ${value.error.message}`)) : operation.resolve(value.result);
   };
   report.browser = (await call('Browser.getVersion')).product;
-  assert.match(report.browser, /^Chrome\/153\./);
+  assert.match(report.browser, /^Chrome\/154\./);
   const loaded = await call('Extensions.loadUnpacked', { path: extension }); assert.equal(loaded.id, CHATGPT_EXTENSION_ID);
   workerSession = await attach(await wait(async () => (await targets()).find(t => t.type === 'service_worker' && t.url.startsWith(origin)), 'worker'));
   await call('Runtime.enable', {}, workerSession);

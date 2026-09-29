@@ -49,7 +49,7 @@ test('first new-tab capture survives restart, 18 pending retry jobs and transien
     const epoch = randomUUID(), adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID, runtimeEpoch: epoch, diagnostics });
     const connection = { extensionId: CHATGPT_EXTENSION_ID, adapterProfile: CHATGPT_ADAPTER_PROFILE,
       captureProfile: CHATGPT_CAPTURE_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-restart-browser',
-      browser: { product: 'Google Chrome', channel: 'stable', major: 153 }, platform: { product: 'macOS', arch: 'arm64', version: '15.7' },
+      browser: { product: 'Google Chrome', channel: 'stable', major: 154 }, platform: { product: 'macOS', arch: 'arm64', version: '15.7' },
       permissionState: 'granted', permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', tabs: [testTab()] };
     adapter.pair(connection); adapter.synchronize(connection);
     session = await new ChatGPTRecordingSession(root, adapter, { vault, diagnostics, fastTrust: trust,

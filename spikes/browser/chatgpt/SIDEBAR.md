@@ -103,7 +103,7 @@ from reaching the engine; these codes are not a complete failure counter.
 
 ## Repeatable tests and evidence limits
 
-Run from a trusted checkout with Node 22.13+ and Chrome 153 installed at
+Run from a trusted checkout with Node 22.13+ and Chrome 154 installed at
 `/Applications/Google Chrome.app`:
 
 ```sh

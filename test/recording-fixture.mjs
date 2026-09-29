@@ -41,7 +41,7 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
     verifyFast: verifyFast ?? (() => ({ authorized: true, anchor: 'SOURCE_CORROBORATED', timestamp: 'SOURCE_REPORTED',
       assurance: FAST_CONFIRM_PROFILE, round: 42 })),
     verifyArchive: verifyArchive ?? (() => { throw Error('NO_ARCHIVE_FIXTURE'); }),
-    attestPeer: attestPeer ?? (async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+    attestPeer: attestPeer ?? (async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } })),
   };
   let runtime = await startPackagedChatGPT(runtimeOptions);

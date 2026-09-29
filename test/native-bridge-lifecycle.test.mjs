@@ -21,7 +21,7 @@ import { LocalDiagnostics } from '../spikes/diagnostics/local.mjs';
 import { workerFixture, testTab, turn } from './chrome-worker-fixture.mjs';
 
 const origin = `chrome-extension://${CHATGPT_EXTENSION_ID}/`;
-const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } };
 const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
   adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/5',

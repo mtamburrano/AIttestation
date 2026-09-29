@@ -1,6 +1,6 @@
 # Attestamp for ChatGPT
 
-The supported integration is Apple-silicon macOS 15.7+, Chrome Stable major 153
+The supported integration is Apple-silicon macOS 15.7+, Chrome Stable major 154
 and `https://chatgpt.com`. Turn recording ON in the existing sidebar or resident
 Mac menu. All supported existing and new tabs/windows are followed automatically.
 Use ChatGPT's normal composer and Send. Turn OFF to stop new capture; saved

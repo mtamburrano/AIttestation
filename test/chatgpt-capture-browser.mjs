@@ -125,7 +125,7 @@ try {
     integrationHomes: { codex: join(root, 'codex'), 'claude-code': join(root, 'claude'), firefox: join(root, 'mozilla') },
     managed: null, installation: null, fastTrust: { profile: 'PAP_ALGORAND_FAST_CONFIRM_V1' }, openBrowser: false,
     collectFast: async () => { throw Error('EXTERNAL_ANCHOR_FORBIDDEN'); },
-    attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+    attestPeer: async () => ({ browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } }) });
   browser = spawn('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', [
     '--headless=new', `--user-data-dir=${join(root, 'profile')}`, '--remote-debugging-port=0', '--enable-unsafe-extension-debugging',
@@ -157,7 +157,7 @@ try {
     pending.delete(value.id); clearTimeout(operation.timer);
     value.error ? operation.reject(Error('CAPTURE_CDP_REJECTED')) : operation.resolve(value.result);
   };
-  report.browser = (await call('Browser.getVersion')).product; assert.match(report.browser, /^Chrome\/153\./);
+  report.browser = (await call('Browser.getVersion')).product; assert.match(report.browser, /^Chrome\/154\./);
   const loaded = await call('Extensions.loadUnpacked', { path: extension }); assert.equal(loaded.id, CHATGPT_EXTENSION_ID);
   let target;
   await wait(async () => { target = (await call('Target.getTargets')).targetInfos.find(value => value.type === 'service_worker'

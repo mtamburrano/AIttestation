@@ -245,7 +245,7 @@ test('512 pending anchors cannot block durable capture; two workers resume saved
   const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID, runtimeEpoch: epoch });
   const connection = { extensionId: CHATGPT_EXTENSION_ID, adapterProfile: CHATGPT_ADAPTER_PROFILE,
     captureProfile: CHATGPT_CAPTURE_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-queue-browser',
-    browser: { product: 'Google Chrome', channel: 'stable', major: 153 }, platform: { product: 'macOS', arch: 'arm64', version: '15.7' },
+    browser: { product: 'Google Chrome', channel: 'stable', major: 154 }, platform: { product: 'macOS', arch: 'arm64', version: '15.7' },
     permissionState: 'granted', permissions: ['nativeMessaging'], hostPermission: 'https://chatgpt.com/*', tabs: [testTab()] };
   adapter.pair(connection); adapter.synchronize(connection);
   const versions = Array.from({ length: 512 }, () => ({ id: randomUUID(), anchor: 'PENDING', anchorAttempts: 0 }));

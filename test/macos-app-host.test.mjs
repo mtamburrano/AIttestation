@@ -60,7 +60,7 @@ test('native peer identity serialization satisfies the strict JavaScript wire co
   writeFileSync(fixture, `${source.slice(0, declarations)}
 private func validatedIdentity() throws -> [String: Any] {
   return ["profile": "pap-native-peer-validation/1",
-    "browser": ["product": "Google Chrome", "channel": "stable", "major": 153],
+    "browser": ["product": "Google Chrome", "channel": "stable", "major": 154],
     "platform": ["product": "macOS", "arch": "arm64", "version": "15.7.9"]]
 }
 ${source.slice(entrypoint)}`);
@@ -71,7 +71,7 @@ ${source.slice(entrypoint)}`);
   assert.equal(result.status, 0, result.stderr?.toString());
   assert.deepEqual(parseCanonical(result.stdout, 4096), {
     profile: 'pap-native-peer-validation/1',
-    browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+    browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
     platform: { product: 'macOS', arch: 'arm64', version: '15.7.9' },
   });
 });

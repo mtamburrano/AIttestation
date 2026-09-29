@@ -27,7 +27,7 @@ const fastTrust = {
   ],
 };
 
-const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+const identity = { browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
   platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' } };
 const hello = () => ({ kind: 'PAP_HELLO', extensionId: CHATGPT_EXTENSION_ID,
   adapterProfile: CHATGPT_ADAPTER_PROFILE, captureProfile: 'pap-chatgpt-capture/5',
@@ -88,10 +88,25 @@ test('identity, permissions, old contracts and extra release capability cannot p
   for (const changes of [{ extensionId: 'a'.repeat(32) }, { adapterProfile: 'pap-chatgpt-chrome/5' },
     { captureProfile: 'pap-chatgpt-capture/1' }, { releaseProtocol: 'pap-chatgpt-release/2' },
     { pageContract: 'stale' }, { permissionState: 'revoked' }, { platform: { product: 'Linux' } },
-    { browser: { product: 'Google Chrome', channel: 'beta', major: 153 } }]) {
+    { browser: { product: 'Google Chrome', channel: 'beta', major: 154 } }]) {
     const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
     assert.throws(() => adapter.pair({ ...hello(), ...changes }), /UNSUPPORTED_PATH/);
     assert.deepEqual(adapter.scopes(), []);
+  }
+});
+test('Chrome pairing accepts exactly major 154 with the unchanged capture contract', () => {
+  const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID });
+  const connection = { ...hello(), adapterProfile: 'pap-chatgpt-chrome/9',
+    captureProfile: 'pap-chatgpt-capture/5', pageContract: 'chatgpt-web-text/2026-09-21.1' };
+  assert.doesNotThrow(() => adapter.pair(connection));
+  adapter.synchronize(connection);
+  assert.equal(adapter.scopes().length, 1);
+  for (const major of [153, 155, '154', null, undefined]) {
+    assert.throws(() => adapter.pair({ ...connection, browser: { ...identity.browser, major } }), /UNSUPPORTED_PATH/);
+    assert.deepEqual(adapter.scopes(), []);
+    assert.doesNotThrow(() => adapter.pair(connection));
+    adapter.synchronize(connection);
+    assert.equal(adapter.scopes().length, 1);
   }
 });
 test('bridge rejects removed release messages and bounded native framing remains enforced', () => {

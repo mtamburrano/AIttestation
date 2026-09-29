@@ -69,10 +69,12 @@ test('private preparation requires the exact profile-authorized signing certific
 test('private development rejects ordinary accounts, unsupported Chrome and production promotion', async () => {
   assert.throws(() => testAccount({ username: 'owner', uid: 501, homedir: '/Users/owner' }), /TEST_USER/);
   assert.throws(() => testAccount({ username: 'attestamp-test', uid: 501, homedir: '/Users/owner' }), /TEST_USER/);
-  const baseline = { platform: 'darwin', arch: 'arm64', osVersion: '15.7.9', chromeVersion: '153.0.0.0' };
+  const baseline = { platform: 'darwin', arch: 'arm64', osVersion: '15.7.9', chromeVersion: '154.0.8037.58' };
   assert.doesNotThrow(() => assertPlatform(baseline));
-  for (const chromeVersion of ['152.0.7977.83', '154.0.0.0', '153.invalid']) {
-    assert.throws(() => assertPlatform({ ...baseline, chromeVersion }), /CHROME_153_REQUIRED/);
+  assert.doesNotThrow(() => assertPlatform({ ...baseline, chromeVersion: '154.0.0.0' }));
+  for (const chromeVersion of ['153.0.8010.53', '155.0.0.0', '154.invalid', '154', '154.0.8037',
+    '154.0.8037.58.1', '154.0.8037.58-beta', ' 154.0.8037.58', '', null, undefined]) {
+    assert.throws(() => assertPlatform({ ...baseline, chromeVersion }), /^Error: CHROME_154_REQUIRED$/);
   }
   assert.throws(() => assertPlatform({ ...baseline, osVersion: '15.6.9' }), /SUPPORTED_APPLE/);
   assert.throws(() => releaseBuildPlan({ releaseChannel: 'private-development' }), /release/i);
@@ -191,7 +193,7 @@ test('relocating a browser never substitutes an ad hoc signature for Google iden
   const paths = { home: root, control: join(root, 'control'), support: join(root, 'vault'), chrome: join(root, 'chrome-data') };
   await mkdir(join(application, 'Contents/MacOS'), { recursive: true });
   await copyFile('/usr/bin/true', join(application, 'Contents/MacOS/Google Chrome'));
-  await writeFile(join(application, 'Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Google Chrome</string><key>CFBundleIdentifier</key><string>com.google.Chrome</string><key>CFBundleShortVersionString</key><string>153.0.0.0</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>');
+  await writeFile(join(application, 'Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Google Chrome</string><key>CFBundleIdentifier</key><string>com.google.Chrome</string><key>CFBundleShortVersionString</key><string>154.0.8037.58</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>');
   const signed = spawnSync('/usr/bin/codesign', ['--force', '--sign', '-', application], {
     env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 15000 });
   assert.equal(signed.status, 0, signed.stderr);

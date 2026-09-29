@@ -62,7 +62,7 @@ try {
   if (mode === 'runtime-crash') {
     const hello = { extensionId: CHATGPT_EXTENSION_ID, adapterProfile: CHATGPT_ADAPTER_PROFILE,
       captureProfile: 'pap-chatgpt-capture/5', pageContract: CHATGPT_PAGE_CONTRACT, browserSessionId: 'synthetic-browser',
-      browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+      browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' }, permissions: ['nativeMessaging'],
       hostPermission: 'https://chatgpt.com/*', permissionState: 'granted', tabs: [{ id: 17, windowId: 1,
         tabEpoch: 'synthetic-tab', active: true, url: 'https://chatgpt.com/c/synthetic', destination: 'conversation:synthetic',

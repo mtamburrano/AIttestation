@@ -24,7 +24,7 @@ Dashboard/History. The optional local dashboard adds account connection,
 integration management, selective export, recovery and private diagnostics.
 Closing a view leaves the resident engine running.
 
-The first supported contract is macOS 15.7+ arm64, Chrome Stable major 153 and
+The current supported contract is macOS 15.7+ arm64, Chrome Stable major 154 and
 `https://chatgpt.com` text up to 256 KiB. Attachments, responses, voice, edits,
 regeneration and unrelated/background requests are outside capture. Native peer
 authentication, exact source/document checks and versioned contracts fail closed.

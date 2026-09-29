@@ -22,7 +22,7 @@ async function fixture(t) {
     const adapter = new ChatGPTChromeAdapter({ extensionId: CHATGPT_EXTENSION_ID, runtimeEpoch: epoch });
     const hello = { extensionId: CHATGPT_EXTENSION_ID, adapterProfile: CHATGPT_ADAPTER_PROFILE,
       captureProfile: CHATGPT_CAPTURE_PROFILE, pageContract: CHATGPT_PAGE_CONTRACT,
-      browserSessionId: randomUUID(), browser: { product: 'Google Chrome', channel: 'stable', major: 153 },
+      browserSessionId: randomUUID(), browser: { product: 'Google Chrome', channel: 'stable', major: 154 },
       platform: { product: 'macOS', arch: 'arm64', version: '15.7.2' },
       permissions: ['nativeMessaging'], permissionState: 'granted', hostPermission: 'https://chatgpt.com/*',
       tabs: [{ id: 17, windowId: 1, tabEpoch: 'synthetic-document', url: 'https://chatgpt.com/c/test',

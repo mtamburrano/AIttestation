@@ -69,20 +69,23 @@ test('consumer branding preserves bundle, Keychain, schema, protocol and extensi
       migrated.content_security_policy = { extension_pages: "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" };
     }
     if (file === 'spikes/distribution/fixtures/compatibility.json') {
-      for (const fixture of migrated.cases) if (fixture.adapterProfile === 'pap-chatgpt-chrome/2') fixture.adapterProfile = 'pap-chatgpt-chrome/9';
+      for (const fixture of migrated.cases) {
+        if (fixture.adapterProfile === 'pap-chatgpt-chrome/2') fixture.adapterProfile = 'pap-chatgpt-chrome/9';
+        fixture.chromeMajor += 1;
+      }
       migrated.providerContract = 'chatgpt-web-text/2026-09-21.1';
       migrated.cases.push({ name: 'extension without epoch-bound reconnect', appSequence: 2,
-        adapterProfile: 'pap-chatgpt-chrome/2', chromeMajor: 153, supported: false });
+        adapterProfile: 'pap-chatgpt-chrome/2', chromeMajor: 154, supported: false });
       migrated.cases.push({ name: 'legacy extension contract 3', appSequence: 2,
-        adapterProfile: 'pap-chatgpt-chrome/3', chromeMajor: 153, supported: false });
+        adapterProfile: 'pap-chatgpt-chrome/3', chromeMajor: 154, supported: false });
       migrated.cases.push({ name: 'extension without independent document scopes', appSequence: 2,
-        adapterProfile: 'pap-chatgpt-chrome/4', chromeMajor: 153, supported: false });
+        adapterProfile: 'pap-chatgpt-chrome/4', chromeMajor: 154, supported: false });
       migrated.cases.push({ name: 'obsolete strict request extraction contract', appSequence: 2,
-        adapterProfile: 'pap-chatgpt-chrome/8', chromeMajor: 153, supported: false });
+        adapterProfile: 'pap-chatgpt-chrome/8', chromeMajor: 154, supported: false });
       migrated.cases.push({ name: 'obsolete human-qualified transport contract', appSequence: 2,
-        adapterProfile: 'pap-chatgpt-chrome/7', chromeMajor: 153, supported: false });
+        adapterProfile: 'pap-chatgpt-chrome/7', chromeMajor: 154, supported: false });
       migrated.cases.push({ name: 'obsolete DOM acquisition contract', appSequence: 2,
-        adapterProfile: 'pap-chatgpt-chrome/6', chromeMajor: 153, supported: false });
+        adapterProfile: 'pap-chatgpt-chrome/6', chromeMajor: 154, supported: false });
     }
     assert.deepEqual(actual, migrated, `${file}: public key, trust roots and release/provider configuration are frozen`);
   }
