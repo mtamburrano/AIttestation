@@ -1,8 +1,77 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { workerFixture, testTab, turn } from './chrome-worker-fixture.mjs';
 import { recordingFixture, until } from './recording-fixture.mjs';
+
+for (const runtimeEpoch of ['same-runtime', 'restarted-runtime']) for (const offlineNavigation of [false, true]) {
+  test(`native reconnect preserves the proven document route with fresh capture authority (${runtimeEpoch}, offline navigation=${offlineNavigation})`, async t => {
+    const creationURL = 'https://chatgpt.com/';
+    let tab = testTab({ url: creationURL, destination: 'new-chat' }), granted = true;
+    const captured = [];
+    const f = await workerFixture({ query: async () => [tab], permission: async () => granted,
+      inspect: async (_id, message) => message.kind === 'PAP_CONFIRM_DOCUMENT'
+        ? { nonce: message.nonce, active: true, url: tab.url }
+        : message.kind === 'PAP_INSPECT' ? { destination: tab.destination, surfaceSupported: true,
+          attachmentsPresent: false, observerState: 'ready' } : true,
+      onConnect(port) {
+        port.send = message => {
+          if (message.kind !== 'PAP_CAPTURE') return;
+          captured.push(structuredClone(message));
+          queueMicrotask(() => port.onMessage.emit({ kind: 'PAP_CAPTURE_RESULT', requestId: message.requestId,
+            result: { profile: 'pap-chatgpt-capture/5', eventId: message.observation.eventId,
+              kind: message.observation.kind, state: 'PROMPT_SAVED' } }));
+        };
+      },
+    });
+    t.after(() => f.close());
+    await turn();
+    const first = f.ports[0], hello = first.messages.find(message => message.kind === 'PAP_HELLO');
+    const sender = { id: f.chrome.runtime.id, frameId: 0, origin: 'https://chatgpt.com',
+      documentId: 'same-live-document', documentLifecycle: 'active', url: creationURL,
+      tab: { id: tab.id, windowId: tab.windowId, incognito: false } };
+    const status = () => f.message({ kind: 'PAP_CAPTURE_STATUS', pageContract: hello.pageContract }, sender);
+    const offer = (port, epoch) => {
+      const policy = { profile: 'pap-chatgpt-capture/5', token: randomUUID(), runtimeEpoch: epoch,
+        browserSessionId: hello.browserSessionId, tabId: tab.id, windowId: tab.windowId,
+        tabEpoch: port.messages.find(message => message.kind === 'PAP_HELLO').tabs[0].tabEpoch, scope: randomUUID(), expectedUrl: tab.url, destination: tab.destination };
+      port.onMessage.emit({ kind: 'PAP_CAPTURE_POLICY', profile: policy.profile, policies: [policy],
+        states: [{ tabId: tab.id, state: 'READY' }] });
+      return policy;
+    };
+    const capture = (policy, selectedSender = sender) => f.message({ kind: 'PAP_CAPTURE', pageContract: hello.pageContract,
+      token: policy.token, eventId: randomUUID(), observationKind: 'request-observed', inputMethod: 'provider-request',
+      text: 'SYNTHETIC_RECONNECTED_REQUEST', request: { profile: 'chatgpt-new-user-text/3',
+        path: '/backend-api/f/conversation', messageId: randomUUID(), conversationId: 'created-conversation' } }, selectedSender);
+    f.ready(first, 'same-runtime'); offer(first, 'same-runtime'); await status();
+    tab = { ...tab, url: 'https://chatgpt.com/c/created-conversation', destination: 'conversation:created-conversation' };
+    f.chrome.tabs.onUpdated.emit(tab.id, { url: tab.url }); await turn(); await turn();
+    const previous = offer(first, 'same-runtime');
+    assert.equal((await status()).policy.token, previous.token);
+    assert.equal((await capture(previous)).state, 'PROMPT_SAVED');
+    first.disconnect();
+    assert.equal((await capture(previous)).state, 'RECORDING_UNAVAILABLE');
+    if (offlineNavigation) {
+      tab = { ...tab, url: 'https://chatgpt.com/c/offline-conversation', destination: 'conversation:offline-conversation' };
+      f.chrome.tabs.onUpdated.emit(tab.id, { url: tab.url, status: 'loading' }); await turn(); await turn();
+    }
+    await f.fire(1000);
+    const replacement = f.ports[1]; f.ready(replacement, runtimeEpoch);
+    const current = offer(replacement, runtimeEpoch);
+    assert.equal((await status()).policy?.token, current.token,
+      'a native reconnect must not forget the authenticated SPA document creation URL');
+    assert.equal((await capture(previous)).state, 'RECORDING_UNAVAILABLE', 'old capture authority stays revoked');
+    assert.equal((await capture(current, { ...sender, documentId: 'other-document' })).state, 'RECORDING_UNAVAILABLE');
+    assert.equal((await capture(current)).state, 'PROMPT_SAVED');
+    assert.equal(captured.length, 2);
+    assert.equal(captured[1].observation.source.destination, tab.destination);
+    assert.equal(captured[1].observation.source.documentId, sender.documentId);
+    granted = false; f.chrome.permissions.onRemoved.emit();
+    assert.equal((await capture(current)).state, 'RECORDING_UNAVAILABLE');
+    assert.equal(captured.length, 2);
+  });
+}
 
 test('startup and overlapping update recovery inject only fixed scripts into supported top-level documents', async t => {
   const calls = [];

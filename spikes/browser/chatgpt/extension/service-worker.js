@@ -162,7 +162,8 @@ function retire(context) {
   context.lateCaptures.clear();
   newChats.clear();
   retiredPolicies.clear();
-  documentRoutes.clear();
+  // The browser document survives a native reconnect. Keep its proven creation
+  // URL mapping; only fresh policies may authorize captures on the new port.
   for (const pending of context.panels.values()) pending({ error: 'PANEL_DISCONNECTED' });
   context.panels.clear();
   try { context.port.disconnect(); } catch {}
@@ -461,11 +462,12 @@ chrome.tabs.onRemoved.addListener(id => { tabEpochs.delete(id); documents.delete
 chrome.tabs.onUpdated.addListener((id, change) => {
   if (!change.url && change.status !== 'loading') { if (change.status === 'complete') publishState(); return; }
   if ((!change.url || supportedURL(change.url)) && documents.has(id)) {
-    const documentId = documents.get(id), epoch = tabEpochs.get(id), context = connection;
+    const documentId = documents.get(id), epoch = tabEpochs.get(id);
     // Chrome may report multiple loading updates during a same-document route
     // change. Their count cannot establish document replacement. Preserve the
     // epoch only when the exact original document proves its current live URL;
     // every pending request still needs its separate bounded payload challenge.
+    // Browser document proof remains available while the native port is down.
     const check = (async () => {
       let valid = false, live;
       try {
@@ -473,7 +475,7 @@ chrome.tabs.onUpdated.addListener((id, change) => {
         const proof = await bounded(chrome.tabs.sendMessage(id, { kind: 'PAP_CONFIRM_DOCUMENT', pageContract: PAGE_CONTRACT, nonce }, { documentId, frameId: 0 }));
         const [tabs, permission] = await Promise.all([bounded(chrome.tabs.query({ url: 'https://chatgpt.com/*' })), permissionState()]);
         live = tabs.find(tab => tab.id === id);
-        valid = current(context) && permission === 'granted' && tabs.length <= 32 && live && !live.incognito
+        valid = permission === 'granted' && tabs.length <= 32 && live && !live.incognito
           && supportedURL(live.url) && (!change.url || live.url === change.url)
           && proof?.nonce === nonce && proof.active === true && proof.url === live.url;
       } catch {}
