@@ -11,7 +11,8 @@ import { launchAgentChrome, connectAgentCDP, validateAgentCDP } from '../spikes/
 import { updateAgentStage } from '../spikes/development/agent-stage.mjs';
 import { withAgentAwake } from '../spikes/development/agent-awake.mjs';
 import { waitForAgentBrowserCleanup } from '../spikes/development/agent-process.mjs';
-import { agentDoctor } from '../spikes/development/agent-doctor.mjs';
+import { agentDoctor, refreshAgentExtension } from '../spikes/development/agent-doctor.mjs';
+import { CHATGPT_EXTENSION_ID } from '../spikes/browser/chatgpt/adapter.mjs';
 import { fileInventory } from '../spikes/distribution/inventory.mjs';
 import { writeNewJSON } from '../spikes/development/environment.mjs';
 import { RUNTIME_STATE_PROFILE } from '../spikes/development/runtime-state.mjs';
@@ -225,21 +226,98 @@ test('CDP supports DOM inspection and actual console/network event subscription 
   cdp.close(); await assert.rejects(cdp.call('Browser.getVersion'), /AGENT_CDP_INVALID/);
 });
 
+test('private extension reload verifies the running worker against staged bytes before any provider interaction', async t => {
+  const { paths, sentinel } = await fixture(t);
+  await writeNewJSON(join(paths.control, 'cdp.json'), cdpValue);
+  await mkdir(join(paths.extension, 'current'));
+  const source = 'const syntheticStagedWorker = true;\n';
+  await writeFile(join(paths.extension, 'current/service-worker.js'), source);
+  const url = `chrome-extension://${CHATGPT_EXTENSION_ID}/service-worker.js`;
+  for (const outcome of ['verified', 'reload-detached', 'unchanged-target', 'wrong-source', 'missing-script']) {
+    let elapsed = 0, reloaded = false, closed = false;
+    const calls = [];
+    const operation = refreshAgentExtension(paths, { now: () => elapsed, wait: async ms => { elapsed += ms; },
+      connect: async (value, { onEvent }) => {
+        assert.deepEqual(value, cdpValue);
+        return { close() { closed = true; }, async call(method, params, session) {
+          calls.push({ method, params, session });
+          if (method === 'Target.getTargets') return { targetInfos: [
+            { type: 'service_worker', url: 'chrome-extension://unrelated/service-worker.js', targetId: 'unrelated' },
+            { type: 'service_worker', url, targetId: reloaded && outcome !== 'unchanged-target' ? 'fresh' : 'cached' },
+          ] };
+          if (method === 'Target.attachToTarget') return { sessionId: params.targetId };
+          if (method === 'Runtime.evaluate') {
+            assert.equal(session, 'cached'); assert.equal(params.expression, 'chrome.runtime.reload()');
+            reloaded = true;
+            if (outcome === 'reload-detached') throw Error('AGENT_CDP_REJECTED');
+            return {};
+          }
+          if (method === 'Debugger.enable') {
+            assert.equal(session, 'fresh');
+            onEvent({ method: 'Debugger.scriptParsed', sessionId: 'cached', params: { url, scriptId: 'stale-script' } });
+            onEvent({ method: 'Debugger.scriptParsed', sessionId: 'fresh', params: { url: 'unrelated', scriptId: 'other-script' } });
+            if (outcome !== 'missing-script') onEvent({ method: 'Debugger.scriptParsed', sessionId: 'fresh',
+              params: { url, scriptId: 'fresh-script' } });
+            return {};
+          }
+          if (method === 'Debugger.getScriptSource') {
+            assert.equal(session, 'fresh'); assert.equal(params.scriptId, 'fresh-script');
+            return { scriptSource: outcome === 'wrong-source' ? 'cached bytes' : source };
+          }
+          assert.fail(`Unexpected CDP command: ${method}`);
+        } };
+      },
+    });
+    if (outcome === 'verified' || outcome === 'reload-detached') assert.deepEqual(await operation, { status: 'VERIFIED' });
+    else await assert.rejects(operation, /AGENT_EXTENSION_/);
+    assert.ok(closed); assert.ok(elapsed <= 15000);
+    assert.equal(calls.filter(call => call.method === 'Runtime.evaluate').length, 1);
+    assert.ok(calls.every(call => !/Input|Network|createTarget/.test(call.method)));
+  }
+  assert.equal(await readFile(sentinel, 'utf8'), 'synthetic retained evidence');
+});
+
 test('doctor checks real lifecycle order, fresh epochs, CDP pairing and preserves failed runtime', async t => {
   const { paths } = await fixture(t); await writeNewJSON(join(paths.control, 'cdp.json'), cdpValue);
   const calls = []; let epoch = 0;
   const dependencies = { preflight: async () => ({ status: 'READY' }),
     start: async () => { calls.push('start'); epoch++; return { status: 'READY' }; },
-    stop: async () => { calls.push('stop'); },
+    stop: async () => {
+      assert.ok(calls.slice(calls.lastIndexOf('start')).includes('Browser.close'),
+        'Chrome must receive graceful shutdown before the resident exits');
+      calls.push('stop');
+    },
     control: async (_paths, action) => { calls.push(action); return { runtimeEpoch: String(epoch) }; },
+    refreshExtension: async actualPaths => { assert.equal(actualPaths, paths); calls.push('refresh'); },
     connect: async () => ({ close() { calls.push('cdp-close'); }, call: async method => { calls.push(method); return { targetId: 'fixture' }; } }) };
   const report = await agentDoctor(paths, true, dependencies);
   assert.equal(report.status, 'READY'); assert.equal(calls.filter(value => value === 'stop').length, 2);
+  assert.equal(calls.filter(value => value === 'refresh').length, 2);
+  assert.ok(calls.indexOf('refresh') < calls.indexOf('Target.createTarget'));
   assert.deepEqual(report.budgets, { providerSends: 0, anchorTransactions: 0, sponsor: 'DISABLED' });
   calls.length = 0;
   const failure = await agentDoctor(paths, true, { ...dependencies, control: async () => { throw Error('SECRET'); } });
   assert.equal(failure.status, 'OWNER_ACTION_REQUIRED'); assert.ok(!calls.includes('stop'));
   assert.doesNotMatch(JSON.stringify(failure), /SECRET/);
+});
+
+test('doctor waits for an acknowledged browser close to finish profile cleanup before stopping the resident', async t => {
+  const { paths } = await fixture(t); await writeNewJSON(join(paths.control, 'cdp.json'), cdpValue);
+  const singleton = join(paths.chrome, 'SingletonLock');
+  let epoch = 0, stops = 0, cleanup = Promise.resolve();
+  t.after(() => cleanup);
+  const report = await agentDoctor(paths, true, {
+    preflight: async () => ({ status: 'READY' }),
+    start: async () => { epoch++; await writeFile(singleton, 'synthetic owned browser'); return { status: 'READY' }; },
+    control: async () => ({ runtimeEpoch: String(epoch) }),
+    refreshExtension: async () => {},
+    stop: async () => { await assert.rejects(lstat(singleton), { code: 'ENOENT' }); stops++; },
+    connect: async () => ({ close() {}, async call(method) {
+      if (method === 'Browser.close') cleanup = new Promise(resolve => setTimeout(resolve, 25)).then(() => rm(singleton));
+      return { targetId: 'fixture' };
+    } }),
+  });
+  assert.equal(report.status, 'READY'); assert.equal(stops, 2);
 });
 
 test('bounded runs hold idle sleep only for their process and release on success, failure and interruption', async () => {
