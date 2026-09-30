@@ -29,6 +29,7 @@ import { fileInventory } from '../spikes/distribution/inventory.mjs';
 import { canonical } from '../spikes/vault/format.mjs';
 import { sha256 } from '../spikes/distribution/release.mjs';
 import { copyApplicationResource } from '../spikes/distribution/package-resources.mjs';
+import { chromeApplicationFiles } from '../spikes/development/chrome.mjs';
 
 async function fixture(t, namespace = 'fixture01') {
   const home = await realpath(await mkdtemp('/private/tmp/agent-test-'));
@@ -324,15 +325,37 @@ test('the actual local runtime cannot enable browser integration, sponsor reques
   } finally { await runtime?.close(); network.restore(); }
 });
 
+test('agent Chrome selection accepts its fixed browser sibling while excluding mutable state and aliases', async t => {
+  const f = await fixture(t), application = f.paths.chromeApplication;
+  const executable = join(application, 'Contents/MacOS/Google Chrome');
+  const infoPlist = join(application, 'Contents/Info.plist');
+  await mkdir(join(application, 'Contents/MacOS'), { recursive: true, mode: 0o700 });
+  await writeFile(executable, 'synthetic executable, never launched', { mode: 0o700 });
+  await writeFile(infoPlist, 'synthetic metadata', { mode: 0o600 });
+  assert.deepEqual(await chromeApplicationFiles(application, f.paths), { application, executable, infoPlist });
+  for (const directory of [f.paths.root, f.paths.control, f.paths.support, f.paths.chrome, f.paths.extension]) {
+    await assert.rejects(chromeApplicationFiles(join(directory, 'Google Chrome.app'), f.paths), /MUST_BE_SEPARATE/);
+  }
+  await assert.rejects(chromeApplicationFiles(join(f.paths.browser, 'Other Chrome.app'), f.paths), /MUST_BE_SEPARATE/);
+  await assert.rejects(chromeApplicationFiles(application, { ...f.paths, browser: f.paths.control }), /MUST_BE_SEPARATE/);
+  await rm(executable); await symlink(infoPlist, executable);
+  await assert.rejects(chromeApplicationFiles(application, f.paths), /UNSAFE_PRIVATE_CHROME_COPY/);
+  assert.equal(copyApplicationResource('spikes/development/chrome.mjs'), false);
+  assert.deepEqual(await fileInventory(f.retained), f.baseline);
+});
+
 test('agent artifact validation pins the signed namespace and inventories before it can be selected', async t => {
   const f = await fixture(t), name = 'one', output = agentBuildPath(f.paths, name);
   const app = join(output, 'package/Attestamp.app'), dev = join(app, 'Contents/Resources/spikes/development');
   const verifier = join(output, 'package/Recipient/Attestamp Verifier.app');
+  const firefox = join(output, 'package/Firefox Extension');
   await mkdir(dev, { recursive: true, mode: 0o700 }); await mkdir(verifier, { recursive: true, mode: 0o700 });
   await mkdir(join(output, 'extension'), { mode: 0o700 });
+  await mkdir(firefox, { mode: 0o700 });
+  await writeFile(join(firefox, 'manifest.json'), '{"name":"synthetic Firefox extension"}');
   await writeNewJSON(join(dev, 'private-development.json'), { profile: f.config.profile, agent: f.agent, build: name,
     sponsorOrigin: null, updaterEnabled: false, assurance: 'PRIVATE_TESTNET_ONLY', browserPolicy: 'EXPLICIT_TEST_USER_COPY' });
-  const inventory = { application: await fileInventory(app), verifier: [], extension: [] };
+  const inventory = { application: await fileInventory(app), verifier: [], extension: [], firefox: await fileInventory(firefox) };
   await writeNewJSON(join(output, 'private-inventory.json'), inventory);
   await writeNewJSON(join(output, 'private-build.json'), { profile: f.config.profile, releaseClass: 'PRIVATE_DEVELOPMENT',
     updaterEnabled: false, agent: f.agent, bundleInventoryDigest: sha256(canonical(inventory)) });
@@ -341,6 +364,13 @@ test('agent artifact validation pins the signed namespace and inventories before
   assert.ok(checks[0].args.some(value => value.includes(f.config.teamId)));
   const other = { ...f.config, agent: { ...f.agent, namespace: 'another' } };
   await assert.rejects(inspectAgentBuild(other, f.paths, name, execute), /BUILD_INVALID/);
+  await writeFile(join(firefox, 'manifest.json'), '{"name":"altered Firefox extension"}');
+  await assert.rejects(inspectAgentBuild(f.config, f.paths, name, execute), /BUILD_INVALID/);
+  await writeFile(join(firefox, 'manifest.json'), '{"name":"synthetic Firefox extension"}');
+  const { firefox: omitted, ...incomplete } = inventory;
+  await writeFile(join(output, 'private-inventory.json'), JSON.stringify(incomplete));
+  await assert.rejects(inspectAgentBuild(f.config, f.paths, name, execute), /BUILD_INVALID/);
+  await writeFile(join(output, 'private-inventory.json'), JSON.stringify(inventory));
   await writeFile(join(app, 'unexpected.txt'), 'not inventoried');
   await assert.rejects(inspectAgentBuild(f.config, f.paths, name, execute), /BUILD_INVALID/);
   assert.deepEqual(await fileInventory(f.retained), f.baseline);

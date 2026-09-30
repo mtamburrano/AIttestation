@@ -132,7 +132,8 @@ export async function inspectAgentBuild(config, paths, name, execute = run) {
   const inventory = JSON.parse(await readReleaseFile(join(output, 'private-inventory.json'), { privateFile: true, limit: 4 * 1024 * 1024 }));
   const observed = { application: await fileInventory(app),
     verifier: await fileInventory(join(output, 'package/Recipient/Attestamp Verifier.app')),
-    extension: await fileInventory(join(output, 'extension')) };
+    extension: await fileInventory(join(output, 'extension')),
+    firefox: await fileInventory(join(output, 'package/Firefox Extension')) };
   if (canonical(inventory) !== canonical(observed) || sha256(canonical(inventory)) !== metadata.bundleInventoryDigest) {
     throw Error('AGENT_BUILD_INVALID');
   }

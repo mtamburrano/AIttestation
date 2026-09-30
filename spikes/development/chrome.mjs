@@ -14,7 +14,10 @@ export async function chromeApplicationFiles(application, paths = testAccount())
       || !application.endsWith('.app') || !application.startsWith(`${paths.home}${sep}`)) {
     throw Error('EXPLICIT_TEST_USER_CHROME_COPY_REQUIRED');
   }
-  for (const reserved of [paths.root, paths.control, paths.support, paths.chrome].filter(Boolean)) {
+  // The agent's fixed browser directory is a sibling of its mutable state.
+  const agentBrowser = typeof paths.root === 'string' && paths.browser === join(paths.root, 'browser')
+    && application === paths.chromeApplication && application === join(paths.browser, 'Google Chrome.app');
+  for (const reserved of [agentBrowser ? null : paths.root, paths.control, paths.support, paths.chrome].filter(Boolean)) {
     if (application === reserved || application.startsWith(`${reserved}${sep}`)) throw Error('CHROME_COPY_MUST_BE_SEPARATE');
   }
   const executable = join(application, 'Contents/MacOS/Google Chrome');
