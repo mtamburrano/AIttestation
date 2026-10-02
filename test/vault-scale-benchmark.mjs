@@ -14,6 +14,8 @@ import { scaleObservation } from './vault-scale-fixture.mjs';
 import { CHATGPT_CAPTURE_PROFILE } from '../spikes/recipient/normal-observation.mjs';
 import { FIREFOX_CAPTURE_PROFILE, FIREFOX_ADAPTER_PROFILE } from '../spikes/recipient/firefox-observation.mjs';
 import { HOOK_CAPTURE_PROFILE, HOOK_SOURCE_PROFILE } from '../spikes/recipient/hook-observation.mjs';
+import { verifyPortable } from '../spikes/recipient/portable.mjs';
+import { exportRecoveryFile, inspectRecoveryFile } from '../spikes/vault/recovery-stream.mjs';
 
 if (process.argv[2] !== '--child') {
   const results = [];
@@ -25,6 +27,7 @@ if (process.argv[2] !== '--child') {
   }
 } else {
   const count = Number(process.argv[3]), pageSize = Number(process.argv[4]);
+  const guardrails = process.argv.includes('--guardrails');
   const mixed = process.argv.includes('--mixed'), installationId = randomUUID(), runtimeEpoch = randomUUID(), scope = randomUUID();
   assert.ok([1000,10000,50000].includes(count));
   const root = mkdtempSync(join(tmpdir(), 'attestamp-scale-benchmark-test-')), directory = join(root, 'vault'), key = randomBytes(32);
@@ -52,6 +55,11 @@ if (process.argv[2] !== '--child') {
     const diskBytes = readdirSync(directory).reduce((n, file) => n + statSync(join(directory, file)).size, 0);
     const openStart = performance.now();
     vault = new Vault(directory, key);
+    const records = vault.records;
+    if (guardrails) {
+      vault.inspect = () => { throw Error('FULL_ARCHIVE_MATERIALIZATION_FORBIDDEN'); };
+      vault.records = () => { throw Error('FULL_ARCHIVE_VIEW_SCAN_FORBIDDEN'); };
+    }
     session = await new ChatGPTRecordingSession(root, adapter, sessionOptions()).init();
     engine = await new ResidentEngine(root, session, adapter, randomUUID()).init();
     const startupMs = performance.now() - openStart, startupAccess = vault.metrics({ reset: true });
@@ -68,11 +76,32 @@ if (process.argv[2] !== '--child') {
     const searchMs = performance.now() - searchStart, searchAccess = vault.metrics({ reset: true });
     assert.equal(search.history.prompts.length, 1);
     const commonStart = performance.now(), common = await dashboardState(runtime, { search: 'exact local' });
-    const commonSearchMs = performance.now() - commonStart;
+    const commonSearchMs = performance.now() - commonStart, commonAccess = vault.metrics({ reset: true });
     assert.equal(common.history.prompts.length, 5);
     for (const access of [recentAccess, pageAccess, searchAccess]) { assert.ok(access.recordsRead <= 40); assert.ok(access.objectsRead <= 60); }
+    let transfer = null;
+    if (guardrails) {
+      const exportStart = performance.now();
+      const selection = session.receipts.prepare({ ids: session.receipts.page({ limit: 5 }).receipts.map(row => row.id) });
+      const bytes = session.receipts.export(selection.previewId), exportMs = performance.now() - exportStart;
+      const exportAccess = vault.metrics({ reset: true }), verifyStart = performance.now(), verified = verifyPortable(bytes);
+      const verifierMs = performance.now() - verifyStart;
+      assert.equal(verified.records.length, 10);
+      assert.ok(verified.records.every(row => row.integrity === 'VALID' && row.keyAttribution === 'SIGNATURE_VALID'));
+      vault.records = records; // Full recovery deliberately streams the archive.
+      const backupPath = join(root, 'synthetic.pap-recovery'), recoveryStart = performance.now();
+      const backup = exportRecoveryFile(vault, backupPath), recoveryMs = performance.now() - recoveryStart;
+      try {
+        const inspectStart = performance.now(), inspected = inspectRecoveryFile(backupPath, backup.recoveryKey);
+        const recoveryVerifyMs = performance.now() - inspectStart;
+        assert.equal(inspected.count, count * 2);
+        transfer = { exportMs, exportBytes: bytes.length, exportAccess, verifierMs, verifierRecords: verified.records.length,
+          recoveryMs, recoveryVerifyMs, recoveryBytes: statSync(backupPath).size, recoveryRecords: inspected.count,
+          recoveryRecordsPerSecond: Math.round(inspected.count / (recoveryMs / 1000)) };
+      } finally { backup.recoveryKey.fill(0); }
+    }
     console.log(JSON.stringify({ prompts: count, mixed, pageSize, captureMs, startupMs, recentMs, pagedMs, searchMs, commonSearchMs,
       peakRssMiB: process.resourceUsage().maxRSS / 1024, rssMiB: process.memoryUsage().rss / 2 ** 20,
-      diskMiB: diskBytes / 2 ** 20, startupAccess, recentAccess, pageAccess, searchAccess }));
+      diskMiB: diskBytes / 2 ** 20, startupAccess, recentAccess, pageAccess, searchAccess, commonAccess, transfer }));
   } finally { engine?.stop(); await engine?.drain(); session?.close(); vault?.close(); key.fill(0); rmSync(root, { recursive: true, force: true }); }
 }

@@ -132,5 +132,7 @@ export async function nativeCodingFixture(directory, scenario) {
   if (run.status !== 0) throw failure(run.error?.code === 'ETIMEDOUT' ? 'NATIVE_HARNESS_TIMEOUT' : 'NATIVE_RECEIVER_FAILED');
   const value = JSON.parse(await readFile(report));
   return { scenario, status: 'PASS', identity: value.identity, vendorClientEvidence: 'NOT_TESTED',
-    checkpoints: Object.entries(value.paths).map(([name, result]) => ({ name, status: 'PASS', samples: result.samples, saved: result.saved })) };
+    deadlineMs: 250,
+    checkpoints: Object.entries(value.paths).map(([name, result]) => ({ name, status: 'PASS', samples: result.samples, saved: result.saved,
+      p50Ms: result.p50Ms, p95Ms: result.p95Ms, p99Ms: result.p99Ms, maximumMs: result.maximumMs, overDeadline: result.over250Ms })) };
 }

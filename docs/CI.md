@@ -42,6 +42,10 @@ shipping binary/toolchain attestation. The stricter distribution inventory remai
 the release authority. Changed pins, notices or vendored bytes fail consistency
 checks; there is no live advisory query in baseline CI.
 
+The small [performance guardrail](PERFORMANCE.md) evaluator regression runs in the
+portable lane. Full 10k/50k vault and native timing measurements are an opt-in local
+release checkpoint, keeping routine PR jobs small.
+
 Local validation does not prove a hosted Actions run. Hosted Linux execution and
 native runner-image differences remain visible evidence boundaries until executed.
 

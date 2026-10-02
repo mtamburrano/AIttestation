@@ -28,6 +28,9 @@ deterministic `test/*.test.mjs` once instead of the focused distribution set. It
 not launch the real-browser/provider campaign. Existing unchanged browser evidence
 is reused at its original scope. Native fixture acceptance remains available through
 `npm run test:coding-acceptance`; do not repeat it merely between unrelated edits.
+Run or reuse the [performance guardrails](PERFORMANCE.md) at their own release
+checkpoint; the full readiness suite validates the guardrail evaluator without
+rebuilding unchanged 10k/50k fixtures between tasks.
 
 The new output directory retains `readiness.json`, `release-manifest.json`,
 `repository-dependencies.json`, `artifact-policy.json`, the bounded coding report

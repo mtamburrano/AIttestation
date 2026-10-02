@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { LocalDiagnostics } from '../diagnostics/local.mjs';
 import { initializeSponsor } from './sponsor.mjs';
 import { newDirectory, initializeAccount, validateAccount } from './environment.mjs';
-import { PRODUCT_SCENARIOS, CODING_SCENARIOS, RELEASE_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';
+import { PRODUCT_SCENARIOS, CODING_SCENARIOS, RELEASE_SCENARIOS, PERFORMANCE_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';
 import { restrictFixtureNetwork } from './fixture-network.mjs';
 
 const profile = 'pap-product-test/1';
@@ -17,8 +17,8 @@ function options(args) {
     invariant(!seen.has(arg), 'INVALID_RUNNER_OPTIONS'); seen.add(arg);
     if (arg === '--trace-synthetic') result.detailed = true;
     else if (arg === '--list') result.list = true;
-    else if (arg === '--suite') { result.suite = args[++index]; invariant(['product', 'coding', 'release'].includes(result.suite), 'UNKNOWN_SUITE'); }
-    else if (arg === '--scenario') { result.scenario = args[++index]; invariant([...PRODUCT_SCENARIOS, ...CODING_SCENARIOS, ...RELEASE_SCENARIOS].includes(result.scenario), 'UNKNOWN_SCENARIO'); }
+    else if (arg === '--suite') { result.suite = args[++index]; invariant(['product', 'coding', 'release', 'performance'].includes(result.suite), 'UNKNOWN_SUITE'); }
+    else if (arg === '--scenario') { result.scenario = args[++index]; invariant([...PRODUCT_SCENARIOS, ...CODING_SCENARIOS, ...RELEASE_SCENARIOS, ...PERFORMANCE_SCENARIOS].includes(result.scenario), 'UNKNOWN_SCENARIO'); }
     else if (arg === '--output') { result.output = args[++index]; invariant(typeof result.output === 'string', 'INVALID_RUNNER_OPTIONS'); }
     else invariant(false, 'INVALID_RUNNER_OPTIONS');
   }
@@ -38,8 +38,9 @@ try {
   const selected = options(process.argv.slice(2));
   const coding = selected.suite === 'coding' || selected.scenario?.startsWith('coding-');
   const release = selected.suite === 'release' || selected.scenario?.startsWith('release-');
-  const sponsorDisabled = coding || release;
-  const scenarios = selected.scenario ? [selected.scenario] : release ? RELEASE_SCENARIOS : coding ? CODING_SCENARIOS : PRODUCT_SCENARIOS;
+  const performanceSuite = selected.suite === 'performance' || selected.scenario?.startsWith('performance-');
+  const sponsorDisabled = coding || release || performanceSuite;
+  const scenarios = selected.scenario ? [selected.scenario] : performanceSuite ? PERFORMANCE_SCENARIOS : release ? RELEASE_SCENARIOS : coding ? CODING_SCENARIOS : PRODUCT_SCENARIOS;
   if (selected.list) {
     process.stdout.write(`${JSON.stringify({ profile, mode: 'SYNTHETIC_FIXTURE', scenarios })}\n`);
   } else {

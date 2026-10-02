@@ -20,6 +20,7 @@
     "test:product": "node spikes/development/product-test.mjs",
     "test:coding-acceptance": "node spikes/development/product-test.mjs --suite coding",
     "test:release-rehearsal": "node spikes/development/product-test.mjs --suite release",
+    "test:performance": "node spikes/development/product-test.mjs --suite performance",
     "test:debug-session": "node --test test/debug-session.test.mjs",
     "test:runtime-latency": "node --test test/runtime-latency.test.mjs",
     "test": "node --test test/*.test.mjs",
