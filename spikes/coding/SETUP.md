@@ -1,5 +1,29 @@
 # Mac connections
 
+## Offline lifecycle acceptance
+
+Run `npm run test:coding-acceptance` on macOS with Node 22.13+, Xcode Command Line
+Tools and ad-hoc codesign available. This extends the existing product fixture
+runner. It creates fresh temporary config, support and encrypted vault resources,
+uses memory keys, disables sponsor work and strips inherited environment settings.
+It never uses installed Codex/Claude configurations or browser profiles.
+
+The printed report directory contains bounded `result.json`, `diagnostics.json`
+and `report.html` files. PASS covers eight product lifecycle checkpoints plus the
+bundled native receiver with fresh synthetic ad-hoc identities. Native signatures
+are local fixture signatures, not Developer ID or vendor endorsement. Quick native
+samples check behavior; they are not a performance baseline. Work resources are
+removed; reports remain until explicitly deleted. `--output NEW_DIRECTORY` selects
+a new report destination and refuses to reuse an existing one.
+
+Failures identify PRODUCT, HARNESS or EXTERNAL scope and a reproduction command:
+`npm run test:product -- --scenario coding-lifecycle` or
+`npm run test:product -- --scenario coding-native`. Lifecycle failures name their
+checkpoint. Missing macOS/toolchain evidence is UNAVAILABLE and makes the gate fail;
+it never counts as PASS. The portable lifecycle scenario also runs independently.
+Real vendor hook trust/emission, provider subscriptions and signed distribution
+remain separately authorized installed-client evidence. No provider Send is made.
+
 Attestamp uses one local vault and one recording switch. New connections start
 disabled. Turning recording ON covers only connections that you explicitly enable.
 An ON label is not confirmation that a prompt was saved.

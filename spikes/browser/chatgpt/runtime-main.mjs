@@ -32,7 +32,7 @@ export async function startPackagedChatGPT({
   openDashboard, desktopChannel = null,
   integrationHomes = { codex: join(homedir(), '.codex'), 'claude-code': join(homedir(), '.claude'),
     firefox: join(homedir(), 'Library', 'Application Support', 'Mozilla', 'NativeMessagingHosts') },
-  hookPeer = attestHookPeer, codeIdentity = executableCodeIdentity,
+  hookPeer = attestHookPeer, codeIdentity = executableCodeIdentity, discoverClients,
 } = {}) {
   keyStore ??= new MacOSKeychainStore();
   await mkdir(supportDirectory, { recursive: true, mode: 0o700 });
@@ -107,7 +107,7 @@ export async function startPackagedChatGPT({
         kind: 'SET_INTEGRATION', integrationId, enabled }, { surface: 'desktop' });
     };
     const codingIntegrations = await new CodingIntegrations({ directory: supportDirectory, diagnostics,
-      codeIdentity,
+      codeIdentity, discover: discoverClients,
       receiver: join(dirname(process.execPath), 'provenance-hook-receiver'),
       configRoots: { codex: integrationHomes.codex, 'claude-code': integrationHomes['claude-code'] }, setEnabled }).init();
     const firefoxIntegration = await new FirefoxIntegration({ supportDirectory, manifestDirectory: integrationHomes.firefox,

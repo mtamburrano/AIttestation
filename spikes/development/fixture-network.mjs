@@ -23,6 +23,10 @@ export function restrictFixtureNetwork(root) {
     return fetch(input, { ...init, redirect: 'error' });
   };
   return {
+    allowSocket(path) {
+      if (!isAbsolute(path) || resolve(path) !== path || !path.startsWith(`${root}${sep}`)) throw denied();
+      sockets.add(path); return () => sockets.delete(path);
+    },
     allowRuntime(runtime) {
       const url = new URL(runtime.dashboardURL);
       if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port

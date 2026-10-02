@@ -24,15 +24,15 @@ export async function recordingFixture(directory, { diagnostics, network, tabs =
   collectFast, managed, verifyArchive, recording = false, panelContexts = async () => [], openDashboard = async () => {},
   dropPanelAck = false, installation = null, debugSession = null, newChat = false, beforeCapture = null, fixedSenderURL = false,
   fetchResponse = null, afterCapture = null, transport = true, pageClock, verifyFast, vault = null, receiptQueries = true, attestPeer,
-  hookPeer, codeIdentity } = {}) {
+  hookPeer, codeIdentity, discoverClients } = {}) {
   const pages = new Map(), inventory = new Map(), deliveries = [], results = [], releases = [], sources = [];
   const keyStore = new MemoryKeyStore();
   let worker, socket, native, nativeFailure, port, allow = true, anchorCalls = 0, confirmed = 0, userSends = 0, prevention = 0;
   let captureFault = false, keyFault = false;
   const runtimeOptions = { supportDirectory: join(directory, 'engine'), keyStore, vault, diagnostics, debugSession,
     integrationHomes: { codex: join(directory, 'codex'), 'claude-code': join(directory, 'claude'), firefox: join(directory, 'mozilla') },
-    installation, hookPeer, codeIdentity, fastTrust: { profile: FAST_CONFIRM_PROFILE }, openBrowser: false,
-    managed: managed ?? { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
+    installation, hookPeer, codeIdentity, discoverClients, fastTrust: { profile: FAST_CONFIRM_PROFILE }, openBrowser: false,
+    managed: managed !== undefined ? managed : { status: () => ({ state: 'ACTIVE' }), submit: async (_payload, { beforeSubmit }) => {
       beforeSubmit(); anchorCalls++; return { transactionId: 'A'.repeat(52) };
     } },
     collectFast: async () => { confirmed++; return collectFast ? collectFast() : { synthetic: true }; },

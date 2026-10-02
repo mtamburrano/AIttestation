@@ -4,20 +4,21 @@ import { tmpdir } from 'node:os';
 import { LocalDiagnostics } from '../diagnostics/local.mjs';
 import { initializeSponsor } from './sponsor.mjs';
 import { newDirectory, initializeAccount, validateAccount } from './environment.mjs';
-import { PRODUCT_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';
+import { PRODUCT_SCENARIOS, CODING_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';
 import { restrictFixtureNetwork } from './fixture-network.mjs';
 
 const profile = 'pap-product-test/1';
 const safeFailures = new Set(['SCENARIO_ASSERTION_FAILED', 'SCENARIO_TIMEOUT', 'EVIDENCE_PLAINTEXT_FOUND',
-  'DIAGNOSTIC_LEAK_FOUND', 'FIXTURE_NETWORK_FORBIDDEN', 'FIXTURE_BRIDGE_FAILED']);
+  'DIAGNOSTIC_LEAK_FOUND', 'FIXTURE_NETWORK_FORBIDDEN', 'FIXTURE_BRIDGE_FAILED', 'NATIVE_RECEIVER_FAILED', 'NATIVE_HARNESS_TIMEOUT']);
 function options(args) {
-  const result = { scenario: null, output: null, detailed: false, list: false }, seen = new Set();
+  const result = { scenario: null, suite: 'product', output: null, detailed: false, list: false }, seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     invariant(!seen.has(arg), 'INVALID_RUNNER_OPTIONS'); seen.add(arg);
     if (arg === '--trace-synthetic') result.detailed = true;
     else if (arg === '--list') result.list = true;
-    else if (arg === '--scenario') { result.scenario = args[++index]; invariant(PRODUCT_SCENARIOS.includes(result.scenario), 'UNKNOWN_SCENARIO'); }
+    else if (arg === '--suite') { result.suite = args[++index]; invariant(['product', 'coding'].includes(result.suite), 'UNKNOWN_SUITE'); }
+    else if (arg === '--scenario') { result.scenario = args[++index]; invariant([...PRODUCT_SCENARIOS, ...CODING_SCENARIOS].includes(result.scenario), 'UNKNOWN_SCENARIO'); }
     else if (arg === '--output') { result.output = args[++index]; invariant(typeof result.output === 'string', 'INVALID_RUNNER_OPTIONS'); }
     else invariant(false, 'INVALID_RUNNER_OPTIONS');
   }
@@ -35,8 +36,10 @@ function html(report) {
 let root;
 try {
   const selected = options(process.argv.slice(2));
+  const coding = selected.suite === 'coding' || selected.scenario?.startsWith('coding-');
+  const scenarios = selected.scenario ? [selected.scenario] : coding ? CODING_SCENARIOS : PRODUCT_SCENARIOS;
   if (selected.list) {
-    process.stdout.write(`${JSON.stringify({ profile, mode: 'SYNTHETIC_FIXTURE', scenarios: PRODUCT_SCENARIOS })}\n`);
+    process.stdout.write(`${JSON.stringify({ profile, mode: 'SYNTHETIC_FIXTURE', scenarios })}\n`);
   } else {
     if (selected.output) { await newDirectory(selected.output); root = selected.output; }
     else root = await realpath(await mkdtemp(join(await realpath(tmpdir()), 'attestamp-product-test-')));
@@ -45,7 +48,9 @@ try {
       dependencies: { provider: 'SYNTHETIC_NATIVE_PEER', sponsor: 'IN_PROCESS_FIXTURE',
         confirmation: 'SYNTHETIC_OBSERVATIONS_AND_VERDICT', platformIdentity: 'INJECTED_FIXTURE',
         custody: 'MEMORY_KEYS_ENCRYPTED_VAULT', network: 'EXPLICIT_LOCAL_PRODUCT_API_ONLY' },
-      liveEvidence: 'NOT_TESTED', detailed: selected.detailed, selfChecks: [], scenarios: [] };
+      liveEvidence: 'NOT_TESTED', detailed: selected.detailed, selfChecks: [], scenarios: [],
+      externalBoundaries: ['VENDOR_HOOK_TRUST_AND_EMISSION', 'PROVIDER_SUBSCRIPTION_AND_SEND', 'DISTRIBUTION_SIGNING'] };
+    if (coding) report.dependencies.sponsor = 'DISABLED';
     const work = await realpath(await mkdtemp(join(await realpath(tmpdir()), 'attestamp-fixtures-')));
     const network = restrictFixtureNetwork(work);
     let stage = 'PRIVATE_SETUP_FAILED';
@@ -54,19 +59,26 @@ try {
       await initializeAccount(paths); await validateAccount(paths);
       // The umask is changed only in this isolated worker process.
       const previous = process.umask(0);
-      try { await initializeSponsor(join(work, 'sponsor'), 37461); }
+      try { if (!coding) await initializeSponsor(join(work, 'sponsor'), 37461); }
       finally { process.umask(previous); }
-      report.selfChecks = ['FRESH_PRIVATE_ACCOUNT', 'FRESH_SPONSOR_OWNER_ONLY', 'TLS_KEY_MATCH', 'NO_EXTERNAL_SETUP_CALLS'];
+      report.selfChecks = coding ? ['FRESH_PRIVATE_ACCOUNT', 'SPONSOR_DISABLED', 'NO_EXTERNAL_SETUP_CALLS']
+        : ['FRESH_PRIVATE_ACCOUNT', 'FRESH_SPONSOR_OWNER_ONLY', 'TLS_KEY_MATCH', 'NO_EXTERNAL_SETUP_CALLS'];
       stage = 'PRODUCT_START_FAILED';
-      for (const scenario of selected.scenario ? [selected.scenario] : PRODUCT_SCENARIOS) {
+      for (const scenario of scenarios) {
         const directory = join(work, `s${report.scenarios.length}`); await mkdir(directory, { mode: 0o700 });
         const started = performance.now();
         try {
-          report.scenarios.push({ ...await productFixture(directory, scenario, diagnostics, network), durationMs: Math.round(performance.now() - started) });
+          const result = await productFixture(directory, scenario, diagnostics, network);
+          if (result.status !== 'PASS') report.status = 'FAIL';
+          report.scenarios.push({ ...result, reproduction: `npm run test:product -- --scenario ${scenario}`,
+            durationMs: Math.round(performance.now() - started) });
         } catch (error) {
           report.status = 'FAIL';
           report.scenarios.push({ scenario, status: 'FAIL', reason: safeFailures.has(error?.code) ? error.code
             : ['EPERM', 'EACCES'].includes(error?.code) ? 'LOCAL_IPC_PERMISSION_DENIED' : stage,
+            classification: ['SCENARIO_ASSERTION_FAILED', 'NATIVE_RECEIVER_FAILED'].includes(error?.code) ? 'PRODUCT' : 'HARNESS',
+            ...(typeof error.checkpoint === 'string' && /^[a-z-]{1,80}$/.test(error.checkpoint) ? { checkpoint: error.checkpoint } : {}),
+            reproduction: `npm run test:product -- --scenario ${scenario}`,
             durationMs: Math.min(60_000, Math.round(performance.now() - started)) });
         }
       }
