@@ -2,9 +2,11 @@
 import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { lstat, readFile, realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { b64, canonical, keys, parseCanonical, unb64 } from '../../vault/format.mjs';
+import { parseUniqueJSON } from '../../distribution/unique-json.mjs';
+import { readOwned } from '../../distribution/files.mjs';
 
 export const NATIVE_BRIDGE_PROFILE = 'pap-chrome-native-bridge/3';
 export const FIREFOX_NATIVE_BRIDGE_PROFILE = 'pap-firefox-native-bridge/1';
@@ -31,7 +33,7 @@ function bridgeBytes(message) {
 function parseBridgeBytes(bytes) {
   if (!bytes.length || bytes.length > MAX_MESSAGE_BYTES) throw Error('Native message limit exceeded');
   let value;
-  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+  try { value = parseUniqueJSON(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
   catch { throw Error('Invalid native message'); }
   if (!value || Array.isArray(value) || typeof value !== 'object') throw Error('Invalid native message');
   return value;
@@ -59,7 +61,7 @@ async function rendezvous(path, extensionOrigin, now, profile) {
       || (typeof process.getuid === 'function' && info.uid !== process.getuid()) || await realpath(path) !== path) {
     throw Error('Unsafe browser bridge rendezvous file');
   }
-  const value = parseCanonical(await readFile(path), 16 * 1024);
+  const value = parseCanonical(await readOwned(path, 16 * 1024), 16 * 1024);
   keys(value, ['profile', 'extensionOrigin', 'socketPath', 'token', 'runtimeEpoch', 'expiresAt']);
   if (value.profile !== profile || value.extensionOrigin !== extensionOrigin || !isAbsolute(value.socketPath)
       || resolve(value.socketPath) !== value.socketPath

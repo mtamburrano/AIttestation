@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import { open, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -23,7 +24,7 @@ function validateExecutables(client, identities) {
 }
 async function executableIdentity(path, codeIdentity) {
   if (!isAbsolute(path)) conflict();
-  const selected = await realpath(path), file = await open(selected, 'r');
+  const selected = await realpath(path), file = await open(selected, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const info = await file.stat();
     if (!info.isFile() || info.size > 256 * 1024 * 1024 || info.mode & 0o022) conflict();

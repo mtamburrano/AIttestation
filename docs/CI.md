@@ -7,7 +7,7 @@ runner assumption. Do not dispatch if it would require paid runner usage.
 
 | Lane | Local equivalent | Checks |
 | --- | --- | --- |
-| Portable Node | `npm run ci:portable` | Current and clean-clone bootstrap, hygiene, generated browser consistency, dependency/notice inventory and CI policy |
+| Portable Node | `npm run ci:portable` | Current and clean-clone bootstrap, hygiene, generated browser consistency, dependency/notice inventory, CI policy and adversarial boundary corpus |
 | macOS native | `npm run ci:macos` | Isolated coding lifecycle/native receiver and coding, Firefox, mixed-source integration regressions |
 
 Both lanes use the same checked-in commands as local development. The portable
@@ -44,3 +44,9 @@ checks; there is no live advisory query in baseline CI.
 
 Local validation does not prove a hosted Actions run. Hosted Linux execution and
 native runner-image differences remain visible evidence boundaries until executed.
+
+The adversarial corpus uses finite JSON key escapes, hook truncations, native frame
+partitions, TOML token lookalikes and ZIP structural mutations. Fresh named pipes
+check that file validation rejects nonregular inputs before a blocking read, with
+a 1.5-second child-process kill limit. Reproduce it with
+`node --test test/adversarial-boundaries.test.mjs`; it needs no sockets or clients.

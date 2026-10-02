@@ -1,8 +1,8 @@
-import { openSync, closeSync, fstatSync, readSync } from 'node:fs';
+import { constants, openSync, closeSync, fstatSync, readSync } from 'node:fs';
 import { parseBoundedJSON, verifyPortable, RECIPIENT_LIMITS } from './portable.mjs';
 
 export function readBoundedFile(path, maximum) {
-  const fd = openSync(path, 'r');
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.size > maximum) throw Error('Regular local file within input limit required');

@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 async function metadata(path) {
   let file;
   try {
-    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const info = await file.stat();
     if (!info.isFile() || info.size > 512 * 1024) return '';
     const bytes = Buffer.alloc(512 * 1024 + 1), { bytesRead } = await file.read(bytes);
@@ -25,7 +25,7 @@ export async function discoverClients({ client, home = homedir(), applications =
     try {
       const resolved = await realpath(path);
       if (seen.has(resolved)) return;
-      file = await open(resolved, 'r'); const info = await file.stat();
+      file = await open(resolved, constants.O_RDONLY | constants.O_NONBLOCK); const info = await file.stat();
       if (!info.isFile() || !(info.mode & 0o111) || (info.mode & 0o022) || info.size > 256 * 1024 * 1024) return;
       const head = Buffer.alloc(2); await file.read(head, 0, 2, 0);
       seen.add(resolved);

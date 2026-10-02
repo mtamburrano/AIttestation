@@ -25,7 +25,8 @@ export async function ownedDirectory(path, { create = true } = {}) {
 
 export async function readOwned(path, limit = 16 * 1024) {
   let file;
-  try { file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  // Reject a FIFO at fstat without waiting for a writer during open.
+  try { file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if (error.code === 'ENOENT') return null; throw distributionError('UNSAFE_INSTALL_FILE'); }
   try {
     const info = await file.stat();

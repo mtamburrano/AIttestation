@@ -15,6 +15,7 @@ try {
     ['clean-clone', ['spikes/development/bootstrap.mjs', '--clean']],
     ['dependencies', ['spikes/development/dependency-report.mjs', join(output, 'dependency-inventory.json')]],
     ['ci-policy', ['--test', 'test/ci-policy.test.mjs', 'test/dependency-inventory.test.mjs']],
+    ['adversarial-boundaries', ['--test', 'test/adversarial-boundaries.test.mjs']],
   ] : [
     ['coding-acceptance', ['spikes/development/product-test.mjs', '--suite', 'coding', '--output', join(output, 'coding')]],
     ['mac-integrations', ['--test', 'test/coding-integrations.test.mjs', 'test/coding-runtime.test.mjs', 'test/firefox-integration.test.mjs', 'test/mixed-observations.test.mjs']],
