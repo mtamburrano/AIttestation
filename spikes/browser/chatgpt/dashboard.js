@@ -8,7 +8,7 @@ let state, busy = false, closed = false, acceptedPreview = null, selectionRevisi
 const selected = new Set();
 let attentionOnly = false, historyBefore = Number.MAX_SAFE_INTEGER, historyCursors = [], historySearch = '', actionFeedback = null;
 let acknowledgedDebugSession = null;
-let integrationPlan = null;
+let integrationPlan = null, integrationRevision = 0;
 let discoveredClient = null, discoveredChoices = [];
 const integrationErrors = {
   CODEX_DUAL_HOOK_CONFIGURATION: 'Codex has hooks in both config.toml and hooks.json. Neither file was changed. Back up both files, use Codex’s configuration guidance to retain your unrelated hooks in one supported location, then review setup again. Attestamp cannot safely choose or merge them.',
@@ -56,7 +56,7 @@ function controls() {
   const canStartFresh = state?.available && state?.debugSession?.state === 'STOPPED' && state.debugSession.sessionId;
   $('debug-session-acknowledge').disabled = busy || closed || !canStartFresh;
   $('debug-session-new').disabled ||= !canStartFresh || !currentDebugAcknowledgment();
-  $('integration-apply').disabled ||= !integrationPlan || !$('integration-consent').checked;
+  $('integration-apply').disabled ||= !integrationPlan || !currentIntegrationSelection(integrationPlan.selection) || !$('integration-consent').checked;
   $('integration-discover').disabled ||= $('integration-client').value === 'firefox-chatgpt';
 }
 function action(id, run) {
@@ -315,9 +315,35 @@ addEventListener('beforeunload', () => { closed = true; clearInterval(timer); in
 void refresh();
 
 function clearIntegrationPreview() {
+  // A change back to the original selection must still invalidate pending work.
+  integrationRevision++;
   integrationPlan = null; $('integration-preview-box').hidden = true; $('integration-consent').checked = false; controls();
 }
-for (const id of ['integration-client', 'integration-executable', 'integration-interpreter', 'integration-root']) $(id).addEventListener('input', clearIntegrationPreview);
+function integrationSelection() {
+  return Object.freeze({ revision: integrationRevision, client: $('integration-client').value,
+    executable: $('integration-executable').value, interpreter: $('integration-interpreter').value, root: $('integration-root').value,
+    discoveredClient, choices: Object.freeze(discoveredChoices.map(value => Object.freeze({ path: value.path, checked: value.checkbox.checked }))) });
+}
+function currentIntegrationSelection(selection) {
+  return !closed && selection.revision === integrationRevision && selection.client === $('integration-client').value
+    && selection.executable === $('integration-executable').value && selection.interpreter === $('integration-interpreter').value
+    && selection.root === $('integration-root').value && selection.discoveredClient === discoveredClient
+    && selection.choices.length === discoveredChoices.length
+    && selection.choices.every((value, index) => value.path === discoveredChoices[index].path && value.checked === discoveredChoices[index].checkbox.checked);
+}
+async function integrationResponse(path, data, selection) {
+  try {
+    const result = await api(path, data);
+    return currentIntegrationSelection(selection) ? result : null;
+  } catch (error) {
+    if (currentIntegrationSelection(selection)) throw error;
+    return null;
+  }
+}
+for (const id of ['integration-client', 'integration-executable', 'integration-interpreter', 'integration-root']) {
+  $(id).addEventListener('input', clearIntegrationPreview);
+  if (id !== 'integration-client') $(id).addEventListener('change', clearIntegrationPreview);
+}
 $('integration-client').addEventListener('change', () => {
   clearIntegrationPreview(); discoveredClient = null; discoveredChoices = [];
   $('integration-candidates').replaceChildren();
@@ -327,9 +353,13 @@ $('integration-client').addEventListener('change', () => {
     : 'Find local installations, choose the ones you use, then review setup.';
 });
 async function discoverIntegrations() {
-  clearIntegrationPreview(); discoveredClient = $('integration-client').value; discoveredChoices = [];
+  clearIntegrationPreview(); discoveredClient = null; discoveredChoices = [];
   $('integration-candidates').replaceChildren();
-  const result = await api('/integrations/discover', { client: discoveredClient });
+  $('integration-discovery-status').textContent = 'No discovery selection. Find local installations or use Advanced.';
+  const selection = integrationSelection();
+  const result = await integrationResponse('/integrations/discover', { client: selection.client }, selection);
+  if (!result) return;
+  discoveredClient = selection.client;
   $('integration-discovery-status').textContent = result.candidates.length
     ? `Detected ${result.candidates.length} local installation(s). Select up to ${result.limit}. Detection does not confirm hook support or enable capture.`
     : 'No supported local installation detected. Use Advanced for a custom installation. No configuration was changed.';
@@ -345,7 +375,7 @@ action('integration-discover', discoverIntegrations);
 $('integration-consent').addEventListener('change', controls);
 async function previewIntegration(action) {
   clearIntegrationPreview();
-  const client = $('integration-client').value;
+  const selection = integrationSelection(), client = selection.client;
   const data = { client, action };
   if (client !== 'firefox-chatgpt' && action === 'install') {
     let paths = $('integration-executable').value.split('\n').map(value => value.trim()).filter(Boolean);
@@ -358,9 +388,11 @@ async function previewIntegration(action) {
     else if (interpreter) { notify('Select the executable paths to use with this interpreter.'); return; }
     if ($('integration-root').value.trim()) data.configRoot = $('integration-root').value.trim();
   }
-  const plan = await api('/integrations/preview', data);
+  const plan = await integrationResponse('/integrations/preview', data, selection);
+  if (!plan) return;
   if (!plan.operationId) { notify('This connection is not configured.'); return; }
-  integrationPlan = plan; $('integration-preview-box').hidden = false;
+  integrationPlan = Object.freeze({ operationId: plan.operationId, selection });
+  $('integration-consent').checked = false; $('integration-preview-box').hidden = false;
   $('integration-consent-text').textContent = plan.consent;
   $('integration-selection').replaceChildren();
   if (plan.executables) {
@@ -377,7 +409,8 @@ action('integration-disable', async () => {
   clearIntegrationPreview(); await api('/integrations/disable', { client: $('integration-client').value }); await refresh();
 });
 action('integration-apply', async () => {
-  if (!integrationPlan || !$('integration-consent').checked) return;
+  if (!integrationPlan || !currentIntegrationSelection(integrationPlan.selection)) { clearIntegrationPreview(); return; }
+  if (!$('integration-consent').checked) return;
   const selected = integrationPlan; clearIntegrationPreview();
   await api('/integrations/apply', { operationId: selected.operationId, consent: true }); await refresh();
   notify('Reviewed changes applied. Complete the client trust or extension installation step if required.');

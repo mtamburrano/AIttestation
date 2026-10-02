@@ -37,6 +37,12 @@ export async function discoverClients({ client, home = homedir(), applications =
     const app = join(applications, `${name}.app`);
     const plist = await metadata(join(app, 'Contents/Info.plist'));
     const version = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1];
+    if (name === 'ChatGPT') {
+      await add(join(app, 'Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'),
+        'ChatGPT desktop · Codex app runtime', version, 'DESKTOP');
+      await add(join(app, 'Contents/Resources/codex-cli/bin/codex'),
+        'ChatGPT desktop · Codex CLI runtime', version, 'DESKTOP');
+    }
     await add(join(app, 'Contents/Resources/codex'), `${name} desktop · Codex runtime`, version, 'DESKTOP');
   }
   // VS Code's registration list is authoritative for installed extensions. Never
