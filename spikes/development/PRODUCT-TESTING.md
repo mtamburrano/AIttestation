@@ -50,6 +50,9 @@ markup or live Algorand acceptance.
 | npm test | All Node tests, including crypto, old evidence readers, package policy, recovery, diagnostics and native compile guards |
 | npm run test:chatgpt | ON/OFF engine, automatic sources, page extraction, removed API rejection, sidebar roles, native reconnect and fast collector |
 | npm run test:product | Six isolated end-to-end product scenarios above |
+| npm run test:coding-acceptance | Isolated coding lifecycle and real native peer/receiver fixtures |
+| npm run test:release-rehearsal | Synthetic predecessor migration, update rejection, recovery and removal |
+| npm run test:performance | Opt-in mixed-source 10k/50k boundedness and native hook deadline guardrails |
 | npm run test:dashboard-browser | Actual dashboard in fresh headless Chrome; selection/preview/export response races, hostile content, free verifier and narrow layout |
 | npm run test:recipient-browser | Actual standalone recipient UI with legacy/local evidence and hostile inputs |
 | npm run test:algorand | Go verifier/observer tests and fixed archived public proof; no transaction submission |
@@ -68,7 +71,9 @@ authorized installed checkpoint is described in [README.md](README.md).
 
 ## Report lifecycle
 
-The worker has a 60-second deadline. Success exits 0, unexpected failures 1,
+The launcher has a 180-second deadline, or 22 minutes for the explicitly selected
+performance suite. Scale children have 600 seconds each; native checks have 120.
+Success exits 0, unexpected failures 1,
 invalid options/refused output 2. Failures retain bounded fixed-code diagnostics.
 A forcibly terminated run may leave its newly created fixture directory.
 

@@ -50,7 +50,8 @@ try {
   run('dependency-inventory', process.execPath, ['spikes/development/dependency-report.mjs', join(output, 'repository-dependencies.json')]);
   const tests = full ? (await readdir(join(source, 'test'))).filter(name => name.endsWith('.test.mjs')).sort().map(name => `test/${name}`)
     : ['test/readiness.test.mjs', 'test/artifact-policy.test.mjs', 'test/release-preflight.test.mjs', 'test/package-leaks.test.mjs', 'test/recipient.test.mjs'];
-  run(full ? 'consolidated-deterministic-regressions' : 'distribution-and-verifier-regressions', process.execPath, ['--test', ...tests], source, full ? 600_000 : 180_000);
+  run(full ? 'consolidated-deterministic-regressions' : 'distribution-and-verifier-regressions', process.execPath,
+    ['--test', '--test-concurrency=1', ...tests], source, full ? 600_000 : 180_000);
   if (!full) run('release-rehearsal', process.execPath, ['spikes/development/product-test.mjs', '--suite', 'release', '--output', join(output, 'release-rehearsal')]);
   run('coding-lifecycle', process.execPath, ['spikes/development/product-test.mjs', '--scenario', 'coding-lifecycle', '--output', join(output, 'coding')]);
   const bundle = join(output, 'development-package');

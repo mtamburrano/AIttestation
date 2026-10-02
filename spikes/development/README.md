@@ -172,20 +172,11 @@ production configuration.
 npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build
 ```
 
-For the isolated example01 acceptance checkpoint, use a separate private config
-with the single additional field `"namespace": "example01"` and a new output path:
-
-```sh
-npm run dev -- prepare /absolute/private/dev-config-example01.json /absolute/new/private-build-example01
-```
-
-The namespace is embedded in the signed app. It fixes control, support/vault and
-Chrome user-data paths under
-`/absolute/isolated-account/.attestamp-private-acceptance-example01/{control,support,chrome}`.
-The CLI requires the same explicit namespace at initialization, start and stop;
-it derives those paths itself and accepts no environment or caller-supplied
-support-path override. A build without this field keeps the historical default
-private-development paths. Never copy, reset or migrate data between them.
+The optional private `namespace` field is a historical, code-allowlisted acceptance
+checkpoint, not a general namespace allocator. Arbitrary example values fail
+validation. Do not initialize, copy, reset or migrate a retained checkpoint for
+ordinary development. A build without that field keeps the historical default
+private-development paths; it still requires the dedicated test-account workflow.
 
 For optional same-account unattended sessions, see the separate
 [isolated agent setup](AGENT-TESTING.md). It uses a fresh namespace and explicit
@@ -292,25 +283,10 @@ The copied app must still have Google's `com.google.Chrome` identity, team
 to authenticate the actual running Chrome parent and ancestry with the same
 requirements; moving the signed app needs no native trust exception.
 
-For the isolated acceptance checkpoint, copy the entire new output to
-`/absolute/isolated-account/AttestampPrivateBuild-example01` and give that copy to the
-test user. Create a new, separate Chrome application copy from the supported
-installation (the `mkdir` command must succeed before `ditto` runs):
-
-```sh
-/bin/mkdir -m 700 /absolute/isolated-account/AttestampPrivateBrowser-example01 &&
-  /usr/bin/ditto '/Applications/Google Chrome.app' '/absolute/isolated-account/AttestampPrivateBrowser-example01/Google Chrome.app'
-```
-
-Do not reuse another private browser copy. Then, from the test user's checkout,
-run only these bounded commands:
-
-```sh
-npm run dev -- init --namespace example01
-npm run dev -- doctor --namespace example01 --chrome-app '/absolute/isolated-account/AttestampPrivateBrowser-example01/Google Chrome.app'
-npm run dev -- start /absolute/isolated-account/AttestampPrivateBuild-example01 --namespace example01 --chrome-app '/absolute/isolated-account/AttestampPrivateBrowser-example01/Google Chrome.app' --live-chatgpt-testnet
-npm run dev -- stop --namespace example01
-```
+Retained acceptance checkpoints are not contributor setup targets. Their signed
+namespace and resources require their own owner-authorized checkpoint instructions.
+For fresh routine work use the [product fixtures](PRODUCT-TESTING.md); optional
+installed agent sessions have a separate [explicit setup](AGENT-TESTING.md).
 
 The fresh namespace initializer fails if its root or any selected directory
 already exists. The start command opens the private app and isolated Chrome; it

@@ -65,7 +65,7 @@ export function exportRecoveryFile(vault, path) {
 
 export function inspectRecoveryFile(path, recoveryKey, { onRecord = () => {} } = {}) {
   if (!Buffer.isBuffer(recoveryKey) || recoveryKey.length !== 32) fail('UNRECOVERABLE');
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     if (!fstatSync(fd).isFile()) fail('INVALID', 'Recovery input must be a regular file');
     const header = readFrame(fd); keys(header, ['profile', 'vaultId', 'packageId', 'checkpoint']);

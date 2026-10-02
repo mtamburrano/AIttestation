@@ -107,6 +107,7 @@ test('nonregular input files fail promptly before any blocking read or client ex
   const moduleURL = relative => new URL(relative, import.meta.url).href;
   const cases = [
     `const {readOwned}=await import(${JSON.stringify(moduleURL('../spikes/distribution/files.mjs'))}); await readOwned(root+'/pipe');`,
+    `const {inspectRecoveryFile}=await import(${JSON.stringify(moduleURL('../spikes/vault/recovery-stream.mjs'))}); inspectRecoveryFile(root+'/pipe',Buffer.alloc(32));`,
     `const {discoverClients}=await import(${JSON.stringify(moduleURL('../spikes/coding/discovery.mjs'))}); await discoverClients({client:'codex',home:root+'/home',applications:root+'/absent',globalBins:[]});`,
     `const {discoverClients}=await import(${JSON.stringify(moduleURL('../spikes/coding/discovery.mjs'))}); await discoverClients({client:'codex',home:root+'/absent',applications:root+'/absent',globalBins:[root+'/bin']});`,
     `const {CodingIntegrations}=await import(${JSON.stringify(moduleURL('../spikes/coding/integrations.mjs'))});

@@ -33,6 +33,9 @@ pass a fresh path: `npm run ci:portable -- /absolute/new-report-directory`.
 Failures name the exact check; rerun its documented command locally. Native fixture
 reports include reproduction commands and product/harness/external classifications.
 No raw prompt, config file or arbitrary exception text is uploaded.
+Native acceptance runs outside the checkout; only its three bounded report files
+are copied into the upload directory after completion. This preserves the product
+runner's refusal to create private fixture resources inside a repository.
 
 `npm run check:dependencies` prints a deterministic repository bill of materials:
 nine Go pins/checksums and notice hashes, the vendored TOML parser and license,

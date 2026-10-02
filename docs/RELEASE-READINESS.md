@@ -24,7 +24,8 @@ identities and leak checks. The packaged verifier reads a fresh synthetic receip
 offline; ad-hoc signatures are checked without invoking the app or Keychain.
 
 For the final consolidated regression checkpoint, add `--full`; this runs every
-deterministic `test/*.test.mjs` once instead of the focused distribution set. It does
+deterministic `test/*.test.mjs` once, with files run sequentially to avoid resource
+contention in timing/native fixtures, instead of the focused distribution set. It does
 not launch the real-browser/provider campaign. Existing unchanged browser evidence
 is reused at its original scope. Native fixture acceptance remains available through
 `npm run test:coding-acceptance`; do not repeat it merely between unrelated edits.

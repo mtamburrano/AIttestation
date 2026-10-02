@@ -81,3 +81,5 @@ No public deployment or funded service is supplied by this checkout.
 The [offline readiness gate](docs/RELEASE-READINESS.md) assembles a fresh development
 package and a bounded report with the remaining external release gates. A PASS is
 offline evidence, not authorization to sign, publish or deploy.
+The [publication audit note](docs/PUBLICATION-AUDIT.md) records the final sweep,
+resolved findings and the remaining evidence boundaries.
