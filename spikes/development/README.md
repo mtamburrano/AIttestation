@@ -1,5 +1,10 @@
 # Private Mac development
 
+Maintainer-only private development reference. Start with the repository
+[contributor guide](../../CONTRIBUTING.md) for ordinary offline work. Paths and
+namespace values below are placeholders, not retained environments to reuse.
+Installed, signing, provider and funded checks require separate authorization.
+
 For routine development, start with `npm run test:product` in your current user.
 The [local product testing guide](PRODUCT-TESTING.md) covers labelled isolated
 fixtures, correlated diagnostics and targeted failure reports. It creates fresh
@@ -137,14 +142,16 @@ In the signing account, place a 0600 JSON config outside the checkout:
 {
   "profile": "pap-private-development/1",
   "teamId": "YOURTEAMID",
-  "signingIdentity": "FORTY_HEX_CHARACTERS_FROM_SECURITY_FIND_IDENTITY",
-  "signingKeychain": "/Users/SIGNING_OWNER/Library/Keychains/login.keychain-db",
-  "helperProvisioningProfile": "/absolute/private/helper.provisionprofile",
+  "signingIdentity": null,
+  "signingKeychain": null,
+  "helperProvisioningProfile": null,
   "sponsor": null
 }
 ```
 
-Use the existing Developer ID identity's 40-character hash and the matching
+This non-operational template has no signing inputs. In your separately authorized
+private configuration, replace the null fields with the identity hash, signing
+Keychain path and helper profile path. Use the existing Developer ID identity's 40-character hash and the matching
 all-devices helper profile. The profile must authorize
 `TEAM.ai.provenance.keychain-helper` and `TEAM.ai.provenance.evidence-vault`.
 Its `DeveloperCertificates` must also contain the exact certificate identified by
@@ -165,16 +172,16 @@ production configuration.
 npm run dev -- prepare /absolute/private/dev-config.json /absolute/new/private-build
 ```
 
-For the isolated 6d1110ab acceptance checkpoint, use a separate private config
-with the single additional field `"namespace": "6d1110ab"` and a new output path:
+For the isolated example01 acceptance checkpoint, use a separate private config
+with the single additional field `"namespace": "example01"` and a new output path:
 
 ```sh
-npm run dev -- prepare /absolute/private/dev-config-6d1110ab.json /absolute/new/private-build-6d1110ab
+npm run dev -- prepare /absolute/private/dev-config-example01.json /absolute/new/private-build-example01
 ```
 
 The namespace is embedded in the signed app. It fixes control, support/vault and
 Chrome user-data paths under
-`/Users/attestamp-test/.attestamp-private-acceptance-6d1110ab/{control,support,chrome}`.
+`/absolute/isolated-account/.attestamp-private-acceptance-example01/{control,support,chrome}`.
 The CLI requires the same explicit namespace at initialization, start and stop;
 it derives those paths itself and accepts no environment or caller-supplied
 support-path override. A build without this field keeps the historical default
@@ -272,8 +279,8 @@ For example, while signed into `attestamp-test`, create a new private directory
 and copy the application bytes from the supported installation:
 
 ```sh
-/bin/mkdir -m 700 /Users/attestamp-test/AttestampPrivateBrowser
-/usr/bin/ditto '/Applications/Google Chrome.app' '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app'
+/bin/mkdir -m 700 /absolute/isolated-account/AttestampPrivateBrowser
+/usr/bin/ditto '/Applications/Google Chrome.app' '/absolute/isolated-account/AttestampPrivateBrowser/Google Chrome.app'
 ```
 
 Keep this copy separate from the vault, control and browser user-data directories.
@@ -286,23 +293,23 @@ to authenticate the actual running Chrome parent and ancestry with the same
 requirements; moving the signed app needs no native trust exception.
 
 For the isolated acceptance checkpoint, copy the entire new output to
-`/Users/attestamp-test/AttestampPrivateBuild-6d1110ab` and give that copy to the
+`/absolute/isolated-account/AttestampPrivateBuild-example01` and give that copy to the
 test user. Create a new, separate Chrome application copy from the supported
 installation (the `mkdir` command must succeed before `ditto` runs):
 
 ```sh
-/bin/mkdir -m 700 /Users/attestamp-test/AttestampPrivateBrowser-6d1110ab &&
-  /usr/bin/ditto '/Applications/Google Chrome.app' '/Users/attestamp-test/AttestampPrivateBrowser-6d1110ab/Google Chrome.app'
+/bin/mkdir -m 700 /absolute/isolated-account/AttestampPrivateBrowser-example01 &&
+  /usr/bin/ditto '/Applications/Google Chrome.app' '/absolute/isolated-account/AttestampPrivateBrowser-example01/Google Chrome.app'
 ```
 
 Do not reuse another private browser copy. Then, from the test user's checkout,
 run only these bounded commands:
 
 ```sh
-npm run dev -- init --namespace 6d1110ab
-npm run dev -- doctor --namespace 6d1110ab --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser-6d1110ab/Google Chrome.app'
-npm run dev -- start /Users/attestamp-test/AttestampPrivateBuild-6d1110ab --namespace 6d1110ab --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser-6d1110ab/Google Chrome.app' --live-chatgpt-testnet
-npm run dev -- stop --namespace 6d1110ab
+npm run dev -- init --namespace example01
+npm run dev -- doctor --namespace example01 --chrome-app '/absolute/isolated-account/AttestampPrivateBrowser-example01/Google Chrome.app'
+npm run dev -- start /absolute/isolated-account/AttestampPrivateBuild-example01 --namespace example01 --chrome-app '/absolute/isolated-account/AttestampPrivateBrowser-example01/Google Chrome.app' --live-chatgpt-testnet
+npm run dev -- stop --namespace example01
 ```
 
 The fresh namespace initializer fails if its root or any selected directory
@@ -315,7 +322,7 @@ fresh checkout, before opening Chrome or Attestamp:
 
 ```sh
 npm run dev -- init
-npm run dev -- doctor --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app'
+npm run dev -- doctor --chrome-app '/absolute/isolated-account/AttestampPrivateBrowser/Google Chrome.app'
 ```
 
 `CHROME_SIGNATURE_REJECTED` means the selected copy did not pass the unchanged
@@ -323,8 +330,8 @@ Google signature requirement, even if its major version is correct. Inspect the
 copy without modifying the shared installation:
 
 ```sh
-/usr/bin/codesign --verify --strict -R '=anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"' '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app/Contents/MacOS/Google Chrome'
-/usr/bin/xattr -lr '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app'
+/usr/bin/codesign --verify --strict -R '=anchor apple generic and identifier "com.google.Chrome" and certificate leaf[subject.OU] = "EQHXZ8M8AV"' '/absolute/isolated-account/AttestampPrivateBrowser/Google Chrome.app/Contents/MacOS/Google Chrome'
+/usr/bin/xattr -lr '/absolute/isolated-account/AttestampPrivateBrowser/Google Chrome.app'
 ```
 
 The `resource fork, Finder information, or similar detritus not allowed` error can
@@ -447,7 +454,7 @@ link. Keep that guard enabled and let the private launcher start Chrome.
 In the test user, using only a designated test ChatGPT account and synthetic text:
 
 ```sh
-npm run dev -- start /absolute/copied/private-build --chrome-app '/Users/attestamp-test/AttestampPrivateBrowser/Google Chrome.app' --live-chatgpt-testnet
+npm run dev -- start /absolute/copied/private-build --chrome-app '/absolute/isolated-account/AttestampPrivateBrowser/Google Chrome.app' --live-chatgpt-testnet
 ```
 
 This is the explicit live-boundary opt-in. It starts the resident Attestamp menu
@@ -565,8 +572,8 @@ loopback fixtures and a separate real engine with memory-only test keys.
 After stopping, use the private app's fixed native host to back up its actual vault:
 
 ```sh
-npm run dev -- backup /absolute/copied/private-build /Users/attestamp-test/new-backup
-npm run dev -- restore /absolute/copied/private-build /Users/attestamp-test/new-restore /Users/attestamp-test/new-backup/encrypted-recovery.json /Users/attestamp-test/.attestamp-private-test/recovery-secrets/PRINTED_FILE.key
+npm run dev -- backup /absolute/copied/private-build /absolute/isolated-account/new-backup
+npm run dev -- restore /absolute/copied/private-build /absolute/isolated-account/new-restore /absolute/isolated-account/new-backup/encrypted-recovery.json /absolute/isolated-account/.attestamp-private-test/recovery-secrets/PRINTED_FILE.key
 ```
 
 Backup prints the path of a separate owner-only recovery key, never the key itself.

@@ -1,5 +1,11 @@
 # Attestamp
 
+Local, private, best-effort prompt evidence. This checkout is being prepared for
+publication; it is not a public signed product release. Start with the
+[support matrix](docs/SUPPORT.md), [architecture](docs/ARCHITECTURE.md),
+[contributor guide](CONTRIBUTING.md), [security reporting](SECURITY.md) and
+[license policy](LICENSE.md).
+
 Attestamp records supported outgoing prompt requests in ChatGPT Web on Apple-silicon
 macOS with Chrome. One resident app owns the encrypted evidence vault, app-bound
 keys, recording preference and asynchronous anchoring.
@@ -51,18 +57,16 @@ and meaning through isolated readers; historical Send workflows are removed.
 
 ## Development and validation
 
-Use Node 22.13+ and fresh temporary resources:
+Use Git and Node 22.13+ on macOS. No npm install, account or credential is needed
+for the clean contributor smoke path:
 
 ```sh
-npm test
-npm run test:chatgpt
-npm run test:product
-npm run test:dashboard-browser
-npm run test:recipient-browser
-npm run test:algorand
+npm run bootstrap
+npm run bootstrap:clean
 ```
 
-See [local product testing](spikes/development/PRODUCT-TESTING.md) for fixture
+See [local development](docs/DEVELOPMENT.md) for focused suites and build prerequisites,
+and [local product testing](spikes/development/PRODUCT-TESTING.md) for fixture
 isolation, privacy, prerequisites and evidence limits. Ordinary tests use no
 retained installation, native Keychain data, provider Sends or new transactions.
 The [private setup guide](spikes/development/README.md) describes separately

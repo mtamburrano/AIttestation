@@ -1,0 +1,22 @@
+{
+  "test/managed-sponsorship.test.mjs": {
+    "category": "CREDENTIAL",
+    "sha256": "54eaab688e98531ff961668de4022a9b2fea928f0a2add786e82349c6e636b34",
+    "reason": "Reviewed synthetic credential/path literals used by negative isolation and disclosure regression cases. Re-review exact content on change."
+  },
+  "test/package-leaks.test.mjs": {
+    "category": "LOCAL_SECRET_PATH",
+    "sha256": "94c7773ef409ed4f614540df1e01cd241a28c05e93e7b80776cc55acec0f1bc2",
+    "reason": "Reviewed synthetic credential/path literals used by negative isolation and disclosure regression cases. Re-review exact content on change."
+  },
+  "test/private-agent-scenarios.test.mjs": {
+    "category": "CREDENTIAL",
+    "sha256": "a097d406bc6b8bf9d4005e8474ec3347e480f1b28482de45d2ca0614a7489515",
+    "reason": "Reviewed synthetic credential/path literals used by negative isolation and disclosure regression cases. Re-review exact content on change."
+  },
+  "test/private-agent.test.mjs": {
+    "category": "CREDENTIAL",
+    "sha256": "0171a42250d89bcb72c4158a839568b40b30b2ffa238a8c8213430dacc18a51c",
+    "reason": "Reviewed synthetic credential/path literals used by negative isolation and disclosure regression cases. Re-review exact content on change."
+  }
+}

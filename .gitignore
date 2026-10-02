@@ -4,3 +4,7 @@ spikes/anchor/algorand/bin/
 *.mnemonic
 .env
 .env.*
+/.mcplanner
+/.mcp.json
+/.DS_Store
+/artifacts/

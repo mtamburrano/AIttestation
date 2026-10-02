@@ -1,5 +1,10 @@
 # Isolated private agent sessions
 
+Maintainer-only private development reference. Start with the repository
+[contributor guide](../../CONTRIBUTING.md) for ordinary offline work. Paths and
+namespace values below are placeholders, not retained environments to reuse.
+Installed, signing, provider and funded checks require separate authorization.
+
 This optional harness runs in the configured Codex/signing macOS account. It
 does not use the retained owner-checkpoint account. It is available only through
 `npm run dev -- agent … --agent-mode` and specially prepared
@@ -18,7 +23,7 @@ checkout. Copy the signing selection from the existing private config, keep
   "account": {
     "username": "YOUR_SIGNING_ACCOUNT",
     "uid": 501,
-    "home": "/Users/YOUR_SIGNING_ACCOUNT"
+    "home": "/absolute/signing-account"
   }
 }
 ```
@@ -110,7 +115,7 @@ An interrupted initialization requires a fresh namespace as well.
    `~/.attestamp-agent-codex01/browser/Google Chrome.app`. Use the existing
    [private Chrome setup guidance](README.md) to resolve Gatekeeper/first-open
    setup. Never ad hoc sign Chrome or reuse its normal profile. Open that exact
-   executable with `--user-data-dir=/Users/YOUR_SIGNING_ACCOUNT/.attestamp-agent-codex01/chrome`
+   executable with `--user-data-dir=/absolute/signing-account/.attestamp-agent-codex01/chrome`
    and `--profile-directory=Default` in normal headed mode.
    Load the unpacked extension from `extension/current`, enable it, and sign in
    to the dedicated synthetic-content provider account. Resolve Chrome's own
