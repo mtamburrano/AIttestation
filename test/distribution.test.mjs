@@ -145,13 +145,15 @@ test('verified downloads require both signatures, reject partial/tampered artifa
 });
 
 test('migration process death preserves exact acknowledged proofs before and after commit for compatible readers', async t => {
-  for (const phase of ['migration-after-ddl', 'migration-before-commit', 'migration-after-commit']) {
+  for (const predecessor of [1, 3]) for (const phase of ['migration-after-ddl', 'migration-before-commit', 'migration-after-commit']) {
     const root = await temporary(t), path = join(root, 'vault'), vmk = randomBytes(32), signer = identity();
     const vault = new Vault(path, vmk, signer, { create: true, readerVersion: 3 });
     const record = vault.capture(Buffer.from('synthetic migration baseline e\u0301\r\n☕'));
     const event = record.manifest.eventId, baseline = vault.exportDisclosure([event]); vault.close();
-    const db = new DatabaseSync(join(path, 'vault.sqlite'));
-    db.exec('DROP TABLE key_retirements; DROP TABLE vault_schema; PRAGMA user_version=1;'); db.close();
+    if (predecessor === 1) {
+      const db = new DatabaseSync(join(path, 'vault.sqlite'));
+      db.exec('DROP TABLE key_retirements; DROP TABLE vault_schema; PRAGMA user_version=1;'); db.close();
+    }
     const keyPath = join(root, 'test-only-vmk'); await writeFile(keyPath, vmk, { mode: 0o600 });
     const child = spawnSync(process.execPath, [join(import.meta.dirname, 'vault-migration-child.mjs'), path, keyPath, phase],
       { env: {}, encoding: 'utf8', timeout: 10000 });

@@ -16,7 +16,8 @@ signed release builder still requires an approved exact toolchain and source reb
 
 The gate strips inherited credentials/app settings, uses a fresh HOME and temporary
 source clone, runs contributor smoke/hygiene, dependency checks, distribution/leak/
-verifier regressions and isolated coding lifecycle acceptance, then builds a fresh
+verifier regressions, the [upgrade/recovery rehearsal](RELEASE-REHEARSAL.md) and
+isolated coding lifecycle acceptance, then builds a fresh
 development package and standalone verifier. Existing artifact policy checks bind
 source and dependency inventories, exact package content, channel behavior, native
 identities and leak checks. The packaged verifier reads a fresh synthetic receipt
@@ -30,7 +31,8 @@ is reused at its original scope. Native fixture acceptance remains available thr
 
 The new output directory retains `readiness.json`, `release-manifest.json`,
 `repository-dependencies.json`, `artifact-policy.json`, the bounded coding report
-and `development-package/`. Failures retain a named check and safe classification;
+and `development-package/`. Focused runs also retain the release-rehearsal report;
+full runs cover the same test bodies in the consolidated suite. Failures retain a named check and safe classification;
 they never become PASS by omitting a missing local prerequisite. The fresh working
 clone is removed. Reports never overwrite an existing directory.
 

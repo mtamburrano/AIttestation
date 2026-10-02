@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { LocalDiagnostics } from '../diagnostics/local.mjs';
 import { initializeSponsor } from './sponsor.mjs';
 import { newDirectory, initializeAccount, validateAccount } from './environment.mjs';
-import { PRODUCT_SCENARIOS, CODING_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';
+import { PRODUCT_SCENARIOS, CODING_SCENARIOS, RELEASE_SCENARIOS, productFixture, invariant } from './product-fixtures.mjs';
 import { restrictFixtureNetwork } from './fixture-network.mjs';
 
 const profile = 'pap-product-test/1';
@@ -17,8 +17,8 @@ function options(args) {
     invariant(!seen.has(arg), 'INVALID_RUNNER_OPTIONS'); seen.add(arg);
     if (arg === '--trace-synthetic') result.detailed = true;
     else if (arg === '--list') result.list = true;
-    else if (arg === '--suite') { result.suite = args[++index]; invariant(['product', 'coding'].includes(result.suite), 'UNKNOWN_SUITE'); }
-    else if (arg === '--scenario') { result.scenario = args[++index]; invariant([...PRODUCT_SCENARIOS, ...CODING_SCENARIOS].includes(result.scenario), 'UNKNOWN_SCENARIO'); }
+    else if (arg === '--suite') { result.suite = args[++index]; invariant(['product', 'coding', 'release'].includes(result.suite), 'UNKNOWN_SUITE'); }
+    else if (arg === '--scenario') { result.scenario = args[++index]; invariant([...PRODUCT_SCENARIOS, ...CODING_SCENARIOS, ...RELEASE_SCENARIOS].includes(result.scenario), 'UNKNOWN_SCENARIO'); }
     else if (arg === '--output') { result.output = args[++index]; invariant(typeof result.output === 'string', 'INVALID_RUNNER_OPTIONS'); }
     else invariant(false, 'INVALID_RUNNER_OPTIONS');
   }
@@ -37,7 +37,9 @@ let root;
 try {
   const selected = options(process.argv.slice(2));
   const coding = selected.suite === 'coding' || selected.scenario?.startsWith('coding-');
-  const scenarios = selected.scenario ? [selected.scenario] : coding ? CODING_SCENARIOS : PRODUCT_SCENARIOS;
+  const release = selected.suite === 'release' || selected.scenario?.startsWith('release-');
+  const sponsorDisabled = coding || release;
+  const scenarios = selected.scenario ? [selected.scenario] : release ? RELEASE_SCENARIOS : coding ? CODING_SCENARIOS : PRODUCT_SCENARIOS;
   if (selected.list) {
     process.stdout.write(`${JSON.stringify({ profile, mode: 'SYNTHETIC_FIXTURE', scenarios })}\n`);
   } else {
@@ -50,7 +52,11 @@ try {
         custody: 'MEMORY_KEYS_ENCRYPTED_VAULT', network: 'EXPLICIT_LOCAL_PRODUCT_API_ONLY' },
       liveEvidence: 'NOT_TESTED', detailed: selected.detailed, selfChecks: [], scenarios: [],
       externalBoundaries: ['VENDOR_HOOK_TRUST_AND_EMISSION', 'PROVIDER_SUBSCRIPTION_AND_SEND', 'DISTRIBUTION_SIGNING'] };
-    if (coding) report.dependencies.sponsor = 'DISABLED';
+    if (sponsorDisabled) report.dependencies.sponsor = 'DISABLED';
+    if (release) {
+      report.predecessor = 'SYNTHETIC_LOCAL_NOT_SHIPPED';
+      report.externalBoundaries = ['ACTUAL_SHIPPED_PREDECESSOR', 'APPLE_SIGNING_AND_NOTARIZATION', 'INSTALLED_CLIENT_ACCEPTANCE'];
+    }
     const work = await realpath(await mkdtemp(join(await realpath(tmpdir()), 'attestamp-fixtures-')));
     const network = restrictFixtureNetwork(work);
     let stage = 'PRIVATE_SETUP_FAILED';
@@ -59,9 +65,9 @@ try {
       await initializeAccount(paths); await validateAccount(paths);
       // The umask is changed only in this isolated worker process.
       const previous = process.umask(0);
-      try { if (!coding) await initializeSponsor(join(work, 'sponsor'), 37461); }
+      try { if (!sponsorDisabled) await initializeSponsor(join(work, 'sponsor'), 37461); }
       finally { process.umask(previous); }
-      report.selfChecks = coding ? ['FRESH_PRIVATE_ACCOUNT', 'SPONSOR_DISABLED', 'NO_EXTERNAL_SETUP_CALLS']
+      report.selfChecks = sponsorDisabled ? ['FRESH_PRIVATE_ACCOUNT', 'SPONSOR_DISABLED', 'NO_EXTERNAL_SETUP_CALLS']
         : ['FRESH_PRIVATE_ACCOUNT', 'FRESH_SPONSOR_OWNER_ONLY', 'TLS_KEY_MATCH', 'NO_EXTERNAL_SETUP_CALLS'];
       stage = 'PRODUCT_START_FAILED';
       for (const scenario of scenarios) {
