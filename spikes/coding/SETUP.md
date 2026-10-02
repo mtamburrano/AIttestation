@@ -17,9 +17,21 @@ preview lists the exact file and the one owned hook/native registration. Confirm
 the recording consent and apply the preview. If the file changes before applying,
 preview again. Conflicts never restore an old copy over unrelated settings.
 
+Use **Find installed clients** to list local desktop runtimes, the current VS Code
+extension registered in its installation inventory, and approved CLI locations.
+Select the installations you actually use and review setup. Old extension folders
+are ignored; ambiguous VS Code registrations are not selected. Versions come from
+local application/extension metadata and may be unavailable for CLI installations.
+Discovery never runs a client, changes settings or enables recording. A detected
+installation is not proof that its hook is supported or trusted. **Advanced** keeps
+custom executable, configuration folder and script interpreter choices available.
+
 For Codex, the default is the user `~/.codex/hooks.json`. Existing inline hooks in
-`config.toml` remain TOML; simultaneous inline and JSON definitions require manual
-resolution. Complete Codex's own hook trust prompt and restart the client. For
+`config.toml` remain TOML. If both that file and `hooks.json` define hooks, setup
+leaves both files untouched and reports the specific conflict. Back up both files,
+then follow Codex's configuration guidance to retain all unrelated hooks in one
+supported location; review setup again afterward. Attestamp never chooses, merges
+or deletes an ambiguous configuration. Complete Codex's own hook trust prompt and restart the client. For
 Claude Code, the default is the user `~/.claude/settings.json`; restart the client
 after registration. Custom user configuration folders and executable paths must
 be selected explicitly. Script installations also require the actual interpreter
@@ -27,11 +39,11 @@ path. An executable or interpreter update requires a new preview and enrollment.
 Project files and existing unrelated hooks are preserved.
 
 Codex supports up to four explicitly enrolled executable paths under one user
-hook registration. To use desktop and IDE runtimes together, enter both paths in
-Client executables, one per line. The preview shows the complete resulting
+hook registration. To use desktop and IDE runtimes together, select both detected
+installations, or enter both paths under Advanced. The preview shows the complete resulting
 selection and which paths will stop recording. Entering a new list replaces the
-selection; a blank list keeps the enrolled paths, or discovers one executable on
-first setup. Discovery never adds other installations automatically. All selected
+selection; a blank list with no discovery selection keeps the enrolled paths, or
+requires one unambiguous installation on first setup. Discovery never adds other installations automatically. All selected
 surfaces must use the same user hook configuration. Claude Code retains one
 executable selection. Connections shows the enrolled paths; enrollment itself
 does not establish that any installed surface emits the hook.

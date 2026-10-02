@@ -118,6 +118,7 @@ export async function startProductDashboard(runtime, { onClose = () => {}, onExi
         catch { return reply(response, 400, { error: 'Installation action could not complete. Evidence has been retained. Restart the app or save the content-free support report.' }); }
       }
       switch (request.url) {
+        case '/integrations/discover': value = await runtime.integrationManager?.discover(data); if (!value) throw Error('Integrations unavailable'); break;
         case '/integrations/preview': value = await runtime.integrationManager?.preview(data); if (!value) throw Error('Integrations unavailable'); break;
         case '/integrations/apply': value = await runtime.integrationManager?.apply(data); if (!value) throw Error('Integrations unavailable'); break;
         case '/integrations/disable': value = await runtime.integrationManager?.disable(data); if (!value) throw Error('Integrations unavailable'); break;

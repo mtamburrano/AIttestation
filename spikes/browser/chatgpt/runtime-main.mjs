@@ -114,6 +114,7 @@ export async function startPackagedChatGPT({
       receiver: join(dirname(process.execPath), 'provenance-firefox-host'), setEnabled }).init();
     const plans = new Map();
     bridge.integrationManager = {
+      discover(data) { return codingIntegrations.discover(data); },
       async status() { return [...await codingIntegrations.status(), await firefoxIntegration.status()]; },
       async preview(data) {
         const integration = data.client === 'firefox-chatgpt' ? firefoxIntegration : codingIntegrations;

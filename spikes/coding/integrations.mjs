@@ -1,12 +1,12 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { lstat, open, realpath, rename, unlink } from 'node:fs/promises';
+import { open, realpath, rename, unlink } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 import { canonical, parseCanonical } from '../vault/format.mjs';
 import { ownedDirectory, readOwned, atomicWrite, syncDirectory } from '../distribution/files.mjs';
 import { editSettings, ownedHook, parseSettings, revision } from './settings.mjs';
 import { HookHealth } from './health.mjs';
+import { discoverClients } from './discovery.mjs';
 
 const LIMIT = 1024 * 1024;
 const conflict = () => { throw Error('INTEGRATION_CONFIGURATION_CONFLICT'); };
@@ -37,22 +37,22 @@ async function executableIdentity(path, codeIdentity) {
   } finally { await file.close(); }
 }
 
-async function discoverExecutable(client) {
-  const candidates = client === 'codex' ? ['/Applications/ChatGPT.app/Contents/Resources/codex', '/Applications/Codex.app/Contents/Resources/codex', '/opt/homebrew/bin/codex', '/usr/local/bin/codex']
-    : [join(homedir(), '.local/bin/claude'), '/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
-  for (const path of candidates) try { await lstat(path); return path; } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  throw Error('SELECT_CLIENT_EXECUTABLE');
-}
-
 export class CodingIntegrations {
   #directory; #receiver; #roots; #entries = {}; #plans = new Map(); #tail = Promise.resolve(); #setEnabled; #codeIdentity;
-  #listeners = new Set(); #health;
-  constructor({ directory, receiver, configRoots, setEnabled, codeIdentity, diagnostics = null, health = new HookHealth({ diagnostics }) }) {
+  #listeners = new Set(); #health; #discover;
+  constructor({ directory, receiver, configRoots, setEnabled, codeIdentity, discover = discoverClients, diagnostics = null, health = new HookHealth({ diagnostics }) }) {
     if (![directory, receiver, ...Object.values(configRoots)].every(value => isAbsolute(value) && resolve(value) === value)
         || typeof setEnabled !== 'function' || typeof codeIdentity !== 'function') throw Error('INVALID_INTEGRATION_CONFIGURATION');
     this.#directory = directory; this.#receiver = receiver; this.#roots = { ...configRoots }; this.#setEnabled = setEnabled;
     this.#codeIdentity = codeIdentity;
     this.#health = health;
+    this.#discover = discover;
+  }
+  discover({ client }) { return this.#discover({ client }); }
+  async defaultExecutable(client) {
+    const { candidates } = await this.discover({ client });
+    if (candidates.length !== 1) throw Error('SELECT_CLIENT_EXECUTABLE');
+    return candidates[0].path;
   }
   get health() { return this.#health; }
   onChange(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
@@ -104,20 +104,25 @@ export class CodingIntegrations {
       const entry = this.#entries[client];
       const hookHealth = this.#health.status(client);
       if (!entry || entry.state === 'removed') return { id: client, configured: false, state: 'NOT_CONFIGURED', hookHealth, connected: false };
-      let intact = false;
+      let intact = false, dual = false;
       try {
         if (await ownedDirectory(entry.configRoot, { create: false })) {
           const bytes = await readOwned(entry.configPath, LIMIT);
           const value = bytes && parseSettings(new TextDecoder('utf8', { fatal: true }).decode(bytes), entry.format);
           intact = value?.hooks?.UserPromptSubmit?.some(group => isDeepStrictEqual(group, entry.hook)) ?? false;
+          if (client === 'codex') {
+            const toml = await readOwned(join(entry.configRoot, 'config.toml'), LIMIT);
+            dual = Boolean(toml && Object.hasOwn(parseSettings(toml.toString('utf8'), 'toml'), 'hooks')
+              && await readOwned(join(entry.configRoot, 'hooks.json'), LIMIT));
+          }
         }
       } catch {}
-      return { id: client, configured: intact && entry.state === 'configured', state: !intact ? 'CONFIGURATION_CONFLICT'
+      return { id: client, configured: intact && !dual && entry.state === 'configured', state: dual ? 'CODEX_DUAL_HOOK_CONFIGURATION' : !intact ? 'CONFIGURATION_CONFLICT'
         : entry.state === 'pending' ? 'REPAIR_REQUIRED' : hookHealth.lastObserved === 'NEVER_OBSERVED'
           ? client === 'codex' ? 'TRUST_REQUIRED' : 'CONFIGURED' : `HOOK_${hookHealth.lastObserved}`,
         configPath: entry.configPath, installationId: entry.installationId, origin: 'ENROLLED_LOCAL_EXECUTABLE',
         executables: executableSelection(entry.executables), executableLimit: executableLimit(client),
-        restartRequired: true, connected: false, hookHealth };
+        restartRequired: hookHealth.lastObserved === 'NEVER_OBSERVED', connected: false, hookHealth };
     }));
   }
   async preview({ client, action = 'install', configRoot, clientExecutable, clientInterpreter, clientExecutables }) {
@@ -133,7 +138,7 @@ export class CodingIntegrations {
     const config = client === 'codex' && exists ? await readOwned(join(root, 'config.toml'), LIMIT) : null;
     const inline = config && Object.hasOwn(parseSettings(new TextDecoder('utf8', { fatal: true }).decode(config), 'toml'), 'hooks');
     if (!active && inline) { configPath = join(root, 'config.toml'); format = 'toml'; }
-    if (client === 'codex' && inline && await readOwned(join(root, 'hooks.json'), LIMIT)) conflict();
+    if (client === 'codex' && inline && await readOwned(join(root, 'hooks.json'), LIMIT)) throw Error('CODEX_DUAL_HOOK_CONFIGURATION');
     if (active && inline && format !== 'toml') conflict();
     const before = exists ? await readOwned(configPath, LIMIT) : null;
     const text = before ? new TextDecoder('utf8', { fatal: true }).decode(before) : format === 'json' ? '{}\n' : '';
@@ -143,8 +148,8 @@ export class CodingIntegrations {
     if (action === 'install') {
       if (clientExecutables !== undefined && (clientExecutable !== undefined || clientInterpreter !== undefined)) conflict();
       const selections = clientExecutables !== undefined ? clientExecutables : (clientExecutable !== undefined || clientInterpreter !== undefined
-        ? [{ path: clientExecutable ?? old?.executables[0].path ?? await discoverExecutable(client), interpreter: clientInterpreter }]
-        : active ? executableSelection(old.executables) : [{ path: await discoverExecutable(client) }]);
+        ? [{ path: clientExecutable ?? old?.executables[0].path ?? await this.defaultExecutable(client), interpreter: clientInterpreter }]
+        : active ? executableSelection(old.executables) : [{ path: await this.defaultExecutable(client) }]);
       if (!Array.isArray(selections) || !selections.length || selections.length > executableLimit(client)
           || selections.some(value => !value || typeof value.path !== 'string' || Object.keys(value).some(key => !['path', 'interpreter'].includes(key))
             || value.interpreter !== undefined && typeof value.interpreter !== 'string')) conflict();
@@ -196,6 +201,7 @@ export class CodingIntegrations {
     if (plan.client === 'codex') {
       const config = await readOwned(join(plan.configRoot, 'config.toml'), LIMIT);
       if ((config ? revision(config) : null) !== plan.configRevision) conflict();
+      if (plan.format === 'toml' && await readOwned(join(plan.configRoot, 'hooks.json'), LIMIT)) throw Error('CODEX_DUAL_HOOK_CONFIGURATION');
     }
     if (plan.action === 'install') {
       for (const { interpreter, ...selectedIdentity } of plan.executables) {

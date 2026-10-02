@@ -9,6 +9,13 @@ const selected = new Set();
 let attentionOnly = false, historyBefore = Number.MAX_SAFE_INTEGER, historyCursors = [], historySearch = '', actionFeedback = null;
 let acknowledgedDebugSession = null;
 let integrationPlan = null;
+let discoveredClient = null, discoveredChoices = [];
+const integrationErrors = {
+  CODEX_DUAL_HOOK_CONFIGURATION: 'Codex has hooks in both config.toml and hooks.json. Neither file was changed. Back up both files, use Codex’s configuration guidance to retain your unrelated hooks in one supported location, then review setup again. Attestamp cannot safely choose or merge them.',
+  SELECT_CLIENT_EXECUTABLE: 'Find installed clients and choose the installations you use, or select a custom executable under Advanced.',
+  SELECT_CLIENT_INTERPRETER: 'This installation uses a script. Select its native Node or Bun interpreter under Advanced, then review again.',
+  INTEGRATION_CONFIGURATION_CONFLICT: 'Configuration or executable identity changed. Your unrelated settings were preserved. Review setup again before applying.',
+};
 const states = {
   VAULT_CAPACITY_EXHAUSTED: ['Local evidence capacity exhausted', 'New capture is unavailable. History, selective export, the verifier and encrypted recovery remain available. Turn OFF to stop requesting recording.'],
   ENGINE_UNAVAILABLE: ['Recording unavailable', 'Restart Attestamp. Retained history remains available when the vault can be opened.'],
@@ -50,6 +57,7 @@ function controls() {
   $('debug-session-acknowledge').disabled = busy || closed || !canStartFresh;
   $('debug-session-new').disabled ||= !canStartFresh || !currentDebugAcknowledgment();
   $('integration-apply').disabled ||= !integrationPlan || !$('integration-consent').checked;
+  $('integration-discover').disabled ||= $('integration-client').value === 'firefox-chatgpt';
 }
 function action(id, run) {
   $(id).onclick = async () => {
@@ -63,7 +71,7 @@ function action(id, run) {
     }
     actionFeedback = feedback; feedback.hidden = false; feedback.textContent = 'Working…';
     try { await run(); if (feedback.textContent === 'Working…') feedback.textContent = 'Done.'; }
-    catch { notify('Action could not complete. Refresh and check the current state before trying again. Evidence has been retained.'); }
+    catch (error) { notify(integrationErrors[error.message] ?? 'Action could not complete. Refresh and check the current state before trying again. Evidence has been retained.'); }
     finally {
       busy = false; controls(); actionFeedback = null;
       const hidden = feedback.closest('[hidden]');
@@ -159,9 +167,10 @@ function render(value) {
   }
   $('integration-help').textContent = `${integration.releaseClass ?? 'DEVELOPMENT'} · ${help} Existing Chrome settings are preserved. Removing the connection retains evidence and keys; remove the extension separately in Chrome if desired.`;
   $('other-integrations').replaceChildren(...(state.integrations ?? []).map(value => {
-    const label = { NOT_CONFIGURED: 'Not configured', CONFIGURATION_CONFLICT: 'Settings changed; review setup again',
+    const label = { NOT_CONFIGURED: 'Not configured; find installed clients to begin', CONFIGURATION_CONFLICT: 'Settings changed; review setup again',
+      CODEX_DUAL_HOOK_CONFIGURATION: integrationErrors.CODEX_DUAL_HOOK_CONFIGURATION,
       REPAIR_REQUIRED: 'Setup was interrupted; review setup again', TRUST_REQUIRED: 'Review the hook in Codex, then restart the client',
-      CONFIGURED: 'Configured; no hook observed yet', EXTENSION_INSTALL_REQUIRED: 'Native connection configured; install the Firefox extension separately',
+      CONFIGURED: 'Configured; restart the client to load the hook; no hook observed yet', EXTENSION_INSTALL_REQUIRED: 'Native connection configured; install the Firefox extension separately. Temporary installs end at restart; Mozilla signing and Store distribution remain separate',
       HOOK_RECEIVED: 'Checking a hook attempt', HOOK_AUTHENTICATED: 'Hook identity checked',
       HOOK_ADMITTED: 'Submission admitted; check History for saved evidence', HOOK_RELEASED: 'Hook observed; check History for saved evidence',
       HOOK_AUTH_REJECTED: 'Last hook failed identity checks; review the selected executable and reconnect',
@@ -309,13 +318,41 @@ function clearIntegrationPreview() {
   integrationPlan = null; $('integration-preview-box').hidden = true; $('integration-consent').checked = false; controls();
 }
 for (const id of ['integration-client', 'integration-executable', 'integration-interpreter', 'integration-root']) $(id).addEventListener('input', clearIntegrationPreview);
+$('integration-client').addEventListener('change', () => {
+  clearIntegrationPreview(); discoveredClient = null; discoveredChoices = [];
+  $('integration-candidates').replaceChildren();
+  for (const id of ['integration-executable', 'integration-interpreter', 'integration-root']) $(id).value = '';
+  $('integration-discovery-status').textContent = $('integration-client').value === 'firefox-chatgpt'
+    ? 'Review the local native connection. Firefox extension installation is separate; no Store or signing action is performed here.'
+    : 'Find local installations, choose the ones you use, then review setup.';
+});
+async function discoverIntegrations() {
+  clearIntegrationPreview(); discoveredClient = $('integration-client').value; discoveredChoices = [];
+  $('integration-candidates').replaceChildren();
+  const result = await api('/integrations/discover', { client: discoveredClient });
+  $('integration-discovery-status').textContent = result.candidates.length
+    ? `Detected ${result.candidates.length} local installation(s). Select up to ${result.limit}. Detection does not confirm hook support or enable capture.`
+    : 'No supported local installation detected. Use Advanced for a custom installation. No configuration was changed.';
+  for (const candidate of result.candidates) {
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = result.candidates.length === 1;
+    checkbox.addEventListener('change', clearIntegrationPreview);
+    const label = node('label', `${candidate.name} · ${candidate.version}${candidate.interpreterRequired ? ' · interpreter required in Advanced' : ''}`);
+    label.append(checkbox); $('integration-candidates').append(label);
+    discoveredChoices.push({ checkbox, path: candidate.path });
+  }
+}
+action('integration-discover', discoverIntegrations);
 $('integration-consent').addEventListener('change', controls);
 async function previewIntegration(action) {
   clearIntegrationPreview();
   const client = $('integration-client').value;
   const data = { client, action };
   if (client !== 'firefox-chatgpt' && action === 'install') {
-    const paths = $('integration-executable').value.split('\n').map(value => value.trim()).filter(Boolean);
+    let paths = $('integration-executable').value.split('\n').map(value => value.trim()).filter(Boolean);
+    if (!paths.length && discoveredClient === client) {
+      paths = discoveredChoices.filter(value => value.checkbox.checked).map(value => value.path);
+      if (!paths.length || paths.length > (client === 'codex' ? 4 : 1)) { notify('Choose the installations to record from: up to four for Codex, one for Claude Code.'); return; }
+    }
     const interpreter = $('integration-interpreter').value.trim();
     if (paths.length) data.clientExecutables = paths.map(path => ({ path, ...(interpreter ? { interpreter } : {}) }));
     else if (interpreter) { notify('Select the executable paths to use with this interpreter.'); return; }

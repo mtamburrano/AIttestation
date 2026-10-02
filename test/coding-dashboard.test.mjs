@@ -20,6 +20,8 @@ test('Connections UI submits the complete Codex selection, displays removals and
     sessionStorage: { getItem: () => '', setItem() {} }, URL, setInterval() {}, addEventListener() {},
     fetch: async (path, options) => {
       if (path === '/dashboard/state') return new Promise(() => {});
+      if (path === '/integrations/discover') return { ok: true, json: async () => ({ limit: 4,
+        candidates: selected.map((value, index) => ({ ...value, name: index ? 'VS Code · Codex' : 'ChatGPT desktop', version: '2.0' })) }) };
       assert.equal(path, '/integrations/preview'); requests.push(JSON.parse(options.body));
       return { ok: true, json: async () => ({ operationId: 'synthetic-preview', consent: 'Explicit selection consent',
         changes: [{ file: '/synthetic/config/hooks.json' }], executables: selected,
@@ -38,4 +40,18 @@ test('Connections UI submits the complete Codex selection, displays removals and
   get('integration-executable').value = '/synthetic/replacement'; get('integration-executable').listeners.input();
   assert.equal(get('integration-consent').checked, false); assert.equal(get('integration-apply').disabled, true);
   assert.equal(get('integration-preview-box').hidden, true);
+  get('integration-executable').value = '';
+  await runInContext('discoverIntegrations()', context);
+  assert.match(get('integration-discovery-status').textContent, /Detected 2/);
+  assert.match(get('integration-candidates').children[1].textContent, /VS Code · Codex · 2.0/);
+  for (const label of get('integration-candidates').children) label.children[0].checked = true;
+  await runInContext("previewIntegration('install')", context);
+  assert.deepEqual(requests.at(-1), { client: 'codex', action: 'install', clientExecutables: selected });
+  get('integration-consent').checked = true;
+  get('integration-candidates').children[0].children[0].listeners.change();
+  assert.equal(get('integration-consent').checked, false);
+  get('integration-client').value = 'firefox-chatgpt'; get('integration-client').listeners.change();
+  assert.match(get('integration-discovery-status').textContent, /no Store or signing action/);
+  assert.equal(get('integration-candidates').children.length, 0);
+  assert.match(runInContext('integrationErrors.CODEX_DUAL_HOOK_CONFIGURATION', context), /Neither file was changed/);
 });

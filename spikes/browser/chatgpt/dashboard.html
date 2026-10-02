@@ -31,10 +31,13 @@
 <article><h3>Coding clients and Firefox</h3><p>Enable each connection explicitly. Coding clients record the exact text exposed by their local submission hook; Firefox records supported ChatGPT request text. Replies, attachments and remote sessions are outside these connections.</p>
 <div id="other-integrations"></div>
 <label>Connection <select id="integration-client"><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="firefox-chatgpt">Firefox · ChatGPT</option></select></label>
+<button id="integration-discover">Find installed clients</button><p id="integration-discovery-status">Find local installations, select the ones you use, then review setup. Discovery does not enable recording.</p><div id="integration-candidates"></div>
+<details><summary>Advanced · custom paths and configuration</summary>
 <label>Client executables <textarea id="integration-executable" rows="4" autocomplete="off" placeholder="One absolute path per line"></textarea></label>
-<p>Codex can record from up to four selected executables together, such as desktop and IDE installations sharing this user configuration. Claude Code accepts one. Enter the complete selection to add, update or remove an executable. A blank selection keeps the enrolled paths, or finds one executable on first setup. Only the reviewed selection joins recording.</p>
+<p>Custom paths replace the detected selection. Codex accepts up to four executables sharing this configuration; Claude Code accepts one. A blank selection keeps the enrolled paths when repairing. Only the reviewed selection joins recording.</p>
 <label>Script interpreter <input id="integration-interpreter" autocomplete="off" placeholder="Absolute Node or Bun path for the selected script installations"></label>
 <label>Configuration folder <input id="integration-root" autocomplete="off" placeholder="Optional absolute path for a custom user configuration"></label>
+</details>
 <div class="actions"><button id="integration-preview">Review setup or repair</button><button id="integration-disable">Stop recording this connection</button><button id="integration-remove">Review removal</button></div>
 <div id="integration-preview-box" hidden><p id="integration-consent-text"></p><div id="integration-selection"></div><pre id="integration-changes"></pre><label><input id="integration-consent" type="checkbox"> Apply the reviewed configuration and recording changes</label><button id="integration-apply" disabled>Apply reviewed changes</button></div>
 <p>Codex requires its own hook trust review. Restart a client if it has not picked up the change. A Firefox extension loaded temporarily is removed at browser restart; persistent installation requires a Mozilla-signed extension. Evidence and keys remain available after disabling or removing a connection.</p>
