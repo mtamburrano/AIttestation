@@ -30,7 +30,7 @@ export async function removeNativeHost(paths) {
   await unlink(ownership);
 }
 
-export function privateInstallation(paths, browserHost) {
+export function privateInstallation(paths, browserHost, releaseClass = 'PRIVATE_DEVELOPMENT') {
   let exportOffered = false;
   const status = async () => {
     const target = join(paths.chrome, 'NativeMessagingHosts/ai.provenance.consumer.json');
@@ -43,7 +43,7 @@ export function privateInstallation(paths, browserHost) {
         if (canonical(expected) === canonical(installed) && installed.path === browserHost) integration = 'ENABLED';
       }
     }
-    return { integration, releaseClass: 'PRIVATE_DEVELOPMENT', releaseChannel: null, storeURL: null };
+    return { integration, releaseClass, releaseChannel: null, storeURL: null };
   };
   return { status,
     async enable() {
@@ -56,12 +56,15 @@ export function privateInstallation(paths, browserHost) {
       return status();
     },
     async disable() { await removeNativeHost(paths); return status(); },
-    async record(event) { if (event === 'exportOffered') exportOffered = true; },
+    async record(event) {
+      if (releaseClass === 'PRIVATE_OWNER_ACCEPTANCE' && event === 'storeOpened') throw Error('OWNER_ACCEPTANCE_STORE_UNAVAILABLE');
+      if (event === 'exportOffered') exportOffered = true;
+    },
     async remove({ exportDecision }) {
       if (!exportOffered || !['keep-local', 'exported'].includes(exportDecision)) throw Error('EXPORT_OPPORTUNITY_REQUIRED');
       await removeNativeHost(paths); exportOffered = false;
       return { integration: 'DISABLED', evidence: 'RETAINED', keys: 'RETAINED' };
     },
-    diagnostics: async () => ({ integration: (await status()).integration, releaseClass: 'PRIVATE_DEVELOPMENT' }),
+    diagnostics: async () => ({ integration: (await status()).integration, releaseClass }),
   };
 }

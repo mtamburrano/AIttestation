@@ -16,18 +16,22 @@ export function privateAcceptanceHookSocketPath() {
 export function privateAcceptanceArtifactSources({ host, hookReceiver, chromeRelay, firefoxRelay }, namespace) {
   if (namespace !== PRIVATE_ACCEPTANCE_NAMESPACE) throw Error('UNRECOGNIZED_PRIVATE_ACCEPTANCE_NAMESPACE');
   if (Buffer.byteLength(privateAcceptanceHookSocketPath()) >= 104) throw Error('PRIVATE_NAMESPACE_SOCKET_PATH_TOO_LONG');
+  return privateStateArtifactSources({ host, hookReceiver, chromeRelay, firefoxRelay },
+    `.attestamp-private-acceptance-${namespace}/support`, PRIVATE_ACCEPTANCE_SUPPORT);
+}
 
-  const suffix = `/.attestamp-private-acceptance-${namespace}/support`;
+export function privateStateArtifactSources({ host, hookReceiver, chromeRelay, firefoxRelay }, relativeSupport, support) {
+  const suffix = `/${relativeSupport}`;
   host = replacePrivateInput(host,
     '.appendingPathComponent("Library/Application Support/Private Provenance", isDirectory: true)',
-    `.appendingPathComponent(".attestamp-private-acceptance-${namespace}/support", isDirectory: true)`);
+    `.appendingPathComponent("${relativeSupport}", isDirectory: true)`);
   hookReceiver = replacePrivateInput(hookReceiver,
     'String(cString: home) + "/Library/Application Support/Private Provenance"',
     `String(cString: home) + "${suffix}"`);
 
   chromeRelay = replacePrivateInput(chromeRelay,
     "const defaultRendezvous = join(homedir(), 'Library', 'Application Support', 'Private Provenance', 'browser-bridge.json');",
-    `const defaultRendezvous = ${JSON.stringify(join(PRIVATE_ACCEPTANCE_SUPPORT, 'browser-bridge.json'))};`);
+    `const defaultRendezvous = ${JSON.stringify(join(support, 'browser-bridge.json'))};`);
   chromeRelay = replacePrivateInput(chromeRelay, "import { homedir } from 'node:os';\n", '');
   chromeRelay = replacePrivateInput(chromeRelay,
     "import { dirname, isAbsolute, join, resolve, sep } from 'node:path';",
@@ -35,7 +39,7 @@ export function privateAcceptanceArtifactSources({ host, hookReceiver, chromeRel
 
   firefoxRelay = replacePrivateInput(firefoxRelay,
     "rendezvousPath: join(homedir(), 'Library', 'Application Support', 'Private Provenance', 'firefox-bridge.json')",
-    `rendezvousPath: ${JSON.stringify(join(PRIVATE_ACCEPTANCE_SUPPORT, 'firefox-bridge.json'))}`);
+    `rendezvousPath: ${JSON.stringify(join(support, 'firefox-bridge.json'))}`);
   firefoxRelay = replacePrivateInput(firefoxRelay, "import { homedir } from 'node:os';\n", '');
   firefoxRelay = replacePrivateInput(firefoxRelay, "import { join } from 'node:path';\n", '');
 

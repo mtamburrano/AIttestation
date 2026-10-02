@@ -7,6 +7,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { userInfo } from 'node:os';
 import { checkPlatform } from './chrome.mjs';
+import { initializeOwnerAcceptance, validateOwnerAcceptance, validateOwnerAcceptanceManifest,
+  validateOwnerAcceptanceLaunch, validateOwnerAcceptanceState } from './owner-acceptance.mjs';
+import { canonical } from '../vault/format.mjs';
 import { developmentCommandFailure, readStartupFailure } from './startup.mjs';
 import { DEVELOPMENT_PROFILE, exists, initializeAccount, ownerDirectory, privateJSON, testAccount,
   validateAccount, validatePrivateNamespace, writeNewJSON } from './environment.mjs';
@@ -22,7 +25,12 @@ async function stopStage(label, action) {
   try { return await action(); } catch { throw Error(`PRIVATE_STOP_${label}`); }
 }
 
-export async function stopDevelopment(accountPaths, { requestExit = requestPrivateExit, wait = delay, agent = false } = {}) {
+export async function stopDevelopment(accountPaths, { requestExit = requestPrivateExit, wait = delay, agent = false, ownerAcceptance = null } = {}) {
+  if (ownerAcceptance) {
+    if (agent) throw Error('OWNER_ACCEPTANCE_MODE_MIXING_REJECTED');
+    const expected = await validateOwnerAcceptance(ownerAcceptance);
+    if (canonical(accountPaths) !== canonical(expected)) throw Error('OWNER_ACCEPTANCE_STATE_MISMATCH');
+  }
   const paths = await stopStage('ACCOUNT_INVALID', () => validateAccount(accountPaths));
   const state = join(paths.control, 'runtime.json');
   const present = () => stopStage('RUNTIME_UNREADABLE', () => exists(state));
@@ -71,7 +79,8 @@ export async function stopDevelopment(accountPaths, { requestExit = requestPriva
     const entry = await stopStage('LAUNCH_UNREADABLE', () => privateJSON(launch));
     const normal = entry?.profile === DEVELOPMENT_PROFILE && ['live-chatgpt-testnet', 'backup', 'restore'].includes(entry.mode);
     const agentLaunch = agent && entry?.profile === 'pap-private-agent/1' && ['offline', 'live-provider-send'].includes(entry.mode);
-    if (!normal && !agentLaunch) {
+    if (ownerAcceptance) validateOwnerAcceptanceLaunch(entry, ownerAcceptance);
+    else if (!normal && !agentLaunch) {
       throw Error('PRIVATE_STOP_LAUNCH_INVALID');
     }
   }
@@ -83,28 +92,39 @@ export async function stopDevelopment(accountPaths, { requestExit = requestPriva
 async function privateApplication(output) {
   await ownerDirectory(output);
   const metadata = await privateJSON(join(output, 'private-build.json'));
-  if (metadata.profile !== DEVELOPMENT_PROFILE || metadata.releaseClass !== 'PRIVATE_DEVELOPMENT'
+  const ownerMode = Object.hasOwn(metadata, 'ownerAcceptance');
+  if (metadata.profile !== DEVELOPMENT_PROFILE || metadata.releaseClass !== (ownerMode ? 'PRIVATE_OWNER_ACCEPTANCE' : 'PRIVATE_DEVELOPMENT')
       || metadata.updaterEnabled !== false) throw Error('INVALID_PRIVATE_BUILD');
   const app = join(output, 'package/Attestamp.app');
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', app]);
   const manifest = JSON.parse(await readFile(join(app, 'Contents/Resources/spikes/development/private-development.json')));
   if (manifest.profile !== DEVELOPMENT_PROFILE) throw Error('PRIVATE_ENTRYPOINT_REQUIRED');
   if (manifest.browserPolicy !== 'EXPLICIT_TEST_USER_COPY') throw Error('PRIVATE_BUILD_REQUIRES_CHROME_PATH_SUPPORT');
+  if (ownerMode || Object.hasOwn(manifest, 'ownerAcceptance')) {
+    const ownerAcceptance = validateOwnerAcceptanceManifest(manifest);
+    if (!ownerMode || canonical(metadata.ownerAcceptance) !== canonical(ownerAcceptance)
+        || Object.hasOwn(metadata, 'agent') || Object.hasOwn(metadata, 'namespace')
+        || metadata.notarized !== false || metadata.storeDistributed !== false) throw Error('INVALID_OWNER_ACCEPTANCE_BUILD');
+    return { app, namespace: null, ownerAcceptance };
+  }
   const namespace = validatePrivateNamespace(manifest.namespace);
   if (validatePrivateNamespace(metadata.namespace) !== namespace) throw Error('PRIVATE_NAMESPACE_BUILD_MISMATCH');
   return { app, namespace };
 }
 
 export async function startDevelopment(output, mode, chromeApplication, requestedNamespace) {
-  if (mode !== '--live-chatgpt-testnet') throw Error('EXPLICIT_LIVE_TEST_OPT_IN_REQUIRED');
-  const { app, namespace } = await privateApplication(output);
+  if (!['--live-chatgpt-testnet', '--owner-acceptance'].includes(mode)) throw Error('EXPLICIT_LIVE_TEST_OPT_IN_REQUIRED');
+  const { app, namespace, ownerAcceptance } = await privateApplication(output);
+  if (Boolean(ownerAcceptance) !== (mode === '--owner-acceptance')) throw Error('OWNER_ACCEPTANCE_MODE_MIXING_REJECTED');
   if (validatePrivateNamespace(requestedNamespace) !== namespace) throw Error('PRIVATE_NAMESPACE_SELECTION_MISMATCH');
-  const paths = await validateAccount(testAccount(userInfo(), namespace)); await checkPlatform(chromeApplication, paths);
+  const paths = ownerAcceptance ? await validateOwnerAcceptance(ownerAcceptance) : await validateAccount(testAccount(userInfo(), namespace));
+  const chrome = await checkPlatform(chromeApplication, paths);
   if (await exists(join(paths.control, 'runtime.json'))) throw Error('STOP_PREVIOUS_PRIVATE_RUNTIME_FIRST');
+  if (ownerAcceptance) await validateOwnerAcceptanceState(paths, { chrome });
   await registerNativeHost(paths, join(app, 'Contents/MacOS/provenance-browser-host'));
   try {
-    await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: 'live-chatgpt-testnet',
-      chromeApplication, ...(namespace ? { namespace } : {}) });
+    await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, mode: ownerAcceptance ? 'owner-acceptance' : 'live-chatgpt-testnet',
+      chromeApplication, ...(namespace ? { namespace } : {}), ...(ownerAcceptance ? { ownerAcceptance } : {}) });
     const child = spawn(join(app, 'Contents/MacOS/provenance-app-host'), [], {
       env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'ignore', 'pipe'], detached: true,
     });
@@ -115,7 +135,7 @@ export async function startDevelopment(output, mode, chromeApplication, requeste
     child.unref();
     for (let i = 0; i < 150; i++) {
       if (await exists(join(paths.control, 'runtime.json'))) return { started: true, pairing: 'OPEN_CHROME_EXTENSIONS_AND_LOAD_UNPACKED',
-        assurance: 'PRIVATE_TESTNET_ONLY' };
+        assurance: ownerAcceptance ? 'PRIVATE_LOCAL_OWNER_ACCEPTANCE' : 'PRIVATE_TESTNET_ONLY' };
       if (exited) break;
       await delay(100);
     }
@@ -127,13 +147,14 @@ export async function startDevelopment(output, mode, chromeApplication, requeste
 }
 
 async function maintenance(output, operation) {
-  const { app, namespace } = await privateApplication(output);
-  const paths = await validateAccount(testAccount(userInfo(), namespace));
+  const { app, namespace, ownerAcceptance } = await privateApplication(output);
+  const paths = ownerAcceptance ? await validateOwnerAcceptance(ownerAcceptance) : await validateAccount(testAccount(userInfo(), namespace));
+  if (ownerAcceptance) await validateOwnerAcceptanceState(paths);
   if (await exists(join(paths.control, 'runtime.json'))) throw Error('STOP_PRIVATE_RUNTIME_BEFORE_RECOVERY');
   const reportPath = join(paths.control, 'operation.json');
   if (await exists(reportPath)) throw Error('PREVIOUS_RECOVERY_REPORT_REQUIRES_INSPECTION');
   await writeNewJSON(join(paths.control, 'launch.json'), { profile: DEVELOPMENT_PROFILE, ...operation,
-    ...(namespace ? { namespace } : {}) });
+    ...(namespace ? { namespace } : {}), ...(ownerAcceptance ? { ownerAcceptance } : {}) });
   const status = await new Promise((resolve, reject) => {
     const child = spawn(join(app, 'Contents/MacOS/provenance-app-host'), [], {
       env: { PATH: '/usr/bin:/bin' }, stdio: 'ignore',
@@ -148,6 +169,18 @@ export async function command(args) {
   const [action, ...rest] = args;
   if (action === 'agent') {
     const { agentCommand } = await import('./agent.mjs'); return agentCommand(rest);
+  }
+  if (['init', 'stop', 'doctor'].includes(action) && rest[0] === '--owner-acceptance'
+      && (action === 'doctor' ? rest.length === 4 && rest[2] === '--chrome-app' : rest.length === 2)) {
+    const { validateDevelopmentConfig } = await import('./prepare.mjs');
+    const { ownerAcceptance } = validateDevelopmentConfig(await privateJSON(rest[1]));
+    if (action === 'init') {
+      await initializeOwnerAcceptance(ownerAcceptance); return { initialized: true, mode: 'owner-acceptance' };
+    }
+    const paths = await validateOwnerAcceptance(ownerAcceptance);
+    if (action === 'stop') return stopDevelopment(paths, { ownerAcceptance });
+    const chrome = await checkPlatform(rest[3], paths); await validateOwnerAcceptanceState(paths, { chrome });
+    return { ready: true, liveCheck: 'NOT_RUN' };
   }
   if (action === 'doctor' && rest.length === 2 && rest[0] === '--chrome-app') {
     await checkPlatform(rest[1]); return { ready: true, liveCheck: 'NOT_RUN' };
@@ -182,7 +215,7 @@ export async function command(args) {
   if (action === 'backup' && rest.length === 2) return maintenance(rest[0], { mode: 'backup', outputDirectory: rest[1] });
   if (action === 'restore' && rest.length === 4) return maintenance(rest[0], { mode: 'restore',
     outputDirectory: rest[1], packageFile: rest[2], secretFile: rest[3] });
-  throw Error('USAGE: dev doctor [--namespace 6d1110ab] --chrome-app APP|init [--namespace 6d1110ab]|signing-preflight CONFIG|prepare CONFIG NEW_BUILD|start BUILD [--namespace 6d1110ab] --chrome-app APP --live-chatgpt-testnet|stop [--namespace 6d1110ab]|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
+  throw Error('USAGE: dev doctor [--namespace 6d1110ab|--owner-acceptance CONFIG] --chrome-app APP|init [--namespace 6d1110ab|--owner-acceptance CONFIG]|signing-preflight CONFIG|prepare CONFIG NEW_BUILD|start BUILD [--namespace 6d1110ab] --chrome-app APP --live-chatgpt-testnet|start BUILD --chrome-app APP --owner-acceptance|stop [--namespace 6d1110ab|--owner-acceptance CONFIG]|backup BUILD NEW_DIRECTORY|restore BUILD NEW_DIRECTORY PACKAGE SECRET');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -15,6 +15,8 @@ import { withSigningAccess } from './signing.mjs';
 import { AGENT_OPT_IN, agentBuildPath, validateAgent } from './agent-environment.mjs';
 import { specializeAgentArtifact, replaceAgentInput } from './agent-artifact.mjs';
 import { specializePrivateAcceptanceArtifact } from './namespace-artifact.mjs';
+import { validateOwnerAcceptanceConfig, validateOwnerAcceptance, ownerAcceptanceManifest } from './owner-acceptance.mjs';
+import { specializeOwnerAcceptanceArtifact } from './owner-artifact.mjs';
 import { writeBrowserExtension } from '../browser/shared/build-extensions.mjs';
 import { FIREFOX_EXTENSION_ID, FIREFOX_PRIVATE_EXTENSION_ID } from '../browser/shared/profiles.mjs';
 
@@ -41,12 +43,18 @@ const plist = values => `<?xml version="1.0" encoding="UTF-8"?><plist version="1
   .join('')}</dict></plist>`;
 
 export function validateDevelopmentConfig(config) {
-  if (!config || Object.keys(config).filter(key => !['signingKeychain', 'agent', 'namespace'].includes(key)).sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
+  if (!config || Object.keys(config).filter(key => !['signingKeychain', 'agent', 'namespace', 'ownerAcceptance'].includes(key)).sort().join(',') !== 'helperProvisioningProfile,profile,signingIdentity,sponsor,teamId'
       || config.profile !== DEVELOPMENT_PROFILE || !/^[A-Z0-9]{10}$/.test(config.teamId)
       || typeof config.signingIdentity !== 'string' || !/^[A-F0-9]{40}$/.test(config.signingIdentity)
       || typeof config.helperProvisioningProfile !== 'string' || !config.helperProvisioningProfile.startsWith('/')
       || ('signingKeychain' in config && (typeof config.signingKeychain !== 'string' || !config.signingKeychain.startsWith('/')))) {
     throw Error('INVALID_PRIVATE_DEVELOPMENT_CONFIG');
+  }
+  if (Object.hasOwn(config, 'ownerAcceptance')) {
+    validateOwnerAcceptanceConfig(config.ownerAcceptance);
+    if (Object.hasOwn(config, 'agent') || Object.hasOwn(config, 'namespace') || config.sponsor !== null) {
+      throw Error('OWNER_ACCEPTANCE_MODE_MIXING_REJECTED');
+    }
   }
   if (Object.hasOwn(config, 'namespace')) {
     if (config.namespace === null || config.namespace === undefined) throw Error('UNRECOGNIZED_PRIVATE_ACCEPTANCE_NAMESPACE');
@@ -90,6 +98,7 @@ export function validateDevelopmentSigner(decodedProfile, identity) {
 export async function developmentSigningInputs(configPath) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw Error('APPLE_SILICON_MAC_REQUIRED');
   const config = validateDevelopmentConfig(await privateJSON(configPath));
+  if (config.ownerAcceptance) await validateOwnerAcceptance(config.ownerAcceptance);
   const profileBytes = await readReleaseFile(config.helperProvisioningProfile, { limit: 1024 * 1024 });
   const decoded = run('/usr/bin/security', ['cms', '-D'], { input: profileBytes });
   const { appId, group } = validateHelperProfile(helperProfileFromPlist(decoded), config);
@@ -104,6 +113,10 @@ export async function prepareDevelopment(configPath, output, { agentOptIn } = {}
     agentPaths = await validateAgent(selected.agent, agentOptIn);
     if (output !== agentBuildPath(agentPaths, output.split('/').at(-1))) throw Error('AGENT_BUILD_PATH_INVALID');
   } else if (agentOptIn !== undefined) throw Error('AGENT_CONFIG_REQUIRED');
+  if (selected.ownerAcceptance) {
+    const paths = await validateOwnerAcceptance(selected.ownerAcceptance);
+    if (output !== agentBuildPath(paths, output.split('/').at(-1))) throw Error('OWNER_ACCEPTANCE_BUILD_PATH_INVALID');
+  }
   const inputs = await developmentSigningInputs(configPath);
   if (canonical(inputs.config) !== canonical(selected)) throw Error('PRIVATE_CONFIG_CHANGED');
   return withSigningAccess(inputs.config, inspect => prepareAuthorizedDevelopment(inputs, output, inspect, agentPaths));
@@ -143,7 +156,9 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     await writeFile(join(work, 'keychain.plist'), plist({ 'com.apple.application-identifier': appId,
       'com.apple.developer.team-identifier': config.teamId, 'keychain-access-groups': [group] }));
     await writeFile(join(work, 'node.plist'), plist({ 'com.apple.security.cs.allow-jit': true }));
-    if (config.namespace) {
+    if (config.ownerAcceptance) {
+      await specializeOwnerAcceptanceArtifact(root, contents, work, config.ownerAcceptance, run);
+    } else if (config.namespace) {
       await specializePrivateAcceptanceArtifact(root, contents, work, config.namespace, run);
     } else {
       run('/usr/bin/xcrun', ['swiftc', '-module-cache-path', join(work, 'swift-cache'), '-O',
@@ -166,6 +181,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     for (const name of ['runtime.mjs', 'environment.mjs', 'chrome.mjs', 'tls.mjs', 'recovery.mjs', 'startup.mjs', 'integration.mjs', 'debug-session.mjs', 'runtime-state.mjs']) {
       await copyFile(join(root, 'spikes/development', name), join(dev, name));
     }
+    if (config.ownerAcceptance) await copyFile(join(root, 'spikes/development/owner-acceptance.mjs'), join(dev, 'owner-acceptance.mjs'));
     if (agentPaths) {
       await validateAgent(config.agent, AGENT_OPT_IN);
       await specializeAgentArtifact(root, contents, work, config.agent, agentPaths, run);
@@ -173,7 +189,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
         await copyFile(join(root, 'spikes/development', name), join(dev, name));
       }
     }
-    await writeNewJSON(join(dev, 'private-development.json'), { profile: DEVELOPMENT_PROFILE,
+    await writeNewJSON(join(dev, 'private-development.json'), config.ownerAcceptance ? ownerAcceptanceManifest(config.ownerAcceptance) : { profile: DEVELOPMENT_PROFILE,
       sponsorOrigin: config.sponsor?.origin ?? null, assurance: 'PRIVATE_TESTNET_ONLY', updaterEnabled: false,
       browserPolicy: 'EXPLICIT_TEST_USER_COPY', ...(config.namespace ? { namespace: config.namespace } : {}),
       ...(agentPaths ? { agent: config.agent, build: output.split('/').at(-1) } : {}) });
@@ -181,7 +197,8 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     run('/usr/libexec/PlistBuddy', ['-c', 'Set :CFBundleName Attestamp Private Test', join(contents, 'Info.plist')]);
     const html = join(contents, 'Resources/spikes/browser/chatgpt/dashboard.html');
     await writeFile(html, (await readFile(html, 'utf8')).replace('<body>',
-      '<body><p role="note">PRIVATE DEVELOPMENT — TestNet only. Use synthetic test content in your dedicated account.</p>'));
+      config.ownerAcceptance ? '<body><p role="note">PRIVATE OWNER ACCEPTANCE — Isolated local evidence. Anchoring and updates are disabled.</p>'
+        : '<body><p role="note">PRIVATE DEVELOPMENT — TestNet only. Use synthetic test content in your dedicated account.</p>'));
     const sign = (path, identifier, entitlements) => {
       const access = inspect();
       if (access.status !== 'AUTHORIZED') throw Error(`PRIVATE_PREPARE_${access.reason}`);
@@ -213,7 +230,7 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
     if (agentPaths) {
       await copyFile(join(root, 'spikes/development/AGENT-TESTING.md'), join(output, 'Agent Setup.md'));
     }
-    await copyFile(join(root, 'spikes/development/README.md'), join(output, 'Start Here.md'));
+    await copyFile(join(root, config.ownerAcceptance ? 'spikes/development/OWNER-ACCEPTANCE.md' : 'spikes/development/README.md'), join(output, 'Start Here.md'));
     if ((await sourceInventory(root)).sha256 !== sources.sha256) throw Error('SOURCE_CHANGED_DURING_PRIVATE_BUILD');
     const inventory = { application: await fileInventory(app),
       verifier: await fileInventory(join(packageDirectory, 'Recipient/Attestamp Verifier.app')),
@@ -221,10 +238,11 @@ async function prepareAuthorizedDevelopment({ config, profileBytes, appId, group
       firefox: await fileInventory(join(packageDirectory, 'Firefox Extension')) };
     await writeNewJSON(join(output, 'private-inventory.json'), inventory);
     await writeNewJSON(join(output, 'private-build.json'), { profile: DEVELOPMENT_PROFILE,
-      releaseClass: 'PRIVATE_DEVELOPMENT', sourceDigest: sources.sha256,
+      releaseClass: config.ownerAcceptance ? 'PRIVATE_OWNER_ACCEPTANCE' : 'PRIVATE_DEVELOPMENT', sourceDigest: sources.sha256,
       signature: 'DEVELOPER_ID_WITHOUT_NOTARIZATION', notarized: false, storeDistributed: false,
       updaterEnabled: false, installedAcceptance: 'NOT_RUN',
       ...(config.namespace ? { namespace: config.namespace } : {}),
+      ...(config.ownerAcceptance ? { ownerAcceptance: config.ownerAcceptance } : {}),
       ...(agentPaths ? { agent: config.agent } : {}),
       bundleInventoryDigest: sha256(canonical(inventory)) });
     return { profile: DEVELOPMENT_PROFILE, prepared: true, installedAcceptance: 'NOT_RUN' };

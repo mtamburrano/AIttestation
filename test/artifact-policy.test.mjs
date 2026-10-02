@@ -66,6 +66,17 @@ test('production requires every production file and rejects candidate and develo
   const f = await fixture(t, 'development'); f.provenance.signature = 'DEVELOPER_ID'; await f.seal(); rejected(await f.run(), 'CHANNEL_CONTRACT');
 });
 
+test('owner acceptance authority cannot enter release bundles even with refreshed inventories', async t => {
+  for (const channel of ['release-candidate', 'production']) {
+    const f = await fixture(t, channel);
+    await f.json(`${resources}/spikes/development/private-development.json`, {
+      profile: 'pap-private-owner-acceptance/1', updaterEnabled: false,
+    });
+    await f.seal();
+    rejected(await f.run(), 'INVENTORY_LINKAGE');
+  }
+});
+
 test('production authenticates exact provenance, inventory and disk image with the external root and freshness policy', async t => {
   for (const mutate of [f => { f.release.provenanceDigest = '0'.repeat(64); }, f => { f.release.dependencyDigest = '0'.repeat(64); },
     f => { f.release.sequence++; }, f => { f.release.maximumSchema = 5; },

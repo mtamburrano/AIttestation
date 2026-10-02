@@ -108,6 +108,10 @@ export async function inspectLocalHelperProfile(config, command, now = Date.now(
 }
 
 export function releaseBuildPlan(config) {
+  if (config && (['ownerAcceptance', 'agent', 'namespace', 'sponsor'].some(key => Object.hasOwn(config, key))
+      || Object.hasOwn(config, 'profile') && !['pap-installed-release/1', RELEASE_CANDIDATE_PROFILE].includes(config.profile))) {
+    throw distributionError('PRIVATE_AUTHORITY_IN_RELEASE_INPUT');
+  }
   const releaseChannel = config?.releaseChannel === undefined ? RELEASE_CHANNELS.PRODUCTION : config.releaseChannel;
   if (![RELEASE_CHANNELS.PRODUCTION, RELEASE_CHANNELS.CANDIDATE].includes(releaseChannel)) {
     throw distributionError('INVALID_RELEASE_CHANNEL');

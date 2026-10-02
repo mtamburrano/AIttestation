@@ -178,6 +178,10 @@ validation. Do not initialize, copy, reset or migrate a retained checkpoint for
 ordinary development. A build without that field keeps the historical default
 private-development paths; it still requires the dedicated test-account workflow.
 
+For a human checkpoint under the normal macOS account, use
+[private owner acceptance](OWNER-ACCEPTANCE.md). Its explicit account binding,
+fresh state root and separate Keychain service do not grant agent or release authority.
+
 For optional same-account unattended sessions, see the separate
 [isolated agent setup](AGENT-TESTING.md). It uses a fresh namespace and explicit
 opt-ins; the retained owner-checkpoint setup below is unchanged.

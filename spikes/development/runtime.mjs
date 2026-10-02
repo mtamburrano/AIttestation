@@ -17,19 +17,25 @@ import { publishRuntimeState } from './runtime-state.mjs';
 let runtime, statePath, debugSession;
 try {
   const config = JSON.parse(await readFile(new URL('private-development.json', import.meta.url)));
-  const namespace = privateManifestNamespace(config);
-  const paths = await validateAccount(testAccount(undefined, namespace));
+  const ownerMode = Object.hasOwn(config, 'ownerAcceptance');
+  const owner = ownerMode ? await import('./owner-acceptance.mjs') : null;
+  const namespace = ownerMode ? null : privateManifestNamespace(config);
+  const paths = ownerMode ? await owner.validateOwnerAcceptance(owner.validateOwnerAcceptanceManifest(config))
+    : await validateAccount(testAccount(undefined, namespace));
   const launchPath = join(paths.control, 'launch.json'), desktopPath = join(paths.control, 'desktop.json');
   const explicitLaunch = await exists(launchPath);
   const request = await privateJSON(explicitLaunch ? launchPath : desktopPath);
-  if (!explicitLaunch && request.mode !== 'live-chatgpt-testnet') throw Error('EXPLICIT_PRIVATE_OPERATION_REQUIRED');
-  validatePrivateLaunchRequest(request, namespace);
+  const sessionMode = ownerMode ? 'owner-acceptance' : 'live-chatgpt-testnet';
+  if (!explicitLaunch && request.mode !== sessionMode) throw Error('EXPLICIT_PRIVATE_OPERATION_REQUIRED');
+  if (ownerMode) owner.validateOwnerAcceptanceLaunch(request, config.ownerAcceptance);
+  else validatePrivateLaunchRequest(request, namespace);
   // Revalidate the explicit copy inside the signed runtime before opening the
   // vault; launcher state is not a substitute for browser identity validation.
-  const chrome = request.mode === 'live-chatgpt-testnet' ? await checkPlatform(request.chromeApplication, paths) : null;
+  const chrome = request.mode === sessionMode ? await checkPlatform(request.chromeApplication, paths) : null;
+  if (ownerMode) await owner.validateOwnerAcceptanceState(paths, { chrome });
   if (explicitLaunch) await unlink(launchPath);
   const keyStore = new MacOSKeychainStore();
-  if (request.mode !== 'live-chatgpt-testnet') {
+  if (request.mode !== sessionMode) {
     const report = request.mode === 'backup'
       ? await backupDevelopment(paths, request.outputDirectory, keyStore)
       : await restoreDevelopment(paths, request.outputDirectory, request.packageFile, request.secretFile, keyStore);
@@ -42,8 +48,10 @@ try {
   });
   debugSession = new OwnerDebugSession(paths.control);
   runtime = await startPackagedChatGPT({ supportDirectory: paths.support, keyStore, managed,
+    ...(ownerMode ? owner.ownerAcceptanceRuntimeOptions(config.ownerAcceptance) : {}),
     diagnostics: debugSession.diagnostics, debugSession,
-    installation: privateInstallation(paths, join(dirname(process.execPath), 'provenance-browser-host')),
+    installation: privateInstallation(paths, join(dirname(process.execPath), 'provenance-browser-host'),
+      ownerMode ? 'PRIVATE_OWNER_ACCEPTANCE' : 'PRIVATE_DEVELOPMENT'),
     desktopChannel: process.argv.includes('--resident') ? { requestFD: 6, responseFD: 7 } : null,
     openDashboard: url => launchDevelopmentChrome(chrome, paths, url) });
   // Reopening restores only the consented browser location, never a scope or send.
