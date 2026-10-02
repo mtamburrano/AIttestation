@@ -77,3 +77,7 @@ notarization, dependency inventories, package leak checks, Store identity,
 consented installation, update signatures and rollback/schema safeguards.
 An ad-hoc build or release candidate is not a published production installation.
 No public deployment or funded service is supplied by this checkout.
+
+The [offline readiness gate](docs/RELEASE-READINESS.md) assembles a fresh development
+package and a bounded report with the remaining external release gates. A PASS is
+offline evidence, not authorization to sign, publish or deploy.

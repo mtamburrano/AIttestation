@@ -12,6 +12,7 @@
     "check:dependencies": "node spikes/development/dependency-report.mjs",
     "ci:portable": "node spikes/development/ci.mjs portable",
     "ci:macos": "node spikes/development/ci.mjs macos",
+    "readiness": "node spikes/distribution/readiness.mjs",
     "dev": "node spikes/development/cli.mjs",
     "agent": "node spikes/development/agent-cli.mjs",
     "dev:sponsor": "node spikes/development/sponsor.mjs",

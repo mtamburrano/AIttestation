@@ -1,0 +1,8 @@
+{
+  "profile": "attestamp-release-plan/1",
+  "intent": "DRY_RUN_ONLY",
+  "version": "1.1.0",
+  "sequence": 2,
+  "browserVersion": "2.3.5",
+  "notes": "docs/RELEASE-NOTES.md"
+}
