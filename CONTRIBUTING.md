@@ -27,6 +27,8 @@ with a named check. Linux/Windows product support is not implied by Node portabi
 
 Run the smallest relevant tests first, for example:
 
+The [CI lanes and reports](docs/CI.md) have matching local commands and need no secrets.
+
 ```sh
 node --test test/coding-discovery.test.mjs test/coding-dashboard.test.mjs
 npm run test:mac-integrations

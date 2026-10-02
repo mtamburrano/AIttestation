@@ -115,3 +115,41 @@ export async function dependencyInventory(root, { goExecutable = null, command =
     goModDigest: sha256(goMod), goSumDigest: sha256(goSum), modules,
     reviewScope: 'Exact pins, local Go inputs, shipping build plan and extracted Go toolchain; independent security and license approval required before release.' };
 }
+
+// Repository-only bill of materials: stable across machines, no module downloads,
+// binary/toolchain reads or advisory queries. Shipping inventories remain stricter.
+export async function repositoryDependencyInventory(root) {
+  const pkg = JSON.parse(await readFile(join(root, 'package.json')));
+  if (['dependencies', 'optionalDependencies', 'devDependencies'].some(key => Object.keys(pkg[key] ?? {}).length))
+    throw Error('UNINVENTORIED_NPM_DEPENDENCY');
+  const goMod = await readFile(join(root, 'spikes/anchor/algorand/go.mod'), 'utf8');
+  const goSum = await readFile(join(root, 'spikes/anchor/algorand/go.sum'), 'utf8');
+  if (/^\s*(?:replace|exclude)\b/m.test(goMod)) throw Error('UNREVIEWED_GO_MODULE_OVERRIDE');
+  for (const line of goMod.split('\n').map(value => value.replace(/\/\/.*$/, '').trim()).filter(Boolean))
+    if (!/^(?:module \S+|go \d+\.\d+(?:\.\d+)?|require\s*\(|\)|\S+ v\S+)$/.test(line)) throw Error('UNSUPPORTED_GO_MODULE_SYNTAX');
+  const notices = await readFile(join(root, 'spikes/distribution/THIRD_PARTY_NOTICES.md'), 'utf8');
+  const licenses = JSON.parse(await readFile(join(root, 'spikes/distribution/dependency-licenses.json')));
+  const modules = [...goMod.matchAll(/^\s+([^\s]+) (v[^\s]+)(?: \/\/ indirect)?$/gm)].map(([, name, version]) => {
+    const checksum = goSum.split('\n').find(line => line.startsWith(`${name} ${version} `))?.split(' ')[2];
+    const heading = `## ${name} ${version}\n`, start = notices.indexOf(heading);
+    if (!checksum || !licenses[name] || start < 0) throw Error('DEPENDENCY_NOTICE_OR_CHECKSUM_MISSING');
+    const end = notices.indexOf('\n## ', start + heading.length);
+    const notice = notices.slice(start, end < 0 ? undefined : end);
+    if (licenses[name] === 'MIT' ? !notice.includes('Permission is hereby granted')
+      : licenses[name] === 'BSD-3-Clause' ? !notice.includes('Redistribution and use') : true) throw Error('DEPENDENCY_LICENSE_MISMATCH');
+    return { name, version, license: licenses[name], checksum, noticeSha256: sha256(notice) };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  if (modules.length !== Object.keys(licenses).length || new Set(modules.map(v => v.name)).size !== modules.length)
+    throw Error('DEPENDENCY_LICENSE_MAP_DRIFT');
+  const vendorRoot = join(root, 'spikes/coding/vendor/smol-toml');
+  const vendor = JSON.parse(await readFile(join(vendorRoot, 'provenance.json')));
+  if (vendor.package !== 'smol-toml' || vendor.license !== 'BSD-3-Clause'
+      || Object.keys(vendor.files).sort().join(',') !== 'LICENSE,index.cjs' || !notices.includes(`## smol-toml ${vendor.version}\n`)) throw Error('VENDORED_NOTICE_MISMATCH');
+  for (const [file, digest] of Object.entries(vendor.files))
+    if (sha256(await readFile(join(vendorRoot, file))) !== digest) throw Error('VENDORED_DEPENDENCY_CHANGED');
+  return { profile: 'attestamp-repository-dependencies/1', scope: 'REPOSITORY_METADATA_ONLY',
+    runtimeRequirements: { node: pkg.engines.node, goLanguage: /^go (.+)$/m.exec(goMod)?.[1] },
+    javascriptPackages: [vendor], modules, goModSha256: sha256(goMod), goSumSha256: sha256(goSum), noticesSha256: sha256(notices),
+    projectLicensePolicySha256: sha256(await readFile(join(root, 'LICENSE.md'))),
+    limitations: ['NOT_A_VULNERABILITY_ASSESSMENT', 'NOT_SHIPPING_TOOLCHAIN_ATTESTATION', 'PUBLICATION_LICENSE_SCOPE_REQUIRES_APPROVAL'] };
+}

@@ -1,0 +1,11 @@
+{
+  "github.com/algorand/avm-abi": "MIT",
+  "github.com/algorand/falcon": "MIT",
+  "github.com/algorand/go-algorand-sdk/v2": "MIT",
+  "github.com/algorand/go-codec/codec": "MIT",
+  "github.com/algorand/go-stateproof-verification": "MIT",
+  "github.com/algorand/go-sumhash": "MIT",
+  "github.com/google/go-querystring": "BSD-3-Clause",
+  "golang.org/x/crypto": "BSD-3-Clause",
+  "golang.org/x/sys": "BSD-3-Clause"
+}

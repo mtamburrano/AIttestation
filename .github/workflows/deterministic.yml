@@ -1,0 +1,32 @@
+{
+  "name": "Deterministic checks",
+  "on": {
+    "pull_request": {},
+    "workflow_dispatch": {"inputs": {"macos": {"description": "Include isolated native macOS fixtures", "type": "boolean", "default": false}}}
+  },
+  "permissions": {"contents": "read"},
+  "concurrency": {"group": "deterministic-${{ github.ref }}", "cancel-in-progress": true},
+  "jobs": {
+    "portable": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 8,
+      "steps": [
+        {"uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683", "with": {"persist-credentials": false}},
+        {"uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020", "with": {"node-version": "22.23.1"}},
+        {"run": "npm run ci:portable"},
+        {"uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "if": "always()", "with": {"name": "portable-checks", "path": "artifacts/ci-portable/", "retention-days": 3, "if-no-files-found": "error"}}
+      ]
+    },
+    "macos": {
+      "if": "github.event_name == 'workflow_dispatch' && inputs.macos",
+      "runs-on": "macos-15",
+      "timeout-minutes": 12,
+      "steps": [
+        {"uses": "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683", "with": {"persist-credentials": false}},
+        {"uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020", "with": {"node-version": "22.23.1"}},
+        {"run": "npm run ci:macos"},
+        {"uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", "if": "always()", "with": {"name": "macos-checks", "path": "artifacts/ci-macos/", "retention-days": 3, "if-no-files-found": "error"}}
+      ]
+    }
+  }
+}

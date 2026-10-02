@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { SourceRegistry } from '../spikes/core/source-registry.mjs';
@@ -15,7 +16,7 @@ import { FAST_CONFIRM_PROFILE } from '../spikes/anchor/algorand/fast-confirm.mjs
 import { Vault } from '../spikes/vault/vault.mjs';
 
 async function fixture(t) {
-  const root = await mkdtemp('/private/tmp/attestamp-core-sources-test-');
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'attestamp-core-sources-test-'));
   const key = randomBytes(32), vault = new Vault(join(root, 'vault'), key, undefined, { create: true });
   const epoch = randomUUID(), sources = new SourceRegistry();
   const peers = ['test-browser-a', 'test-browser-b'].map(integrationId => {

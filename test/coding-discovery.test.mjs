@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { discoverClients } from '../spikes/coding/discovery.mjs';
 import { CodingIntegrations } from '../spikes/coding/integrations.mjs';
 
 async function fixture(t) {
-  const root = await mkdtemp('/private/tmp/attestamp-discovery-test-');
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'attestamp-discovery-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const options = { home: join(root, 'home'), applications: join(root, 'Applications'), globalBins: [join(root, 'bin')], arch: 'arm64' };
   const put = async (path, text = 'synthetic native image') => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, text, { mode: 0o700 }); return path; };
